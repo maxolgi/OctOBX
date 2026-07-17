@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OctoDAW — Octopus × openDAW</title>
+    <style>
+        :root {
+            --bg: #1a1a1a;
+            --panel: #2a2a2a;
+            --border: #3a3a3a;
+            --accent: #0c0;
+            --text: #e0e0e0;
+            --text-dim: #888;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: monospace;
+            font-size: 13px;
+            min-height: 100vh;
+        }
+        #topbar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 8px 16px;
+            background: var(--panel);
+            border-bottom: 1px solid var(--border);
+        }
+        #topbar h1 { font-size: 14px; font-weight: normal; }
+        #status { color: var(--text-dim); flex: 1; }
+        .transport-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--panel);
+            border-bottom: 1px solid var(--border);
+        }
+        .transport-bar button {
+            background: #333;
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 6px 16px;
+            font-family: monospace;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        .transport-bar button:hover { background: #444; }
+        .transport-bar button:active { background: #222; }
+        #oct-tempo {
+            background: #1a1a1a;
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            font-family: monospace;
+            width: 60px;
+            text-align: center;
+            border-radius: 3px;
+        }
+        #oct-transport-indicator {
+            padding: 4px 12px;
+            font-weight: bold;
+            border-radius: 3px;
+        }
+        .transport-playing { background: #1a3a1a; color: #0f0; }
+        .transport-stopped { background: #3a1a1a; color: #f00; }
+        #oct-midi-output {
+            background: #1a1a1a;
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            font-family: monospace;
+            border-radius: 3px;
+        }
+        #octopus-grid {
+            padding: 16px;
+        }
+        .grid-section {
+            margin-bottom: 16px;
+        }
+        .grid-section-label {
+            color: var(--text-dim);
+            font-size: 10px;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+        .step-grid {
+            display: grid;
+            grid-template-columns: repeat(16, 1fr);
+            gap: 3px;
+            max-width: 900px;
+        }
+        .pad-cell {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+        .led {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: transparent;
+            flex-shrink: 0;
+        }
+        .pad-btn {
+            width: 100%;
+            height: 32px;
+            background: #333;
+            border: 1px solid #444;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 9px;
+            color: #666;
+            text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .pad-btn:hover { background: #3a3a3a; }
+        .pad-btn.held { border-color: var(--accent); }
+        .mix-strip {
+            display: grid;
+            grid-template-columns: repeat(16, 1fr);
+            gap: 3px;
+            max-width: 900px;
+            margin-bottom: 8px;
+        }
+        .mix-btn {
+            height: 28px;
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 9px;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .mix-btn:hover { background: #333; }
+        .control-strip {
+            display: flex;
+            gap: 3px;
+            flex-wrap: wrap;
+            max-width: 900px;
+        }
+        .ctrl-btn {
+            min-width: 48px;
+            height: 28px;
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 9px;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .ctrl-btn:hover { background: #333; }
+        .rotary-group {
+            display: flex;
+            gap: 3px;
+        }
+        .rotary {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #2a2a2a;
+            border: 2px solid #3a3a3a;
+            cursor: ns-resize;
+            font-size: 8px;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .rotary:hover { border-color: #555; }
+    </style>
+</head>
+<body>
+
+<div id="topbar">
+    <h1>OctoDAW</h1>
+    <span id="status">Initializing...</span>
+</div>
+
+<div class="transport-bar">
+    <button id="oct-play">PLAY</button>
+    <button id="oct-stop">STOP</button>
+    <button id="oct-save">SAVE</button>
+    <button id="oct-load">LOAD</button>
+    <span>BPM:</span>
+    <input id="oct-tempo" type="number" min="10" max="199" value="120">
+    <span id="oct-transport-indicator" class="transport-stopped">STOPPED</span>
+    <span>MIDI Out:</span>
+    <select id="oct-midi-output"><option value="">None</option></select>
+    <span style="margin-left:auto">View:</span>
+    <select id="view-toggle">
+        <option value="classic">Classic (full panel)</option>
+        <option value="modern">Modern (grid)</option>
+    </select>
+</div>
+
+<div id="view-classic"></div>
+<div id="view-modern" style="display:none"></div>
+
+<script type="module" src="/src/main.ts"></script>
+<script>
+// Generate the Octopus grid UI elements
+(function generateGrid() {
+    const container = document.getElementById("view-modern");
+
+    // Mix strip
+    const mixNames = ["MIX","SEL","ATR","VOL","PAN","MOD","EXP","U0","U1","U2","U3","U4","U5","MUT","EDT","ESC"];
+    const mixKeys = [21,32,43,54,65,76,87,98,109,120,131,142,153,164,175,186];
+    const mixDiv = document.createElement("div");
+    mixDiv.className = "grid-section";
+    mixDiv.innerHTML = '<div class="grid-section-label">Mix Strip</div>';
+    const mixStrip = document.createElement("div");
+    mixStrip.className = "mix-strip";
+    mixNames.forEach((name, i) => {
+        const cell = document.createElement("div");
+        cell.className = "pad-cell";
+        const led = document.createElement("div");
+        led.className = "led";
+        const btn = document.createElement("button");
+        btn.className = "mix-btn";
+        btn.textContent = name;
+        btn.id = `mx${mixKeys[i]}`;
+        btn.dataset.key = mixKeys[i];
+        cell.appendChild(led);
+        cell.appendChild(btn);
+        mixStrip.appendChild(cell);
+    });
+    mixDiv.appendChild(mixStrip);
+    container.appendChild(mixDiv);
+
+    // Step pads: 10 rows × 16 columns
+    const stepDiv = document.createElement("div");
+    stepDiv.className = "grid-section";
+    stepDiv.innerHTML = '<div class="grid-section-label">Step Grid (10 tracks × 16 steps)</div>';
+    const stepGrid = document.createElement("div");
+    stepGrid.className = "step-grid";
+    for (let row = 0; row < 10; row++) {
+        for (let col = 0; col < 16; col++) {
+            const key = row * 16 + col;
+            const cell = document.createElement("div");
+            cell.className = "pad-cell";
+            const led = document.createElement("div");
+            led.className = "led";
+            const btn = document.createElement("button");
+            btn.className = "pad-btn";
+            btn.textContent = `${row + 1}.${col + 1}`;
+            btn.id = `p${row}_${col}`;
+            btn.dataset.step = key;
+            cell.appendChild(led);
+            cell.appendChild(btn);
+            stepGrid.appendChild(cell);
+        }
+    }
+    stepDiv.appendChild(stepGrid);
+    container.appendChild(stepDiv);
+
+    // Transport keys
+    const transportDiv = document.createElement("div");
+    transportDiv.className = "grid-section";
+    transportDiv.innerHTML = '<div class="grid-section-label">Transport</div>';
+    const transportStrip = document.createElement("div");
+    transportStrip.className = "control-strip";
+    const tkeys = [
+        ["REC",223],["STP",231],["PSE",232],["P1",241],["P2",240],["P4",250],
+        ["GRID",218],["PAGE",219],["TRK",220],["STEP",227],["MAP",228],["PLAY",229],
+        ["PGM",242],["TPO",234],
+    ];
+    tkeys.forEach(([name, key]) => {
+        const cell = document.createElement("div");
+        cell.className = "pad-cell";
+        cell.style.flex = "0 0 auto";
+        const led = document.createElement("div");
+        led.className = "led";
+        const btn = document.createElement("button");
+        btn.className = "ctrl-btn";
+        btn.textContent = name;
+        btn.dataset.key = key;
+        cell.appendChild(led);
+        cell.appendChild(btn);
+        transportStrip.appendChild(cell);
+    });
+    transportDiv.appendChild(transportStrip);
+    container.appendChild(transportDiv);
+
+    // Rotary encoders
+    const rotaryDiv = document.createElement("div");
+    rotaryDiv.className = "grid-section";
+    rotaryDiv.innerHTML = '<div class="grid-section-label">Rotary Encoders (scroll to turn)</div>';
+    const rotaryGroup = document.createElement("div");
+    rotaryGroup.className = "rotary-group";
+    const rotNames = ["TPO","VEL","PIT","LEN","STA","POS","DIR","AMT","GRV","MCC","MCH"];
+    rotNames.forEach((name, i) => {
+        const rot = document.createElement("div");
+        rot.className = "rotary";
+        rot.textContent = name;
+        rot.dataset.rotary = i;
+        rotaryGroup.appendChild(rot);
+    });
+    rotaryDiv.appendChild(rotaryGroup);
+    container.appendChild(rotaryDiv);
+})();
+</script>
+
+</body>
+</html>

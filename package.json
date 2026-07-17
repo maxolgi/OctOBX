@@ -1,0 +1,24 @@
+{
+  "name": "octodaw",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "serve": "python3 serve.py"
+  },
+  "dependencies": {
+    "@opendaw/lib-std": "latest",
+    "@opendaw/lib-dsp": "latest",
+    "@opendaw/lib-dom": "latest",
+    "@opendaw/studio-boxes": "latest",
+    "@opendaw/studio-adapters": "latest",
+    "@opendaw/studio-core": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

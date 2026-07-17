@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+wasm/build/
+
+# Self-signed dev certs (regenerate per machine, see README)
+certs/*.pem
+
+# Dev server logs
+logs/
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Emscripten / temp
+*.tmp
