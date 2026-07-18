@@ -22,8 +22,13 @@ export interface OctopusWasmModule {
     _page_refresh(): void;
     _wasm_has_midi_event(): number;
     _wasm_get_midi_event(): number;
+    _wasm_drain_midi_batch(max_count: number): number;
+    _get_midi_batch_events_ptr(): number;
+    _get_midi_batch_ts_ptr(): number;
+    _wasm_get_midi_dropped_count(): number;
     HEAPU8: Uint8Array;
     HEAPU32: Uint32Array;
+    HEAPF64: Float64Array;
     FS: {
         mkdir(path: string): void;
         mount(type: unknown, options: unknown, mountpoint: string): void;

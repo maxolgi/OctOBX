@@ -21,23 +21,20 @@
             font-size: 13px;
             min-height: 100vh;
         }
-        #topbar {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            padding: 8px 16px;
-            background: var(--panel);
-            border-bottom: 1px solid var(--border);
-        }
-        #topbar h1 { font-size: 14px; font-weight: normal; }
-        #status { color: var(--text-dim); flex: 1; }
         .transport-bar {
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 8px 16px;
-            background: var(--panel);
+            padding: 6px 12px;
+            background: rgba(42, 42, 42, 0.92);
+            backdrop-filter: blur(6px);
             border-bottom: 1px solid var(--border);
+            overflow-x: auto;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 1000;
         }
         .transport-bar button {
             background: #333;
@@ -68,7 +65,7 @@
         }
         .transport-playing { background: #1a3a1a; color: #0f0; }
         .transport-stopped { background: #3a1a1a; color: #f00; }
-        #oct-midi-output {
+        #oct-midi-output, #oct-midi-input {
             background: #1a1a1a;
             color: var(--text);
             border: 1px solid var(--border);
@@ -76,6 +73,17 @@
             font-family: monospace;
             border-radius: 3px;
         }
+        #oct-midi-rescan {
+            background: #333;
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            font-family: monospace;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        #oct-midi-rescan:hover { background: #444; }
         #octopus-grid {
             padding: 16px;
         }
@@ -184,11 +192,6 @@
 </head>
 <body>
 
-<div id="topbar">
-    <h1>OctoDAW</h1>
-    <span id="status">Initializing...</span>
-</div>
-
 <div class="transport-bar">
     <button id="oct-play">PLAY</button>
     <button id="oct-stop">STOP</button>
@@ -199,6 +202,9 @@
     <span id="oct-transport-indicator" class="transport-stopped">STOPPED</span>
     <span>MIDI Out:</span>
     <select id="oct-midi-output"><option value="">None</option></select>
+    <span>MIDI In:</span>
+    <select id="oct-midi-input"><option value="">None</option></select>
+    <button id="oct-midi-rescan" title="Re-scan MIDI ports">↻ Rescan</button>
     <span style="margin-left:auto">View:</span>
     <select id="view-toggle">
         <option value="classic">Classic (full panel)</option>

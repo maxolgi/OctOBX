@@ -261,6 +261,13 @@ int EMSCRIPTEN_KEEPALIVE engine_init(void) {
     Octopus_memory_init();
     fprintf(stderr, "engine_init: Octopus_memory_init() completed\n");
 
+    /* Widen double-click window for mouse input (original hardware used
+     * physical buttons; mice need a more forgiving timing window).
+     * Defaults: RESOLUTION=12, SENSITIVITY=5 → ~125-245ms window.
+     * Override: RESOLUTION=24, SENSITIVITY=3 → ~85-490ms window. */
+    DOUBLE_CLICK_ALARM_RESOLUTION = 24;
+    DOUBLE_CLICK_ALARM_SENSITIVITY = 3;
+
     /* Try to auto-load saved state */
     load_state("/persistent/octopus_state.bin");
 

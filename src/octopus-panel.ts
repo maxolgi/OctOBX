@@ -15,9 +15,34 @@ const MIR_SIZE = 170;
 export function startOctopusPanel(module: OctopusWasmModule): () => void {
     let running = true;
     let mirAddr = 0;
+    let renderFrame = 0;
+    const prevMir = new Uint8Array(MIR_SIZE);
+
+    function mirChanged(curr: Uint8Array): boolean {
+        for (let i = 0; i < MIR_SIZE; i++) {
+            if (curr[i] !== prevMir[i]) return true;
+        }
+        return false;
+    }
 
     function renderLoop() {
         if (!running) return;
+        renderFrame++;
+
+        const runBit = module._get_run_bit();
+        const indicator = document.getElementById("oct-transport-indicator");
+        if (indicator) {
+            const playing = runBit !== 0;
+            if (indicator.textContent !== (playing ? "PLAYING" : "STOPPED")) {
+                indicator.textContent = playing ? "PLAYING" : "STOPPED";
+                indicator.className = playing ? "transport-playing" : "transport-stopped";
+            }
+        }
+
+        if (renderFrame & 1) {
+            requestAnimationFrame(renderLoop);
+            return;
+        }
 
         module._page_refresh();
 
@@ -27,16 +52,9 @@ export function startOctopusPanel(module: OctopusWasmModule): () => void {
 
         if (mirAddr) {
             const mir = new Uint8Array(module.HEAPU8.buffer, mirAddr, MIR_SIZE);
-            updateLEDs(mir);
-        }
-
-        const runBit = module._get_run_bit();
-        const indicator = document.getElementById("oct-transport-indicator");
-        if (indicator) {
-            const playing = runBit !== 0;
-            if (indicator.textContent !== (playing ? "PLAYING" : "STOPPED")) {
-                indicator.textContent = playing ? "PLAYING" : "STOPPED";
-                indicator.className = playing ? "transport-playing" : "transport-stopped";
+            if (mirChanged(mir)) {
+                updateLEDs(mir);
+                prevMir.set(mir);
             }
         }
 
@@ -79,10 +97,14 @@ function setLED(id: string, v: number) {
     const led = el.previousElementSibling ||
         (el.parentElement?.querySelector(".led")) ||
         el;
+
+    const ledEl = led as HTMLElement;
+    if (parseInt(ledEl.dataset.mv ?? "-1") === v) return;
+    ledEl.dataset.mv = String(v);
+
     const r = v & 2;
     const g = v & 4;
 
-    const ledEl = led as HTMLElement;
     if (r && g) {
         ledEl.style.background = "#dc0";
         ledEl.style.boxShadow = "0 0 5px #e80";

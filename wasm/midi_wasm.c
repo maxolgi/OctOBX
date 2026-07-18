@@ -30,6 +30,7 @@
 /* ============================================================ */
 
 #define MIDI_RING_SIZE 512
+#define MIDI_RING_MASK (MIDI_RING_SIZE - 1)
 
 /*
  * Each event packs into 32 bits for efficient JS transfer:
@@ -37,24 +38,32 @@
  *   bits 15-8:  data1 (note/cc/pgm/lsb)
  *   bits 23-16: data2 (velocity/cc value/msb)
  *   bits 31-24: MIDI channel (1-16, 0 = system/realtime)
+ *
+ * A parallel array of doubles stores the emscripten_get_now() timestamp
+ * (ms, same epoch as performance.now()) recorded at push time. JS reads
+ * both arrays via wasm_drain_midi_batch() and passes the timestamp to
+ * MIDIOutput.send(data, ts) for jitter-free scheduled delivery.
  */
 static uint32_t midi_ring[MIDI_RING_SIZE];
+static double   midi_ring_ts[MIDI_RING_SIZE];
 static volatile int midi_ring_head = 0;
 static volatile int midi_ring_tail = 0;
+static volatile uint32_t midi_dropped_count = 0;
 
 static pthread_mutex_t midi_ring_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void midi_ring_push(uint8_t status, uint8_t data1, uint8_t data2, uint8_t channel) {
     pthread_mutex_lock(&midi_ring_mutex);
-    int next = (midi_ring_tail + 1) % MIDI_RING_SIZE;
+    int next = (midi_ring_tail + 1) & MIDI_RING_MASK;
     if (next == midi_ring_head) {
-        /* Buffer full — drop oldest */
-        midi_ring_head = (midi_ring_head + 1) % MIDI_RING_SIZE;
+        midi_ring_head = (midi_ring_head + 1) & MIDI_RING_MASK;
+        midi_dropped_count++;
     }
     midi_ring[midi_ring_tail] = (uint32_t)status
                               | ((uint32_t)data1 << 8)
                               | ((uint32_t)data2 << 16)
                               | ((uint32_t)channel << 24);
+    midi_ring_ts[midi_ring_tail] = emscripten_get_now();
     midi_ring_tail = next;
     pthread_mutex_unlock(&midi_ring_mutex);
 }
@@ -74,9 +83,45 @@ uint32_t EMSCRIPTEN_KEEPALIVE wasm_get_midi_event(void) {
         return 0;
     }
     uint32_t event = midi_ring[midi_ring_head];
-    midi_ring_head = (midi_ring_head + 1) % MIDI_RING_SIZE;
+    midi_ring_head = (midi_ring_head + 1) & MIDI_RING_MASK;
     pthread_mutex_unlock(&midi_ring_mutex);
     return event;
+}
+
+/* Batch drain: copies up to max_count events + timestamps into static
+ * buffers and advances head in a single mutex acquisition. JS reads the
+ * results via get_midi_batch_events_ptr() / get_midi_batch_ts_ptr().
+ * Returns the number of events copied. */
+#define MIDI_BATCH_MAX 128
+static uint32_t midi_batch_events[MIDI_BATCH_MAX];
+static double   midi_batch_ts[MIDI_BATCH_MAX];
+
+int EMSCRIPTEN_KEEPALIVE wasm_drain_midi_batch(int max_count) {
+    if (max_count > MIDI_BATCH_MAX) max_count = MIDI_BATCH_MAX;
+    if (max_count < 0) max_count = 0;
+
+    pthread_mutex_lock(&midi_ring_mutex);
+    int count = 0;
+    while (count < max_count && midi_ring_head != midi_ring_tail) {
+        midi_batch_events[count] = midi_ring[midi_ring_head];
+        midi_batch_ts[count]     = midi_ring_ts[midi_ring_head];
+        midi_ring_head = (midi_ring_head + 1) & MIDI_RING_MASK;
+        count++;
+    }
+    pthread_mutex_unlock(&midi_ring_mutex);
+    return count;
+}
+
+uint32_t* EMSCRIPTEN_KEEPALIVE get_midi_batch_events_ptr(void) {
+    return midi_batch_events;
+}
+
+double* EMSCRIPTEN_KEEPALIVE get_midi_batch_ts_ptr(void) {
+    return midi_batch_ts;
+}
+
+uint32_t EMSCRIPTEN_KEEPALIVE wasm_get_midi_dropped_count(void) {
+    return midi_dropped_count;
 }
 
 /* ============================================================ */
@@ -137,6 +182,8 @@ void midi_init(int queue_ppqn) {
     (void)queue_ppqn;
     midi_ring_head = 0;
     midi_ring_tail = 0;
+    midi_dropped_count = 0;
+    memset(midi_ring_ts, 0, sizeof(midi_ring_ts));
 }
 
 void midi_send_event(int type, int val0, int val1, int val2, unsigned int timestamp) {

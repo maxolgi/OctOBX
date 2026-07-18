@@ -151,7 +151,7 @@ typedef struct {
     void           *htimer;
 #elif defined(__EMSCRIPTEN__)
     /* No timerfd or Windows timer — nanosleep-based watcher */
-    int             _placeholder;
+    long            interval_ns;
 #else
     int             tfd;
 #endif

@@ -39,12 +39,15 @@ node --version
 
 ### Compile the WASM engine (Emscripten)
 ```bash
+git submodule update --init   # first time only — firmware/ must exist
 cd wasm
 make            # → build/octopus_wasm.js + build/octopus_wasm.wasm
 make NEMO=1     # Nemo variant → build/nemo_wasm.{js,wasm}
 make clean
 ```
-`emcc` must be in PATH (run `source ~/emsdk/emsdk_env.sh` first).
+`emcc` must be in PATH (run `source ~/emsdk/emsdk_env.sh` first). The Makefile
+uses `FWROOT = ..` (one level up from `wasm/`) to find the firmware at the repo
+root (`../firmware/OCT_OS/...`).
 
 ### Install TypeScript deps + run dev server
 ```bash
@@ -118,7 +121,7 @@ Browser (COOP/COEP cross-origin isolated)
 ├── Main Thread
 │   ├── Octopus UI (classic panel or modern grid)
 │   ├── MIR rendering (60Hz RAF → reads WASM heap via HEAPU8)
-│   ├── MIDI bridge (drains ring buffer → NoteSignal / Web MIDI)
+│   ├── MIDI: hw output drain (→ Web MIDI) + hw input (→ wasm_midi_input) + bridge (→ openDAW NoteSignal)
 │   └── Transport controls
 ├── WASM Module (octopus_wasm.wasm)
 │   ├── Firmware core (~50k lines, unchanged)
@@ -167,20 +170,52 @@ sequentially after setting the running status byte.
 
 | File | Role |
 |---|---|
-| `main.ts` | Entry point: SharedArrayBuffer check → load WASM → `engine_init()` → build UI → transport → openDAW (non-fatal) → MIDI bridge |
+| `main.ts` | Entry point: SharedArrayBuffer check → load WASM → `engine_init()` → build UI → transport/persistence → **hardware MIDI (first)** → openDAW (timeout-guarded, **last**). **Do not reorder**: openDAW's `setupEngine` hangs (suspended `AudioContext` → `AudioWorklets.createFor` never resolves) and would block MIDI init if it ran first. |
 | `octopus-types.ts` | TS interface matching the C `EMSCRIPTEN_KEEPALIVE` exports |
 | `octopus-module.ts` | Loads the WASM module (dynamic `<script>`, `locateFile`, IDBFS mount attempt) |
 | `classic-panel.ts` | Faithful port of the Octopus control surface (same DOM/IDs as `web_gui.html`); direct WASM calls instead of WebSocket |
 | `octopus-panel.ts` | Simplified modern grid view (alternative panel) |
-| `midi-bridge.ts` | 60Hz RAF loop draining the WASM MIDI ring buffer → openDAW `NoteSignal` |
+| `midi-access.ts` | Shared `openMidiAccess()` + `pollForPorts()` — works around the Chrome-on-Linux late port-enumeration quirk (see MIDI section). |
+| `midi-output.ts` | Web MIDI API **output** (Chrome/Edge); `frameMidi()` emits correct 1/2/3-byte messages; drains the ring buffer at 60Hz; `rescan()`. |
+| `midi-input.ts` | Web MIDI API **input** (Chrome/Edge); forwards hardware messages to `wasm_midi_input()`; `rescan()`. |
+| `midi-bridge.ts` | 60Hz RAF loop draining the WASM MIDI ring buffer → openDAW `NoteSignal` (only started if openDAW init succeeds). |
 | `transport-sync.ts` | Wires PLAY/STOP/BPM to both the Octopus engine and openDAW |
-| `midi-output.ts` | Web MIDI API hardware output (Chrome/Edge) |
-| `engine-setup.ts` | openDAW project setup (10 tracks + instruments); currently runtime-fails, falls back to standalone |
+| `engine-setup.ts` | openDAW project setup (10 tracks + instruments); currently runtime-fails/hangs → standalone fallback. |
 | `state-persistence.ts` | Save/Load buttons → IDBFS sync |
 
 Input conventions: `skey(key, press)` → `module._wasm_key_press(key, press)`;
 rotary knobs → `module._wasm_rotary(idx, dir)`; drag-paint step pads
 (mouse + touch); Ctrl-click hold mode.
+
+## MIDI (hardware I/O)
+
+Real MIDI is a first-class feature, wired through the Web MIDI API (Chrome/Edge
+only). Two independent directions, plus the openDAW bridge:
+
+- **Output** (`midi-output.ts`) — `drainMidiToHardware()` is a 60Hz RAF loop that
+  pulls 32-bit packed events from the WASM ring buffer and sends them to the
+  selected Web MIDI output port. **Framing matters**: `frameMidi()` emits 1-byte
+  system real-time (clock `0xF8`, start `0xFA`, stop `0xFC`), 2-byte (program
+  change `0xC0` / channel pressure `0xD0`), and 3-byte channel voice. Sending the
+  wrong length corrupts the stream to hardware synths.
+- **Input** (`midi-input.ts`) — `HardwareMidiInput` attaches `onmidimessage` to the
+  selected input port and forwards `(status, d1, d2)` to `wasm_midi_input()`,
+  which drives the firmware's `G_midi_interpret_*` byte-at-a-time interpreters.
+  Sysex / active-sensing / tune-request are dropped. The browser decodes
+  running-status, so every message arrives with an explicit status byte.
+- **openDAW bridge** (`midi-bridge.ts`) — same ring buffer, forwarded to openDAW
+  `NoteSignal`. Only started when openDAW init succeeds.
+
+**Chrome-on-Linux late enumeration** — after the MIDI permission is granted, the
+*first* `requestMIDIAccess()` delivers ports via `statechange` events. On
+*reload* (permission already granted) no `statechange` fires and the call can
+resolve with **empty** input/output maps — so the selectors stay "None".
+`midi-access.ts` `pollForPorts()` repopulates every 250ms (up to 4s) until ports
+appear. There is also a `↻ Rescan` button (`#oct-midi-rescan`) that calls
+`rescan()` on both classes for hotplug/recovery.
+
+UI selectors: `#oct-midi-output`, `#oct-midi-input`, `#oct-midi-rescan`
+(in `index.html` transport bar).
 
 ## MIR (Matrix Intermediate Representation)
 
@@ -216,16 +251,22 @@ server, and verify in the browser console:
 ## Known issues
 
 1. **openDAW integration not functional** — `ProjectEnv` requires fully
-   initialized sample/soundfont services; Octopus runs standalone (graceful fallback).
+   initialized sample/soundfont services; `setupEngine` hangs (suspended
+   `AudioContext` → `AudioWorklets.createFor` never resolves). It is run
+   **last** in `main.ts` behind a 4s `raceTimeout` guard so it can never block
+   the app or MIDI; failure → standalone mode (graceful).
 2. **IDBFS not mounting** — `FS.mount()` fails because the module's FS object isn't
    fully initialized at mount time; state doesn't persist across reloads yet.
-3. **MIDI input path untested** — correct byte-at-a-time signatures are used, but
-   the input direction is unverified.
+3. **MIDI input path unverified end-to-end** — correct byte-at-a-time signatures
+   and the Web MIDI → `wasm_midi_input()` wiring are in place, but the input
+   direction (controller → sequencer) needs real-hardware validation.
 4. **No audio output without a sink** — the sequencer generates MIDI events but
-   nothing plays them unless openDAW or Web MIDI hardware is connected.
+   nothing plays them unless Web MIDI hardware (or openDAW, if it worked) is
+   connected.
 
 ## Reference docs in repo
 
 - `README.md` — full WASM-port documentation (architecture, source-file specs,
   HTTPS/COOP-COEP, MIR format, known issues)
-- `octopus.txt` (in firmware) — Genoqs Octopus reference manual (CE v5.30)
+- `firmware/OCT_OS/COPYING.txt`, `firmware/OCT_OS/FACTORY_RESTORE.txt` —
+  firmware license and factory-restore notes from the OCT_CE_OS submodule.

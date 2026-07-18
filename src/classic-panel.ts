@@ -9,8 +9,8 @@ import type { OctopusWasmModule } from "./octopus-types";
 const MIR_SIZE = 170;
 
 const CLASSIC_CSS = `
-.octo-classic-root{background:#1a1a1a;display:flex;flex-direction:column;align-items:center;padding:10px;font-family:monospace;user-select:none;overflow-x:auto}
-.octo-classic-root .panel{--lbl:#777;background:#F8F6F0;border-radius:12px;padding:16px;box-shadow:0 4px 20px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:8px;border:3px solid #2a2a2a}
+.octo-classic-root{background:#1a1a1a;display:flex;align-items:center;justify-content:center;position:fixed;inset:0;overflow:hidden;font-family:monospace;user-select:none}
+.octo-classic-root .panel{--lbl:#777;background:#F8F6F0;border-radius:0;padding:0;box-shadow:none;display:flex;flex-direction:column;gap:8px;border:none}
 .octo-classic-root .top-sec{display:flex;gap:8px}
 .octo-classic-root .grid-row{display:flex;gap:2px;align-items:center}
 .octo-classic-root .left-sec{display:flex;flex-direction:column;gap:17px;padding-top:24px}
@@ -320,29 +320,62 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
     root.querySelectorAll<HTMLElement>('[id^="chd-"]').forEach(el => bindKey(el, parseInt(el.id.slice(4))));
 
     function fitToWidth() {
-        const natural = panel.offsetWidth;
-        if (!natural) return;
-        const avail = root.clientWidth - 20;
-        const scale = Math.min(1, avail / natural);
+        const naturalW = panel.offsetWidth;
+        const naturalH = panel.offsetHeight;
+        if (!naturalW || !naturalH) return;
+        const scale = Math.min(window.innerWidth / naturalW, window.innerHeight / naturalH);
         panel.style.transform = `scale(${scale})`;
-        panel.style.transformOrigin = "top center";
+        panel.style.transformOrigin = "center center";
     }
-    const resizeHandler = () => fitToWidth();
+    function alignChordButtons() {
+        const scaleMatch = panel.style.transform.match(/scale\(([\d.]+)\)/);
+        const scale = scaleMatch ? parseFloat(scaleMatch[1]) : 1;
+        const stopBtn = document.getElementById("ck-231");
+        const escBtn = document.getElementById("mx186");
+        const spacer = document.getElementById("chordSpacer");
+        if (!stopBtn || !escBtn || !spacer) return;
+        const mixRect = mixRow.getBoundingClientRect();
+        const stopCenter = (stopBtn.getBoundingClientRect().left + stopBtn.getBoundingClientRect().width / 2 - mixRect.left) / scale;
+        const escRight = (escBtn.getBoundingClientRect().right - mixRect.left) / scale;
+        spacer.style.width = Math.max(0, stopCenter - 83 - escRight) + "px";
+    }
+    const resizeHandler = () => { fitToWidth(); alignChordButtons(); };
     window.addEventListener("resize", resizeHandler);
     fitToWidth();
+    alignChordButtons();
 
     let mirAddr = 0;
     let running = true;
+    let renderFrame = 0;
+    const prevMir = new Uint8Array(MIR_SIZE);
+
+    function mirChanged(curr: Uint8Array): boolean {
+        for (let i = 0; i < MIR_SIZE; i++) {
+            if (curr[i] !== prevMir[i]) return true;
+        }
+        return false;
+    }
 
     function renderLoop() {
         if (!running) return;
+        renderFrame++;
+
+        updateTransportIndicator(module);
+
+        if (renderFrame & 1) {
+            requestAnimationFrame(renderLoop);
+            return;
+        }
+
         module._page_refresh();
         if (!mirAddr) mirAddr = module._get_mir_ptr();
         if (mirAddr) {
             const mir = new Uint8Array(module.HEAPU8.buffer, mirAddr, MIR_SIZE);
-            updateLEDs(mir);
+            if (mirChanged(mir)) {
+                updateLEDs(mir);
+                prevMir.set(mir);
+            }
         }
-        updateTransportIndicator(module);
         requestAnimationFrame(renderLoop);
     }
 
@@ -352,11 +385,14 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
     function setL(el: HTMLElement | null, v: number) {
         if (!el) return;
         const led = el.previousElementSibling as HTMLElement || (el.parentElement?.querySelector(".led") as HTMLElement) || el;
+        const ledEl = led as HTMLElement;
+        if (parseInt(ledEl.dataset.mv ?? "-1") === v) return;
+        ledEl.dataset.mv = String(v);
         const r = v & 2, g = v & 4;
-        if (r && g) { led.style.background = "#dc0"; led.style.boxShadow = "0 0 5px #e80"; }
-        else if (r) { led.style.background = "#d00"; led.style.boxShadow = "0 0 5px #f00"; }
-        else if (g) { led.style.background = "#0c0"; led.style.boxShadow = "0 0 5px #0f0"; }
-        else { led.style.background = "transparent"; led.style.boxShadow = "none"; }
+        if (r && g) { ledEl.style.background = "#dc0"; ledEl.style.boxShadow = "0 0 5px #e80"; }
+        else if (r) { ledEl.style.background = "#d00"; ledEl.style.boxShadow = "0 0 5px #f00"; }
+        else if (g) { ledEl.style.background = "#0c0"; ledEl.style.boxShadow = "0 0 5px #0f0"; }
+        else { ledEl.style.background = "transparent"; ledEl.style.boxShadow = "none"; }
     }
 
     const cm: Record<string, number[]> = {

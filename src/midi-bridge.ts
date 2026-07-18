@@ -1,44 +1,46 @@
 /*
- * midi-bridge.ts — Drains the Octopus WASM MIDI ring buffer and forwards
- * events to openDAW instruments via NoteSignal.
+ * midi-bridge.ts — Forwards batched MIDI events from the Octopus ring buffer
+ * to openDAW instruments via NoteSignal.
  *
- * The ring buffer is polled at requestAnimationFrame frequency (~60Hz).
- * Each event is unpacked from a 32-bit packed integer.
+ * This is no longer a self-draining loop. The single drain loop in
+ * midi-output.ts (drainMidiToHardware) owns ring-buffer access and calls
+ * the handler returned here on each batch, avoiding the dual-consumer race
+ * where events were randomly split between hardware output and openDAW.
  */
 
-import type { OctopusWasmModule } from "./octopus-types";
 import type { TrackAssignment } from "./engine-setup";
 import { getProject } from "./engine-setup";
 
-export function startMidiBridge(
-    module: OctopusWasmModule,
+export type BatchDrainHandler = (
+    events: Uint32Array,
+    timestamps: Float64Array,
+    count: number,
+) => void;
+
+export function createMidiBridgeHandler(
     assignments: TrackAssignment[],
     onMidiEvent?: (status: number, d1: number, d2: number, channel: number) => void,
-): () => void {
+): BatchDrainHandler {
     const channelToUuid = new Map<number, Uint8Array>();
 
     for (const a of assignments) {
         channelToUuid.set(a.octopusTrack + 1, a.audioUnitUuid);
     }
 
-    let running = true;
-    let noteSignalModule: typeof import("@opendaw/studio-adapters") | null = null;
+    /* Pre-load NoteSignal so the handler is ready when events arrive */
+    let noteSignalMod: typeof import("@opendaw/studio-adapters") | null = null;
+    import("@opendaw/studio-adapters").then((mod) => {
+        noteSignalMod = mod;
+    }).catch(() => { /* openDAW optional */ });
 
-    async function loadNoteSignal() {
-        if (!noteSignalModule) {
-            noteSignalModule = await import("@opendaw/studio-adapters");
-        }
-        return noteSignalModule.NoteSignal;
-    }
+    return (events: Uint32Array, _timestamps: Float64Array, count: number) => {
+        if (!noteSignalMod) return;
 
-    async function drainLoop() {
-        if (!running) return;
-
-        const NoteSignal = await loadNoteSignal();
         const project = getProject();
+        const NoteSignal = noteSignalMod.NoteSignal;
 
-        while (module._wasm_has_midi_event()) {
-            const packed = module._wasm_get_midi_event();
+        for (let i = 0; i < count; i++) {
+            const packed = events[i];
             const status = packed & 0xff;
             const data1 = (packed >> 8) & 0xff;
             const data2 = (packed >> 16) & 0xff;
@@ -64,13 +66,5 @@ export function startMidiBridge(
                 }
             }
         }
-
-        requestAnimationFrame(drainLoop);
-    }
-
-    drainLoop();
-
-    return () => {
-        running = false;
     };
 }

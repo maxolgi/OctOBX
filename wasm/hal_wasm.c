@@ -276,11 +276,20 @@ static void *hal_alarm_watcher(void *arg) {
     cyg_alarm *alarm = (cyg_alarm *)arg;
 
     while (alarm->active) {
-        /* Sleep for ~10ms (eCos tick resolution) then fire */
-        struct timespec ts = { .tv_sec = 0, .tv_nsec = 10 * 1000000 };
+        long sleep_ns = alarm->interval_ns;
+        if (sleep_ns <= 0) sleep_ns = 10 * 1000000L; /* fallback: 10ms */
+        struct timespec ts = {
+            .tv_sec  = sleep_ns / 1000000000L,
+            .tv_nsec = sleep_ns % 1000000000L
+        };
         nanosleep(&ts, NULL);
         if (alarm->handler && alarm->active) {
             alarm->handler(alarm->handle, alarm->data);
+            /* interval == 0: one-shot alarm — fire once then self-disable */
+            if (alarm->interval_ns == 0) {
+                alarm->active = 0;
+                break;
+            }
         }
     }
     return NULL;
@@ -315,7 +324,9 @@ void cyg_alarm_initialize(cyg_handle_t handle, cyg_tick_count_t trigger, cyg_tic
     if (!alarm) return;
 
     (void)trigger;
-    (void)interval;
+
+    /* 1 eCos tick = 10ms (matches cyg_current_time: emscripten_get_now()/10.0) */
+    alarm->interval_ns = (long)(interval * 10 * 1000000ULL);
 
     if (!alarm->active) {
         alarm->active = 1;
