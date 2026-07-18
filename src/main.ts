@@ -9,12 +9,14 @@
 import { loadOctopusModule } from "./octopus-module";
 import { setupEngine, type EngineResult } from "./engine-setup";
 import { createMidiBridgeHandler, type BatchDrainHandler } from "./midi-bridge";
+import { createObxdBridgeHandler } from "./obxd-bridge";
 import { setupTransportSync } from "./transport-sync";
 import { startOctopusPanel } from "./octopus-panel";
 import { buildClassicPanel } from "./classic-panel";
 import { HardwareMidiOutput, drainMidiToHardware } from "./midi-output";
 import { HardwareMidiInput } from "./midi-input";
 import { setupStatePersistence } from "./state-persistence";
+import { setupObxdPanel } from "./obxd-panel";
 import type { OctopusWasmModule } from "./octopus-types";
 
 let activePanelCleanup: (() => void) | null = null;
@@ -39,11 +41,18 @@ async function main() {
     // Registering drain before render guarantees MIDI events are
     // dispatched before the 300+ DOM-element LED update consumes the frame.
     const hardwareOutput = new HardwareMidiOutput();
-    let bridgeHandler: BatchDrainHandler | null = null;
+    let bridgeHandler: BatchDrainHandler | null = null;            // openDAW (timeout-guarded, installed last)
+    let obxdBridgeHandler: BatchDrainHandler | null = null;        // in-browser Obxd synth (Phase 3)
     drainMidiToHardware(
         wasmModule,
         hardwareOutput,
-        (events, timestamps, count) => bridgeHandler?.(events, timestamps, count),
+        (events, timestamps, count) => {
+            // Parallel consumers: Web MIDI (output.send inside drain) already ran
+            // above. Now fan out to the optional bridges — each no-ops when its
+            // target isn't ready (openDAW hung / synth unpowered).
+            bridgeHandler?.(events, timestamps, count);
+            obxdBridgeHandler?.(events, timestamps, count);
+        },
     );
 
     logStatus("Starting panel...");
@@ -71,6 +80,16 @@ async function main() {
         await Promise.all([hardwareOutput.rescan(), hardwareInput.rescan()]);
         console.log("[octodaw] MIDI rescan complete");
     });
+
+    // --- In-browser Obxd synth panel (Phase 1: power + gain) ---
+    // The synth stays dormant until the user clicks "Synth: Off" — that click
+    // is the user gesture the AudioContext needs for autoplay policy.
+    // Phase 3 plugs the drain loop's onBatchDrained callback into
+    // sendObxdMidi() so the sequencer drives the synth. Install the handler
+    // BEFORE setupObxdPanel so it's already active when the user powers on;
+    // createObxdBridgeHandler() no-ops while isObxdReady() === false.
+    obxdBridgeHandler = createObxdBridgeHandler();
+    setupObxdPanel();
 
     // --- openDAW LAST, timeout-guarded so it can never block MIDI/hardware ---
     // openDAW is non-functional (ProjectEnv needs fully-initialized services).

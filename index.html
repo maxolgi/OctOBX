@@ -14,12 +14,47 @@
             --text-dim: #888;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            overflow-y: auto;
+            scrollbar-width: none;        /* Firefox */
+            -ms-overflow-style: none;     /* old IE/Edge */
+        }
+        html::-webkit-scrollbar,
+        body::-webkit-scrollbar {
+            width: 0;
+            height: 0;
+            display: none;                /* Chrome/Safari */
+        }
         body {
             background: var(--bg);
             color: var(--text);
             font-family: monospace;
             font-size: 13px;
             min-height: 100vh;
+        }
+        /* Page wrapper — clears the fixed transport bar on desktop;
+           on touch devices the bar is toggle-hidden so no top padding. */
+        .app-main {
+            padding-top: 48px;
+            min-height: calc(100vh - 48px);
+        }
+        @media (hover: none) and (pointer: coarse) {
+            .app-main { padding-top: 0; }
+        }
+        /* classic-panel.ts sets view-classic's class to .octo-classic-root,
+           which is position:fixed;inset:0 — the Octopus panel would fill the
+           viewport and overlay the in-flow synth panel. This ID-based
+           override (higher specificity than the runtime-injected class rule)
+           keeps the Octopus panel participating in document flow so the synth
+           panel can sit naturally below it. min-height preserves the
+           "panel fills the visible area when no synth is shown" visual. */
+        #view-classic {
+            position: relative;
+            inset: auto;
+            min-height: calc(100vh - 48px);
+        }
+        @media (hover: none) and (pointer: coarse) {
+            #view-classic { min-height: 100vh; }
         }
         .transport-bar {
             display: flex;
@@ -84,6 +119,35 @@
             border-radius: 3px;
         }
         #oct-midi-rescan:hover { background: #444; }
+        #oct-synth-power, #oct-synth-visibility {
+            background: #333;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            font-family: monospace;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 3px;
+            min-width: 110px;
+        }
+        #oct-synth-power:hover, #oct-synth-visibility:hover { background: #444; }
+        #oct-synth-power:disabled, #oct-synth-visibility:disabled { opacity: 0.6; cursor: wait; }
+        #oct-synth-power.synth-on {
+            background: #1a3a1a;
+            color: #0f0;
+            border-color: #0c0;
+        }
+        /* Visibility button "panel visible" state — subdued so it never
+           reads as the bright synth-on green of #oct-synth-power. */
+        #oct-synth-visibility.synth-visible {
+            background: #2a3a2a;
+            color: #8c8;
+            border-color: #464;
+        }
+        #oct-synth-gain {
+            width: 90px;
+            vertical-align: middle;
+        }
         #octopus-grid {
             padding: 16px;
         }
@@ -188,6 +252,150 @@
             justify-content: center;
         }
         .rotary:hover { border-color: #555; }
+
+        /* ---- OB-XD synth panel (Phase 4/5) ---- */
+        .obxd-panel {
+            background: rgba(20, 20, 20, 0.95);
+            padding: 8px 12px 12px;
+            z-index: 999;
+        }
+        .obxd-panel-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+        .obxd-panel-header > span:first-child {
+            font-weight: bold;
+            letter-spacing: 1px;
+            color: var(--accent);
+            font-size: 12px;
+        }
+        #obxd-patch-name {
+            color: var(--text);
+            font-size: 11px;
+            background: var(--panel);
+            padding: 4px 10px;
+            border-radius: 3px;
+            border: 1px solid var(--border);
+            flex: 1 1 auto;
+            min-width: 100px;
+            max-width: 320px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .obxd-file-btn {
+            display: inline-block;
+            background: #333;
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 5px 12px;
+            font-family: monospace;
+            font-size: 11px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        .obxd-file-btn:hover { background: #444; }
+        #obxd-reset-btn, #obxd-panic-btn {
+            background: #333;
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 5px 12px;
+            font-family: monospace;
+            font-size: 11px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        #obxd-reset-btn:hover { background: #444; }
+        #obxd-panic-btn { color: #f55; border-color: #533; }
+        #obxd-panic-btn:hover { background: #422; }
+
+        .obxd-knob-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            align-items: flex-start;
+        }
+        .obxd-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 6px 8px 8px;
+        }
+        .obxd-section-label {
+            color: var(--text-dim);
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 3px;
+            margin-bottom: 2px;
+        }
+        .obxd-section-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 10px;
+            max-width: 100%;
+        }
+        .obxd-knob {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 44px;
+            user-select: none;
+            cursor: ns-resize;
+            outline: none;
+        }
+        .obxd-knob:focus-visible {
+            background: rgba(0, 204, 0, 0.08);
+            border-radius: 3px;
+        }
+        .obxd-knob.dragging svg circle:first-of-type,
+        .obxd-knob.dragging svg path:first-of-type {
+            stroke-width: 4;
+        }
+        .obxd-knob-label {
+            font-size: 8px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            letter-spacing: 0.5px;
+            text-align: center;
+            margin-top: 2px;
+            font-family: monospace;
+            white-space: nowrap;
+        }
+        .obxd-knob-value {
+            font-size: 8px;
+            color: var(--text);
+            text-align: center;
+            font-family: monospace;
+            min-height: 10px;
+        }
+        .obxd-toggle {
+            width: 44px;
+            min-height: 22px;
+            padding: 4px 2px;
+            font-family: monospace;
+            font-size: 9px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            cursor: pointer;
+            align-self: flex-end;
+        }
+        .obxd-toggle:hover { background: #333; }
+        .obxd-toggle-on {
+            background: #1a3a1a;
+            color: var(--accent);
+            border-color: var(--accent);
+        }
     </style>
 </head>
 <body>
@@ -205,6 +413,10 @@
     <span>MIDI In:</span>
     <select id="oct-midi-input"><option value="">None</option></select>
     <button id="oct-midi-rescan" title="Re-scan MIDI ports">↻ Rescan</button>
+    <span>Synth:</span>
+    <button id="oct-synth-power" aria-pressed="false">Synth: Off</button>
+    <button id="oct-synth-visibility" aria-pressed="false">Show Synth</button>
+    <input id="oct-synth-gain" type="range" min="0" max="1" step="0.01" value="0.7" title="Internal synth gain">
     <span style="margin-left:auto">View:</span>
     <select id="view-toggle">
         <option value="classic">Classic (full panel)</option>
@@ -212,8 +424,24 @@
     </select>
 </div>
 
-<div id="view-classic"></div>
-<div id="view-modern" style="display:none"></div>
+<main class="app-main">
+    <div id="view-classic"></div>
+    <div id="view-modern" style="display:none"></div>
+
+    <div id="obxd-panel" class="obxd-panel" style="display:none;">
+        <div class="obxd-panel-header">
+            <span>OB-XD</span>
+            <span id="obxd-patch-name">&mdash; init &mdash;</span>
+            <label class="obxd-file-btn">
+                Load .fxp
+                <input id="obxd-fxp-input" type="file" accept=".fxp,.fxb" hidden>
+            </label>
+            <button id="obxd-reset-btn" type="button">Reset</button>
+            <button id="obxd-panic-btn" type="button">Panic</button>
+        </div>
+        <div id="obxd-knob-grid" class="obxd-knob-grid"></div>
+    </div>
+</main>
 
 <script type="module" src="/src/main.ts"></script>
 <script>
