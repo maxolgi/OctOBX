@@ -1,14 +1,18 @@
 /*
- * wasm/obxd/main_obxd.cpp — Phase 2: real Obxd synthesizer engine.
+ * wasm/obxd/main_obxd.cpp — multi-instance Obxd engine wrapper.
  *
- * Wraps a single SynthEngine instance from 2DaT/Obxd and exposes the
- * same C ABI as Phase 1's sine-wave stub (_obxd_init, _obxd_render,
- * _get_buf_l_ptr, _get_buf_r_ptr) plus new MIDI and parameter exports
- * (_obxd_midi_in, _obxd_all_notes_off, _obxd_set_param). The
- * AudioWorkletProcessor wrapper in src/obxd-processor.tail.js keeps
- * its existing structure; the only change to it is a small additive
- * drain of its pendingMidi queue into _obxd_midi_in before each
- * render call.
+ * Replaces the single-instance Phase 2 wrapper with a 10-instance rig:
+ * up to 10 SynthEngine instances share one WASM heap, are summed per
+ * quantum into a master stereo buffer, and run through an always-on
+ * x/(1+|x|) soft-clip before being handed back to the AudioWorklet.
+ *
+ * Each instance has its own active flag, polyphony, gain, patch name,
+ * param mirror, and RMS meter. obxd_init() creates all 10 and seeds
+ * them with programmatic factory patches (see g_factory_programs below).
+ *
+ * If a generated `patches.h` is present at compile time (produced by
+ * build.sh's xxd step from real .fxp files in wasm/obxd/patches/), it
+ * takes precedence over the programmatic table — see obxd_set_factory_patch.
  *
  * Engine API (per third_party/Obxd/Source/Engine/SynthEngine.h):
  *   - SynthEngine()                       // default ctor, no args
@@ -21,16 +25,16 @@
  *   - void procPitchWheel(float v)        // [-1, 1] (centered)
  *   - void procModWheel(float v)          // [0, 1]
  *   - void processX(float v)              // ~60 per-param setters
+ *   - void setVoiceCount(float v)         // roundToInt(v*7 + 1) voices
  *
  * SynthEngine has NO setParameter(idx, val) dispatch — that lived on
  * the JUCE AudioProcessor wrapper (ObxdAudioProcessor::setParameter in
  * Source/PluginProcessor.cpp). We replicate the switch locally in
- * apply_param() so we can seed defaults and implement _obxd_set_param
- * without depending on PluginProcessor.cpp.
+ * apply_param_instance() so we can seed defaults and implement
+ * _obxd_set_param without depending on PluginProcessor.cpp.
  *
- * Exports are mirrored by the Makefile's -sEXPORTED_FUNCTIONS list
- * (the synth build has no octopus-types.ts counterpart — update both
- * the EXPORTS line below and the tail.js drain loop when changing).
+ * Exports are mirrored by the Makefile's -sEXPORTED_FUNCTIONS list and
+ * by the per-instance message routing in src/obxd-processor.tail.js.
  */
 
 #include <emscripten.h>
@@ -80,12 +84,32 @@ using namespace juce;
 #include "ParamsEnum.h"
 
 // =========================================================================
+// Optional real-.fxp factory patches
+//
+// If build.sh generated patches.h from wasm/obxd/patches/*.fxp, it
+// declares `static const unsigned char patch_<name>[]` arrays and is
+// accompanied by sizeof() lookups. HAS_FACTORY_FXP then routes
+// obxd_set_factory_patch() through load_fxp_data() with those bytes
+// instead of the programmatic table below.
+// =========================================================================
+
+#if __has_include("patches.h")
+#include "patches.h"
+#define HAS_FACTORY_FXP 1
+#else
+#define HAS_FACTORY_FXP 0
+#endif
+
+// =========================================================================
 // State
 // =========================================================================
 
-// 1024-sample stereo buffer — comfortably exceeds the 128-sample AWP
-// quantum (worklet's RENDER_QUANTUM = 128). The worklet reads the first
-// 128 samples of each render via HEAPF32; we always render exactly 128.
+#define INSTANCE_COUNT 10
+
+// 1024-sample stereo master buffer — comfortably exceeds the 128-sample
+// AWP quantum (worklet's RENDER_QUANTUM = 128). The worklet reads the
+// first 128 samples of each render via HEAPF32; we always render exactly
+// 128. obxd_render() sums every active instance into this pair.
 #define BUF_FRAMES 1024
 
 // VST2 preset header layout used by obxd_load_fxp(). All multi-byte
@@ -99,72 +123,90 @@ using namespace juce;
 #define FXP_VERSION_OFF   8     // 0x08
 #define FXP_FXID_OFF      12    // 0x0C
 
-static SynthEngine* g_engine = nullptr;
-static float g_buf_l[BUF_FRAMES];
-static float g_buf_r[BUF_FRAMES];
+static SynthEngine* g_engines[INSTANCE_COUNT] = {};
+static bool  g_engine_active[INSTANCE_COUNT] = {};
+static int   g_engine_polyphony[INSTANCE_COUNT] = {};
+static float g_engine_rms[INSTANCE_COUNT] = {};
 
-// Mirror of every parameter applied via apply_param(). SynthEngine has
-// no getter API (the JUCE wrapper kept the canonical state), so we
-// maintain our own copy. _obxd_get_param() reads from here, and the
-// knob UI uses it to render default values after apply_defaults() /
-// applyObxdDefaultPatch() / .fxp load.
-static float g_param_mirror[PARAM_COUNT];
+// Per-instance param mirror — SynthEngine has no getter API, so we
+// maintain our own copy alongside the engine state. _obxd_get_param()
+// reads from here; the knob UI uses it to render values after a patch
+// load. Indexed [instance_id][param_idx].
+static float g_param_mirror[INSTANCE_COUNT][PARAM_COUNT] = {};
 
-// Last-loaded .fxp program name (empty string until a load succeeds).
-// Sized to FXP_PRGNAME_LEN + a small slack; UTF8ToString reads it as
-// a null-terminated C string.
-static char g_patch_name[64] = {0};
+// Per-instance last-loaded program name (empty until a load succeeds).
+// Sized to FXP_PRGNAME_LEN + small slack; UTF8ToString reads it as a
+// null-terminated C string.
+static char g_patch_name[INSTANCE_COUNT][64] = {};
+
+// Master mix bus — every active engine's output is summed here each
+// quantum, then x/(1+|x|) soft-clipped per sample. The worklet reads
+// this via _get_buf_l_ptr / _get_buf_r_ptr and Float32Array views.
+static float g_master_l[BUF_FRAMES];
+static float g_master_r[BUF_FRAMES];
 
 // =========================================================================
 // Parameter dispatch (replicates ObxdAudioProcessor::setParameter)
+//
+// apply_param_instance() is the instance-aware form of the Phase 2
+// apply_param(). It reads g_engines[id] and writes g_param_mirror[id],
+// leaving the giant switch statement otherwise identical.
 // =========================================================================
 
-static void apply_param(int idx, float v);
+static void apply_param_instance(int instance_id, int idx, float v);
 
-// Replicates ObxdParams::setDefaultValues() from Source/Engine/Params.h.
-// We can't link ObxdParams directly (it transitively depends on the full
+// Per-instance form of Phase 2's apply_defaults(). Replicates
+// ObxdParams::setDefaultValues() from Source/Engine/Params.h. We can't
+// link ObxdParams directly (it transitively depends on the full
 // PluginProcessor header chain) so we re-seed the engine the same way
 // the upstream AudioProcessor constructor does. Result: a bright-ish
-// dual-saw patch with full-level sustain, modest cutoff, and 2 voices.
-static void apply_defaults(void) {
-    for (int i = 0; i < PARAM_COUNT; ++i) apply_param(i, 0.0f);
+// dual-saw patch with full-level sustain, modest cutoff, and 8 voices.
+static void apply_defaults_for_instance(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    for (int i = 0; i < PARAM_COUNT; ++i) apply_param_instance(instance_id, i, 0.0f);
 
-    apply_param(VOICE_COUNT,  1.0f);
-    apply_param(BRIGHTNESS,   1.0f);
-    apply_param(OCTAVE,       0.5f);
-    apply_param(TUNE,         0.5f);
-    apply_param(OSC2_DET,     0.4f);
-    apply_param(LSUS,         1.0f);
-    apply_param(CUTOFF,       0.5f);
-    apply_param(VOLUME,       0.5f);
-    apply_param(OSC1MIX,      1.0f);
-    apply_param(OSC2MIX,      1.0f);
-    apply_param(OSC1Saw,      1.0f);
-    apply_param(OSC2Saw,      1.0f);
-    apply_param(BENDLFORATE,  0.6f);
-    apply_param(PAN1, 0.5f); apply_param(PAN2, 0.5f);
-    apply_param(PAN3, 0.5f); apply_param(PAN4, 0.5f);
-    apply_param(PAN5, 0.5f); apply_param(PAN6, 0.5f);
-    apply_param(PAN7, 0.5f); apply_param(PAN8, 0.5f);
-    apply_param(ECONOMY_MODE, 1.0f);
-    apply_param(ENVDER,       0.3f);
-    apply_param(FILTERDER,    0.3f);
-    apply_param(LEVEL_DIF,    0.3f);
-    apply_param(PORTADER,     0.3f);
-    apply_param(UDET,         0.2f);
+    apply_param_instance(instance_id, VOICE_COUNT,  1.0f);
+    apply_param_instance(instance_id, BRIGHTNESS,   1.0f);
+    apply_param_instance(instance_id, OCTAVE,       0.5f);
+    apply_param_instance(instance_id, TUNE,         0.5f);
+    apply_param_instance(instance_id, OSC2_DET,     0.4f);
+    apply_param_instance(instance_id, LSUS,         1.0f);
+    apply_param_instance(instance_id, CUTOFF,       0.5f);
+    apply_param_instance(instance_id, VOLUME,       0.5f);
+    apply_param_instance(instance_id, OSC1MIX,      1.0f);
+    apply_param_instance(instance_id, OSC2MIX,      1.0f);
+    apply_param_instance(instance_id, OSC1Saw,      1.0f);
+    apply_param_instance(instance_id, OSC2Saw,      1.0f);
+    apply_param_instance(instance_id, BENDLFORATE,  0.6f);
+    apply_param_instance(instance_id, PAN1, 0.5f);
+    apply_param_instance(instance_id, PAN2, 0.5f);
+    apply_param_instance(instance_id, PAN3, 0.5f);
+    apply_param_instance(instance_id, PAN4, 0.5f);
+    apply_param_instance(instance_id, PAN5, 0.5f);
+    apply_param_instance(instance_id, PAN6, 0.5f);
+    apply_param_instance(instance_id, PAN7, 0.5f);
+    apply_param_instance(instance_id, PAN8, 0.5f);
+    apply_param_instance(instance_id, ECONOMY_MODE, 1.0f);
+    apply_param_instance(instance_id, ENVDER,       0.3f);
+    apply_param_instance(instance_id, FILTERDER,    0.3f);
+    apply_param_instance(instance_id, LEVEL_DIF,    0.3f);
+    apply_param_instance(instance_id, PORTADER,     0.3f);
+    apply_param_instance(instance_id, UDET,         0.2f);
 }
 
 // Replicates the switch in ObxdAudioProcessor::setParameter (Source/PluginProcessor.cpp)
 // — only the synth.processX(...) calls, not the ObxdAudioProcessor bookkeeping.
-// Also writes into g_param_mirror so _obxd_get_param() can report current state
-// to the UI (the engine itself has no getter API).
-static void apply_param(int idx, float v) {
-    if (!g_engine) return;
+// Also writes into g_param_mirror[id] so _obxd_get_param() can report
+// current state to the UI (the engine itself has no getter API).
+static void apply_param_instance(int instance_id, int idx, float v) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    SynthEngine* e = g_engines[instance_id];
+    if (!e) return;
     if (idx < 0 || idx >= PARAM_COUNT) return;
     if (v < 0.0f) v = 0.0f;
     if (v > 1.0f) v = 1.0f;
-    g_param_mirror[idx] = v;
-    SynthEngine& s = *g_engine;
+    g_param_mirror[instance_id][idx] = v;
+    SynthEngine& s = *e;
     switch (idx) {
         case SELF_OSC_PUSH:      s.processSelfOscPush(v);        break;
         case PW_ENV_BOTH:        s.processPwEnvBoth(v);          break;
@@ -249,113 +291,346 @@ static void apply_param(int idx, float v) {
 }
 
 // =========================================================================
-// C exports (consumed by the AudioWorkletProcessor tail)
-// =========================================================================
-
-extern "C" {
-
-EMSCRIPTEN_KEEPALIVE
-void obxd_init(int sample_rate) {
-    if (g_engine) { delete g_engine; g_engine = nullptr; }
-    g_engine = new SynthEngine();
-    g_engine->setSampleRate(sample_rate ? (float)sample_rate : 44100.0f);
-    for (int i = 0; i < PARAM_COUNT; ++i) g_param_mirror[i] = 0.0f;
-    g_patch_name[0] = '\0';
-    apply_defaults();
-    // Make sure no voice is mid-release when first audio is requested.
-    g_engine->allSoundOff();
-}
-
-// The worklet's gain slider sends 0..1 (after pre-multiplying the raw
-// slider value by 0.4). processVolume scales 0..1 -> 0..0.30 linear,
-// so a slider at max yields ~0.12 linear master gain — safe for a
-// 8-voice synth hitting a resonant filter.
-EMSCRIPTEN_KEEPALIVE
-void obxd_set_gain(double gain) {
-    if (!g_engine) return;
-    if (gain < 0.0) gain = 0.0;
-    if (gain > 1.0) gain = 1.0;
-    g_engine->processVolume((float)gain);
-}
-
-// Render `n` samples into the static stereo buffer. The AudioWorklet
-// calls this with n=128 each quantum, then copies the first 128 frames
-// out via HEAPF32. SynthEngine::processSample is sample-at-a-time, so
-// we just loop. economyMode (default ON) skips inactive voices.
-EMSCRIPTEN_KEEPALIVE
-void obxd_render(int n) {
-    if (!g_engine) return;
-    if (n < 0) n = 0;
-    if (n > BUF_FRAMES) n = BUF_FRAMES;
-    for (int i = 0; i < n; ++i) {
-        g_engine->processSample(&g_buf_l[i], &g_buf_r[i]);
-    }
-}
-
-// Synchronous MIDI message handler. Called from the worklet between
-// renders (each pending message is flushed at the top of process()).
-// Sample-accurate scheduling is intentionally not implemented — the
-// worklet drains at 128-sample boundaries (~2.9ms @ 44.1kHz), which is
-// well below perceptible MIDI jitter.
+// Programmatic factory patches
 //
-// Status byte high nibble routing per the GM standard; we drop all
-// system-common / system-real-time bytes (>=0xF0) because the engine
-// has no use for them.
-EMSCRIPTEN_KEEPALIVE
-void obxd_midi_in(uint8_t status, uint8_t d1, uint8_t d2) {
-    if (!g_engine) return;
-    if (status >= 0xF0) return;   // active sensing, clock, sysex, reset, etc.
+// Used when patches.h is NOT present (i.e. no real .fxp files supplied
+// in wasm/obxd/patches/). Each entry is ~15-25 (ParamsEnum.h index, value)
+// pairs hand-tuned to match its name. Values are 0..1 per the engine's
+// convention; the same switch in apply_param_instance() maps them to the
+// correct processX() call.
+//
+// Patch names MUST match the option labels in index.html's instance
+// selector so the UI shows a consistent label after init.
+// =========================================================================
 
-    SynthEngine& s = *g_engine;
-    switch (status & 0xF0) {
-        case 0x80:  // Note off
-            s.procNoteOff(d1 & 0x7F);
-            break;
-        case 0x90:  // Note on; velocity 0 is interpreted as note-off
-            if (d2 == 0) s.procNoteOff(d1 & 0x7F);
-            else         s.procNoteOn(d1 & 0x7F, (d2 & 0x7F) / 127.0f);
-            break;
-        case 0xB0:  // CC
-            switch (d1 & 0x7F) {
-                case 1:    s.procModWheel((d2 & 0x7F) / 127.0f); break;
-                case 64:   if (d2 >= 64) s.sustainOn(); else s.sustainOff(); break;
-                case 120:  s.allSoundOff();  break;
-                case 123:  s.allNotesOff();  break;
-                default:   break;
-            }
-            break;
-        case 0xE0: {  // Pitch wheel — 14-bit little-endian, center 8192
-            int v = ((d2 & 0x7F) << 7) | (d1 & 0x7F);
-            s.procPitchWheel((v - 8192) / 8192.0f);
-            break;
-        }
-        default:
-            break;
-    }
-}
+struct FactoryParam { int idx; float v; };
 
-EMSCRIPTEN_KEEPALIVE
-void obxd_all_notes_off(void) {
-    if (g_engine) g_engine->allNotesOff();
-}
+struct FactoryProgram {
+    const char* name;
+    const FactoryParam* params;
+    int count;
+};
 
-EMSCRIPTEN_KEEPALIVE
-float* get_buf_l_ptr(void) { return g_buf_l; }
+// 0: "Analog Pad" — slow-attack dual-saw pad with a filter sweep.
+static const FactoryParam fp_analog_pad[] = {
+    { VOLUME,        0.50f },
+    { OCTAVE,        0.50f },
+    { TUNE,          0.50f },
+    { PORTAMENTO,    1.00f },
+    { UNISON,        1.00f },
+    { UDET,          0.30f },
+    { OSC2_DET,      0.40f },
+    { OSC1Saw,       1.00f },
+    { OSC2Saw,       1.00f },
+    { OSC1MIX,       1.00f },
+    { OSC2MIX,       1.00f },
+    { CUTOFF,        0.30f },
+    { RESONANCE,     0.40f },
+    { ENVELOPE_AMT,  0.40f },
+    { BRIGHTNESS,    0.60f },
+    { FLT_KF,        0.50f },
+    { LATK,          0.60f },
+    { LDEC,          0.50f },
+    { LSUS,          0.90f },
+    { LREL,          0.70f },
+    { FATK,          0.70f },
+    { FDEC,          0.50f },
+    { FSUS,          0.60f },
+    { FREL,          0.70f },
+    { ECONOMY_MODE,  1.00f },
+};
 
-EMSCRIPTEN_KEEPALIVE
-float* get_buf_r_ptr(void) { return g_buf_r; }
+// 1: "Bass Pulse" — focused low-end pulse bass with a 4-pole filter env.
+static const FactoryParam fp_bass_pulse[] = {
+    { VOLUME,        0.55f },
+    { OCTAVE,        0.00f },
+    { TUNE,          0.50f },
+    { UNISON,        0.00f },
+    { OSC1Saw,       0.00f },
+    { OSC1Pul,       1.00f },
+    { OSC2Saw,       0.00f },
+    { OSC2Pul,       1.00f },
+    { OSC1MIX,       1.00f },
+    { OSC2MIX,       0.50f },
+    { PW,            0.50f },
+    { OSC2_DET,      0.20f },
+    { CUTOFF,        0.30f },
+    { RESONANCE,     0.50f },
+    { ENVELOPE_AMT,  0.60f },
+    { BRIGHTNESS,    0.50f },
+    { FLT_KF,        0.50f },
+    { FOURPOLE,      1.00f },
+    { LATK,          0.00f },
+    { LDEC,          0.40f },
+    { LSUS,          0.50f },
+    { LREL,          0.30f },
+    { FATK,          0.00f },
+    { FDEC,          0.40f },
+    { FSUS,          0.30f },
+    { FREL,          0.30f },
+    { ECONOMY_MODE,  1.00f },
+};
 
-// Phase 3 hook for the future knob UI; clamps and dispatches via
-// apply_param() so it accepts the same indices as ParamsEnum.h.
-EMSCRIPTEN_KEEPALIVE
-void obxd_set_param(int idx, double value) {
-    if (value < 0.0) value = 0.0;
-    if (value > 1.0) value = 1.0;
-    apply_param(idx, (float)value);
-}
+// 2: "Lead Saw" — bright unison saw lead with mild portamento.
+static const FactoryParam fp_lead_saw[] = {
+    { VOLUME,        0.50f },
+    { OCTAVE,        0.50f },
+    { TUNE,          0.50f },
+    { PORTAMENTO,    0.90f },
+    { UNISON,        1.00f },
+    { UDET,          0.25f },
+    { OSC2_DET,      0.30f },
+    { OSC1Saw,       1.00f },
+    { OSC2Saw,       1.00f },
+    { OSC1MIX,       1.00f },
+    { OSC2MIX,       1.00f },
+    { CUTOFF,        0.60f },
+    { RESONANCE,     0.30f },
+    { ENVELOPE_AMT,  0.20f },
+    { BRIGHTNESS,    0.80f },
+    { FLT_KF,        0.30f },
+    { BENDRANGE,     0.50f },
+    { LATK,          0.00f },
+    { LDEC,          0.30f },
+    { LSUS,          0.80f },
+    { LREL,          0.30f },
+    { FATK,          0.00f },
+    { FDEC,          0.30f },
+    { FSUS,          0.50f },
+    { FREL,          0.30f },
+    { ECONOMY_MODE,  1.00f },
+};
+
+// 3: "Pluck" — sharp attack, fast decay, bright saw pluck.
+static const FactoryParam fp_pluck[] = {
+    { VOLUME,        0.50f },
+    { OCTAVE,        0.50f },
+    { TUNE,          0.50f },
+    { OSC1Saw,       1.00f },
+    { OSC1Pul,       0.00f },
+    { OSC2Saw,       0.00f },
+    { OSC2Pul,       0.00f },
+    { OSC1MIX,       1.00f },
+    { OSC2MIX,       0.00f },
+    { CUTOFF,        0.50f },
+    { RESONANCE,     0.40f },
+    { ENVELOPE_AMT,  0.70f },
+    { BRIGHTNESS,    0.70f },
+    { FLT_KF,        0.40f },
+    { LATK,          0.00f },
+    { LDEC,          0.20f },
+    { LSUS,          0.00f },
+    { LREL,          0.20f },
+    { FATK,          0.00f },
+    { FDEC,          0.15f },
+    { FSUS,          0.00f },
+    { FREL,          0.15f },
+    { ECONOMY_MODE,  1.00f },
+};
+
+// 4: "Strings" — slow-attack sustained ensemble.
+static const FactoryParam fp_strings[] = {
+    { VOLUME,        0.50f },
+    { OCTAVE,        0.50f },
+    { TUNE,          0.50f },
+    { UNISON,        1.00f },
+    { UDET,          0.30f },
+    { OSC2_DET,      0.30f },
+    { OSC1Saw,       1.00f },
+    { OSC2Saw,       1.00f },
+    { OSC1MIX,       0.80f },
+    { OSC2MIX,       0.80f },
+    { CUTOFF,        0.50f },
+    { RESONANCE,     0.20f },
+    { ENVELOPE_AMT,  0.00f },
+    { BRIGHTNESS,    0.50f },
+    { FLT_KF,        0.30f },
+    { LATK,          0.70f },
+    { LDEC,          0.50f },
+    { LSUS,          1.00f },
+    { LREL,          0.60f },
+    { FATK,          0.50f },
+    { FDEC,          0.50f },
+    { FSUS,          1.00f },
+    { FREL,          0.50f },
+    { ECONOMY_MODE,  1.00f },
+};
+
+// 5: "Keys" — medium-attack mixed-wave electric-piano-ish tone.
+static const FactoryParam fp_keys[] = {
+    { VOLUME,        0.50f },
+    { OCTAVE,        0.50f },
+    { TUNE,          0.50f },
+    { OSC1Pul,       1.00f },
+    { OSC2Saw,       1.00f },
+    { OSC1MIX,       0.70f },
+    { OSC2MIX,       0.70f },
+    { PW,            0.40f },
+    { CUTOFF,        0.60f },
+    { RESONANCE,     0.20f },
+    { ENVELOPE_AMT,  0.30f },
+    { BRIGHTNESS,    0.70f },
+    { FLT_KF,        0.50f },
+    { LATK,          0.10f },
+    { LDEC,          0.40f },
+    { LSUS,          0.60f },
+    { LREL,          0.40f },
+    { FATK,          0.10f },
+    { FDEC,          0.40f },
+    { FSUS,          0.40f },
+    { FREL,          0.40f },
+    { ECONOMY_MODE,  1.00f },
+};
+
+// 6: "Drone" — heavy-detune sustained pad with slow LFO movement.
+static const FactoryParam fp_drone[] = {
+    { VOLUME,        0.50f },
+    { OCTAVE,        0.50f },
+    { TUNE,          0.50f },
+    { PORTAMENTO,    0.00f },   // max glide (1-param=1)
+    { UNISON,        1.00f },
+    { UDET,          0.50f },
+    { OSC2_DET,      0.50f },
+    { OSC1Saw,       1.00f },
+    { OSC2Saw,       1.00f },
+    { OSC1MIX,       1.00f },
+    { OSC2MIX,       1.00f },
+    { LFOSINWAVE,    1.00f },
+    { LFOFREQ,       0.20f },
+    { LFO1AMT,       0.30f },
+    { CUTOFF,        0.30f },
+    { RESONANCE,     0.50f },
+    { ENVELOPE_AMT,  0.30f },
+    { BRIGHTNESS,    0.50f },
+    { FLT_KF,        0.30f },
+    { LATK,          0.60f },
+    { LDEC,          0.60f },
+    { LSUS,          1.00f },
+    { LREL,          0.90f },
+    { FATK,          0.60f },
+    { FDEC,          0.60f },
+    { FSUS,          0.80f },
+    { FREL,          0.90f },
+    { ECONOMY_MODE,  1.00f },
+};
+
+// 7: "Stab" — sharp, short, bright saw stab.
+static const FactoryParam fp_stab[] = {
+    { VOLUME,        0.50f },
+    { OCTAVE,        0.50f },
+    { TUNE,          0.50f },
+    { OSC1Saw,       1.00f },
+    { OSC2Saw,       1.00f },
+    { OSC1MIX,       1.00f },
+    { OSC2MIX,       0.90f },
+    { OSC2_DET,      0.30f },
+    { CUTOFF,        0.70f },
+    { RESONANCE,     0.50f },
+    { ENVELOPE_AMT,  0.50f },
+    { BRIGHTNESS,    0.80f },
+    { FLT_KF,        0.30f },
+    { LATK,          0.00f },
+    { LDEC,          0.20f },
+    { LSUS,          0.00f },
+    { LREL,          0.15f },
+    { FATK,          0.00f },
+    { FDEC,          0.20f },
+    { FSUS,          0.20f },
+    { FREL,          0.20f },
+    { ECONOMY_MODE,  1.00f },
+};
+
+// 8: "Noise Hat" — bandpass-filtered noise with very short envelopes.
+static const FactoryParam fp_noise_hat[] = {
+    { VOLUME,        0.45f },
+    { OCTAVE,        0.50f },
+    { OSC1Saw,       0.00f },
+    { OSC1Pul,       0.00f },
+    { OSC2Saw,       0.00f },
+    { OSC2Pul,       0.00f },
+    { OSC1MIX,       0.00f },
+    { OSC2MIX,       0.00f },
+    { NOISEMIX,      0.60f },
+    { CUTOFF,        0.80f },
+    { RESONANCE,     0.40f },
+    { ENVELOPE_AMT,  0.80f },
+    { BRIGHTNESS,    1.00f },
+    { FLT_KF,        0.00f },
+    { MULTIMODE,     0.70f },
+    { BANDPASS,      1.00f },
+    { LATK,          0.00f },
+    { LDEC,          0.10f },
+    { LSUS,          0.00f },
+    { LREL,          0.05f },
+    { FATK,          0.00f },
+    { FDEC,          0.10f },
+    { FSUS,          0.00f },
+    { FREL,          0.05f },
+    { ECONOMY_MODE,  1.00f },
+};
+
+// 9: "Kick" — low-octave pulse with pitch-drop filter env.
+static const FactoryParam fp_kick[] = {
+    { VOLUME,        0.60f },
+    { OCTAVE,        0.00f },   // -24 semitones
+    { TUNE,          0.50f },
+    { OSC1Saw,       0.00f },
+    { OSC1Pul,       1.00f },
+    { OSC2Saw,       0.00f },
+    { OSC2Pul,       0.00f },
+    { OSC1MIX,       1.00f },
+    { OSC2MIX,       0.00f },
+    { PW,            0.50f },
+    { CUTOFF,        0.30f },
+    { RESONANCE,     0.80f },
+    { ENVELOPE_AMT,  0.90f },
+    { ENVPITCH,      1.00f },   // 0..1 -> 0..36 semitone env-to-pitch drop
+    { BRIGHTNESS,    0.30f },
+    { FLT_KF,        0.00f },
+    { FOURPOLE,      1.00f },
+    { LATK,          0.00f },
+    { LDEC,          0.10f },
+    { LSUS,          0.00f },
+    { LREL,          0.10f },
+    { FATK,          0.00f },
+    { FDEC,          0.10f },
+    { FSUS,          0.00f },
+    { FREL,          0.10f },
+    { ECONOMY_MODE,  1.00f },
+};
+
+static const FactoryProgram g_factory_programs[INSTANCE_COUNT] = {
+    { "Analog Pad",  fp_analog_pad,  sizeof(fp_analog_pad)  / sizeof(FactoryParam) },
+    { "Bass Pulse",  fp_bass_pulse,  sizeof(fp_bass_pulse)  / sizeof(FactoryParam) },
+    { "Lead Saw",    fp_lead_saw,    sizeof(fp_lead_saw)    / sizeof(FactoryParam) },
+    { "Pluck",       fp_pluck,       sizeof(fp_pluck)       / sizeof(FactoryParam) },
+    { "Strings",     fp_strings,     sizeof(fp_strings)     / sizeof(FactoryParam) },
+    { "Keys",        fp_keys,        sizeof(fp_keys)        / sizeof(FactoryParam) },
+    { "Drone",       fp_drone,       sizeof(fp_drone)       / sizeof(FactoryParam) },
+    { "Stab",        fp_stab,        sizeof(fp_stab)        / sizeof(FactoryParam) },
+    { "Noise Hat",   fp_noise_hat,   sizeof(fp_noise_hat)   / sizeof(FactoryParam) },
+    { "Kick",        fp_kick,        sizeof(fp_kick)        / sizeof(FactoryParam) },
+};
+
+#if HAS_FACTORY_FXP
+// Order MUST match obxd_set_factory_patch's patch_id indexing — the
+// build.sh xxd step emits arrays named patch_<basename-of-fxp>, and we
+// expect them in alphabetical order so patch_id 0..9 lines up with the
+// instance selector's option order in index.html.
+static const unsigned char* g_factory_patches[INSTANCE_COUNT] = {
+    patch_01_pad, patch_02_bass, patch_03_lead, patch_04_pluck, patch_05_strings,
+    patch_06_keys, patch_07_drone, patch_08_stab, patch_09_hat, patch_10_kick,
+};
+static const unsigned g_factory_patch_sizes[INSTANCE_COUNT] = {
+    sizeof(patch_01_pad), sizeof(patch_02_bass), sizeof(patch_03_lead),
+    sizeof(patch_04_pluck), sizeof(patch_05_strings), sizeof(patch_06_keys),
+    sizeof(patch_07_drone), sizeof(patch_08_stab), sizeof(patch_09_hat),
+    sizeof(patch_10_kick),
+};
+#endif
 
 // =========================================================================
-// .fxp (VST2 preset) loading
+// .fxp (VST2 preset) loading — instance-aware
 //
 // Format (Steinberg VST2 preset spec — all ints/floats big-endian):
 //
@@ -413,8 +688,8 @@ static void copy_name(char* dst, const uint8_t* src, int src_len, size_t n) {
 }
 
 // Apply at most PARAM_COUNT floats from a regular (non-chunk) data
-// section. Returns the number of parameters applied.
-static int apply_regular_params(const uint8_t* data, int data_len, int num_params) {
+// section to the given instance. Returns the number of parameters applied.
+static int apply_regular_params_instance(int instance_id, const uint8_t* data, int data_len, int num_params) {
     if (num_params < 0) num_params = 0;
     if (num_params > PARAM_COUNT) num_params = PARAM_COUNT;
     int applied = 0;
@@ -422,25 +697,16 @@ static int apply_regular_params(const uint8_t* data, int data_len, int num_param
         int off = i * 4;
         if (off + 4 > data_len) break;
         float v = rd_be_f32(data + off);
-        apply_param(i, v);
+        apply_param_instance(instance_id, i, v);
         ++applied;
     }
     return applied;
 }
 
-// Parse JUCE-flavoured XML chunk for Obxd parameter values.
-//
-// The XML is either:
-//   <Datsounds programName="X" 0="0.5" 1="0.2" ...>            (single)
-//   <Datsounds currentProgram="N"><programs><program ...>...   (bank)
-//
-// We scan for attributes whose name is a small non-negative integer
-// (matching ParamsEnum.h indices) and whose value parses as a float.
-// For bank-style chunks, we stop at the first </program> close tag so
-// only the first program is applied (matching setCurrentProgram(int 0)).
-//
-// Returns the number of (idx,value) pairs successfully applied.
-static int parse_chunk_xml(const char* xml, int xml_len) {
+// Parse JUCE-flavoured XML chunk for Obxd parameter values, applying
+// each parsed value to instance `instance_id`. See the format notes
+// above. Returns the number of (idx,value) pairs successfully applied.
+static int parse_chunk_xml_instance(int instance_id, const char* xml, int xml_len) {
     int applied = 0;
     int i = 0;
     // For bank-format chunks we want only the first <program>...</program>.
@@ -498,7 +764,7 @@ static int parse_chunk_xml(const char* xml, int xml_len) {
             char* endp = nullptr;
             double dv = strtod(buf, &endp);
             if (endp != buf) {
-                apply_param(idx, (float)dv);
+                apply_param_instance(instance_id, idx, (float)dv);
                 ++applied;
             }
         }
@@ -508,24 +774,29 @@ static int parse_chunk_xml(const char* xml, int xml_len) {
     return applied;
 }
 
-EMSCRIPTEN_KEEPALIVE
-int obxd_load_fxp(uint8_t* ptr, int len) {
-    if (!g_engine) return -3;
+// Core loader for a parsed .fxp byte stream. Writes its program name
+// into g_patch_name[instance_id]. Returns 0 on success, negative on
+// error (see obxd_load_fxp for the rc meaning table).
+static int load_fxp_data(int instance_id, const uint8_t* ptr, int len) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return -2;
+    if (!g_engines[instance_id]) return -3;
     if (!ptr || len < FXP_HEADER_SIZE) return -4;
 
-    g_patch_name[0] = '\0';
+    g_patch_name[instance_id][0] = '\0';
 
     // Magic at offset 0 — "Ccka" (0x43636B61) regular, "Ccmb" (0x43636D62) chunk.
     bool is_regular = (ptr[0] == 'C' && ptr[1] == 'c' && ptr[2] == 'k' && ptr[3] == 'a');
     bool is_chunk   = (ptr[0] == 'C' && ptr[1] == 'c' && ptr[2] == 'm' && ptr[3] == 'b');
     if (!is_regular && !is_chunk) return -5;
 
-    int version = (int)rd_be_u32(ptr + FXP_VERSION_OFF);
+    int version  = (int)rd_be_u32(ptr + FXP_VERSION_OFF);
     int num_params = (int)rd_be_u32(ptr + FXP_NUMPARAMS_OFF);
+    (void)version;
 
-    copy_name(g_patch_name, ptr + FXP_PRGNAME_OFF, FXP_PRGNAME_LEN, sizeof(g_patch_name));
-    if (g_patch_name[0] == '\0') {
-        __builtin_memcpy(g_patch_name, "(unnamed)", 10);
+    copy_name(g_patch_name[instance_id], ptr + FXP_PRGNAME_OFF, FXP_PRGNAME_LEN,
+              sizeof(g_patch_name[instance_id]));
+    if (g_patch_name[instance_id][0] == '\0') {
+        __builtin_memcpy(g_patch_name[instance_id], "(unnamed)", 10);
     }
 
     const uint8_t* data = ptr + FXP_DATA_OFF;
@@ -533,23 +804,23 @@ int obxd_load_fxp(uint8_t* ptr, int len) {
     if (data_len < 0) return -6;
 
     if (is_regular) {
-        int applied = apply_regular_params(data, data_len, num_params);
+        int applied = apply_regular_params_instance(instance_id, data, data_len, num_params);
         if (applied == 0) {
-            g_patch_name[0] = '\0';
+            g_patch_name[instance_id][0] = '\0';
             return -7;
         }
         return 0;
     }
 
     // Chunk format: expect "FBCh" magic, then int32 BE size, then bytes.
-    if (data_len < 8) { g_patch_name[0] = '\0'; return -8; }
+    if (data_len < 8) { g_patch_name[instance_id][0] = '\0'; return -8; }
     if (!(data[0] == 'F' && data[1] == 'B' && data[2] == 'C' && data[3] == 'h')) {
-        g_patch_name[0] = '\0';
+        g_patch_name[instance_id][0] = '\0';
         return -9;
     }
     int chunk_size = (int)rd_be_u32(data + 4);
     if (chunk_size < 4 || chunk_size > data_len - 8) {
-        g_patch_name[0] = '\0';
+        g_patch_name[instance_id][0] = '\0';
         return -10;
     }
 
@@ -559,48 +830,283 @@ int obxd_load_fxp(uint8_t* ptr, int len) {
     // skip 4 bytes and parse the rest as XML text.
     const char* xml = (const char*)(chunk + 4);
     int xml_len = chunk_size - 4;
-    if (xml_len <= 0) { g_patch_name[0] = '\0'; return -11; }
+    if (xml_len <= 0) { g_patch_name[instance_id][0] = '\0'; return -11; }
 
-    int applied = parse_chunk_xml(xml, xml_len);
+    int applied = parse_chunk_xml_instance(instance_id, xml, xml_len);
     if (applied == 0) {
-        g_patch_name[0] = '\0';
+        g_patch_name[instance_id][0] = '\0';
         return -12;
     }
     return 0;
 }
 
-// Returns the last-applied value for parameter `idx`, or -1 if out of
-// range / not initialized. The UI calls this to render knob positions
-// after a default-patch or .fxp load.
+// Copy a program name (NUL-terminated) into g_patch_name[id], clamped.
+static void set_patch_name(int instance_id, const char* name) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    char* dst = g_patch_name[instance_id];
+    size_t cap = sizeof(g_patch_name[instance_id]) - 1;
+    size_t i = 0;
+    for (; i < cap && name && name[i]; ++i) dst[i] = name[i];
+    dst[i] = '\0';
+}
+
+// =========================================================================
+// C exports (consumed by the AudioWorkletProcessor tail)
+// =========================================================================
+
+extern "C" {
+
+// Forward declarations — obxd_init() calls these before their definitions
+// appear below; C++ requires them to be in scope at the call site.
+EMSCRIPTEN_KEEPALIVE void obxd_set_factory_patch(int instance_id, int patch_id);
+EMSCRIPTEN_KEEPALIVE void obxd_set_polyphony(int instance_id, int voice_count);
+
+// Creates all 10 SynthEngine instances, applies the matching factory
+// patch to each, and seeds default polyphony (instance 0 polyphonic,
+// rest mono). Idempotent — frees any prior instances first.
 EMSCRIPTEN_KEEPALIVE
-float obxd_get_param(int idx) {
+void obxd_init(int sample_rate) {
+    float sr = sample_rate ? (float)sample_rate : 44100.0f;
+    for (int i = 0; i < INSTANCE_COUNT; ++i) {
+        if (g_engines[i]) { delete g_engines[i]; g_engines[i] = nullptr; }
+        g_engines[i] = new SynthEngine();
+        g_engines[i]->setSampleRate(sr);
+        for (int p = 0; p < PARAM_COUNT; ++p) g_param_mirror[i][p] = 0.0f;
+        g_patch_name[i][0] = '\0';
+        apply_defaults_for_instance(i);
+        obxd_set_factory_patch(i, i);   // each instance gets its own factory program
+        g_engine_active[i] = true;
+    }
+    // Default polyphony: instance 0 = 8 voices, others = 1 voice.
+    obxd_set_polyphony(0, 8);
+    for (int i = 1; i < INSTANCE_COUNT; ++i) obxd_set_polyphony(i, 1);
+}
+
+// Render `n` samples into the master stereo buffer. The AudioWorklet
+// calls this with n=128 each quantum, then copies the first 128 frames
+// out via HEAPF32. Every active engine is summed sample-by-sample, and
+// the master bus is run through x/(1+|x|) per-sample soft-clip so 10
+// summed voices can never exceed ±1.0 at the output. Per-instance RMS
+// is updated during this pass for the meter UI.
+EMSCRIPTEN_KEEPALIVE
+void obxd_render(int n) {
+    if (n < 0) n = 0;
+    if (n > BUF_FRAMES) n = BUF_FRAMES;
+
+    memset(g_master_l, 0, (size_t)n * sizeof(float));
+    memset(g_master_r, 0, (size_t)n * sizeof(float));
+
+    float tmp_l, tmp_r;
+    for (int e = 0; e < INSTANCE_COUNT; ++e) {
+        if (!g_engines[e] || !g_engine_active[e]) {
+            g_engine_rms[e] = 0.0f;
+            continue;
+        }
+        float sum_sq = 0.0f;
+        for (int i = 0; i < n; ++i) {
+            g_engines[e]->processSample(&tmp_l, &tmp_r);
+            g_master_l[i] += tmp_l;
+            g_master_r[i] += tmp_r;
+            sum_sq += tmp_l * tmp_l + tmp_r * tmp_r;
+        }
+        g_engine_rms[e] = sqrtf(sum_sq / (2.0f * (float)n));
+    }
+
+    // Soft-clip master bus — x/(1+|x|). Asymptotes at ±1.0 so the summed
+    // output never hard-clips even when all 10 instances peak together.
+    for (int i = 0; i < n; ++i) {
+        g_master_l[i] = g_master_l[i] / (1.0f + fabsf(g_master_l[i]));
+        g_master_r[i] = g_master_r[i] / (1.0f + fabsf(g_master_r[i]));
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+float* get_buf_l_ptr(void) { return g_master_l; }
+
+EMSCRIPTEN_KEEPALIVE
+float* get_buf_r_ptr(void) { return g_master_r; }
+
+// 0 = silence this instance (still updated to rms=0). 1 = render it.
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_active(int instance_id, int active) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    g_engine_active[instance_id] = (active != 0);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int obxd_get_active(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return 0;
+    return g_engine_active[instance_id] ? 1 : 0;
+}
+
+// SynthEngine::setVoiceCount(param) calls roundToInt(param*7+1), so
+// param 0 → 1 voice, param 1 → 8 voices (MAX_VOICES). For an integer
+// voice_count in [1,8] the corresponding param is (voice_count-1)/7.
+// We mirror the int in g_engine_polyphony[id] for obxd_get_polyphony.
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_polyphony(int instance_id, int voice_count) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (voice_count < 1) voice_count = 1;
+    if (voice_count > 8) voice_count = 8;
+    float param = (float)(voice_count - 1) / 7.0f;
+    g_engine_polyphony[instance_id] = voice_count;
+    apply_param_instance(instance_id, VOICE_COUNT, param);
+}
+
+// Inverse of the set_polyphony mapping: round(param*7+1).
+EMSCRIPTEN_KEEPALIVE
+int obxd_get_polyphony(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return 0;
+    return g_engine_polyphony[instance_id];
+}
+
+// Per-instance gain via processVolume. The worklet's gain slider still
+// pre-multiplies by 0.4 (so the slider's max isn't deafening) — we keep
+// that scaling in the worklet, not here.
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_gain(int instance_id, double gain) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (gain < 0.0) gain = 0.0;
+    if (gain > 1.0) gain = 1.0;
+    apply_param_instance(instance_id, VOLUME, (float)gain);
+}
+
+// Synchronous MIDI message handler for one instance. Called from the
+// worklet between renders (each pending message is flushed at the top
+// of process()). Sample-accurate scheduling is intentionally not
+// implemented — the worklet drains at 128-sample boundaries (~2.9ms
+// @ 44.1kHz), which is well below perceptible MIDI jitter.
+//
+// Status byte high nibble routing per the GM standard; we drop all
+// system-common / system-real-time bytes (>=0xF0) because the engine
+// has no use for them.
+EMSCRIPTEN_KEEPALIVE
+void obxd_midi_in(int instance_id, uint8_t status, uint8_t d1, uint8_t d2) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    SynthEngine* e = g_engines[instance_id];
+    if (!e) return;
+    if (status >= 0xF0) return;   // active sensing, clock, sysex, reset, etc.
+
+    SynthEngine& s = *e;
+    switch (status & 0xF0) {
+        case 0x80:  // Note off
+            s.procNoteOff(d1 & 0x7F);
+            break;
+        case 0x90:  // Note on; velocity 0 is interpreted as note-off
+            if (d2 == 0) s.procNoteOff(d1 & 0x7F);
+            else         s.procNoteOn(d1 & 0x7F, (d2 & 0x7F) / 127.0f);
+            break;
+        case 0xB0:  // CC
+            switch (d1 & 0x7F) {
+                case 1:    s.procModWheel((d2 & 0x7F) / 127.0f); break;
+                case 64:   if (d2 >= 64) s.sustainOn(); else s.sustainOff(); break;
+                case 120:  s.allSoundOff();  break;
+                case 123:  s.allNotesOff();  break;
+                default:   break;
+            }
+            break;
+        case 0xE0: {  // Pitch wheel — 14-bit little-endian, center 8192
+            int v = ((d2 & 0x7F) << 7) | (d1 & 0x7F);
+            s.procPitchWheel((v - 8192) / 8192.0f);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void obxd_all_notes_off(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (g_engines[instance_id]) g_engines[instance_id]->allNotesOff();
+}
+
+// Panic one instance — allSoundOff() releases every voice envelope
+// immediately so no release tail is produced.
+EMSCRIPTEN_KEEPALIVE
+void obxd_panic(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (g_engines[instance_id]) g_engines[instance_id]->allSoundOff();
+}
+
+// Panic every instance — convenience for a global "everything off NOW"
+// button. Used by the worklet's `panic_all` message.
+EMSCRIPTEN_KEEPALIVE
+void obxd_panic_all(void) {
+    for (int i = 0; i < INSTANCE_COUNT; ++i) {
+        if (g_engines[i]) g_engines[i]->allSoundOff();
+    }
+}
+
+// Hook for the per-instance knob UI; clamps and dispatches via
+// apply_param_instance() so it accepts the same indices as ParamsEnum.h.
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_param(int instance_id, int idx, double value) {
+    if (value < 0.0) value = 0.0;
+    if (value > 1.0) value = 1.0;
+    apply_param_instance(instance_id, idx, (float)value);
+}
+
+// Returns the last-applied value for instance `instance_id`'s parameter
+// `idx`, or -1 if out of range / not initialized. The UI calls this to
+// render knob positions after a default-patch or .fxp load.
+EMSCRIPTEN_KEEPALIVE
+float obxd_get_param(int instance_id, int idx) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return -1.0f;
     if (idx < 0 || idx >= PARAM_COUNT) return -1.0f;
-    return g_param_mirror[idx];
+    return g_param_mirror[instance_id][idx];
 }
 
-// C-string pointer to the last successfully loaded patch name. Empty
-// string until obxd_load_fxp succeeds (or after a failed load).
 EMSCRIPTEN_KEEPALIVE
-const char* obxd_get_patch_name(void) {
-    return g_patch_name;
+int obxd_load_fxp(int instance_id, uint8_t* ptr, int len) {
+    return load_fxp_data(instance_id, ptr, len);
 }
 
-// Panic: kill all sounding voices immediately. SynthEngine::allSoundOff
-// calls allNotesOff AND resets every voice envelope, so no release tail
-// is produced — this is the "everything off NOW" button.
+// Per-instance reset to the engine defaults. Clears the loaded patch
+// name. The UI then re-applies its overrides on top if it wants.
 EMSCRIPTEN_KEEPALIVE
-void obxd_panic(void) {
-    if (g_engine) g_engine->allSoundOff();
+void obxd_reset_patch(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    apply_defaults_for_instance(instance_id);
+    g_patch_name[instance_id][0] = '\0';
 }
 
-// Re-apply the engine's default patch and clear the loaded-patch name.
-// The AudioWorklet/UI then re-applies applyObxdDefaultPatch() on top
-// for the sequencer-friendly overrides (LATK/LREL/etc.).
 EMSCRIPTEN_KEEPALIVE
-void obxd_reset_patch(void) {
-    if (!g_engine) return;
-    apply_defaults();
-    g_patch_name[0] = '\0';
+const char* obxd_get_patch_name(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return "";
+    return g_patch_name[instance_id];
+}
+
+// Load factory program `patch_id` into instance `instance_id`. When
+// patches.h is present (real .fxp files were supplied at build time)
+// we route through load_fxp_data(); otherwise we apply the programmatic
+// fallback table for that patch_id.
+//
+// In both paths we first reset via apply_defaults_for_instance() so a
+// previous patch's parameters don't bleed through (the programmatic
+// tables and .fxp files only specify the params they care about).
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_factory_patch(int instance_id, int patch_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (patch_id < 0 || patch_id >= INSTANCE_COUNT) return;
+    apply_defaults_for_instance(instance_id);
+
+#if HAS_FACTORY_FXP
+    load_fxp_data(instance_id, g_factory_patches[patch_id], (int)g_factory_patch_sizes[patch_id]);
+#else
+    const FactoryProgram& prog = g_factory_programs[patch_id];
+    for (int i = 0; i < prog.count; ++i) {
+        apply_param_instance(instance_id, prog.params[i].idx, prog.params[i].v);
+    }
+    set_patch_name(instance_id, prog.name);
+#endif
+}
+
+EMSCRIPTEN_KEEPALIVE
+float obxd_get_instance_rms(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return 0.0f;
+    return g_engine_rms[instance_id];
 }
 
 // Backwards-compat no-op for the Phase 1 worklet's `note` branch

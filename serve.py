@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Dev server for OctoDAW with required COOP/COEP headers.
+Dev server for OctOBX with required COOP/COEP headers.
 openDAW and Emscripten pthreads both need cross-origin isolation.
 """
 
@@ -20,6 +20,6 @@ class Handler(http.SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     PORT = 8080
-    print(f"OctoDAW dev server: http://localhost:{PORT}")
+    print(f"OctOBX dev server: http://localhost:{PORT}")
     with socketserver.TCPServer(("", PORT), Handler) as httpd:
         httpd.serve_forever()

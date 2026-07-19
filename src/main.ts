@@ -1,22 +1,21 @@
 /*
- * main.ts — OctoDAW entry point.
+ * main.ts — OctOBX entry point.
  *
- * Loads the Octopus WASM engine and starts the grid panel.
- * Supports switching between classic (full Octopus layout) and modern views.
- * openDAW integration is attempted but non-fatal if it fails.
+ * Loads the Octopus WASM engine, starts the grid panel, brings up the
+ * OB-XD synth rack, and wires transport + hardware MIDI. The drain loop
+ * is started early so the OB-XD bridge (installed by setupObxdRack) can
+ * plug into it on the first PLAY.
  */
 
 import { loadOctopusModule } from "./octopus-module";
-import { setupEngine, type EngineResult } from "./engine-setup";
-import { createMidiBridgeHandler, type BatchDrainHandler } from "./midi-bridge";
-import { createObxdBridgeHandler } from "./obxd-bridge";
+import { createObxdBridgeHandler, type BatchDrainHandler } from "./obxd-bridge";
 import { setupTransportSync } from "./transport-sync";
 import { startOctopusPanel } from "./octopus-panel";
 import { buildClassicPanel } from "./classic-panel";
 import { HardwareMidiOutput, drainMidiToHardware } from "./midi-output";
 import { HardwareMidiInput } from "./midi-input";
 import { setupStatePersistence } from "./state-persistence";
-import { setupObxdPanel } from "./obxd-panel";
+import { setupObxdRack } from "./obxd-rack";
 import type { OctopusWasmModule } from "./octopus-types";
 
 let activePanelCleanup: (() => void) | null = null;
@@ -41,16 +40,14 @@ async function main() {
     // Registering drain before render guarantees MIDI events are
     // dispatched before the 300+ DOM-element LED update consumes the frame.
     const hardwareOutput = new HardwareMidiOutput();
-    let bridgeHandler: BatchDrainHandler | null = null;            // openDAW (timeout-guarded, installed last)
-    let obxdBridgeHandler: BatchDrainHandler | null = null;        // in-browser Obxd synth (Phase 3)
+    let obxdBridgeHandler: BatchDrainHandler | null = null;        // in-browser Obxd synth
     drainMidiToHardware(
         wasmModule,
         hardwareOutput,
         (events, timestamps, count) => {
-            // Parallel consumers: Web MIDI (output.send inside drain) already ran
-            // above. Now fan out to the optional bridges — each no-ops when its
-            // target isn't ready (openDAW hung / synth unpowered).
-            bridgeHandler?.(events, timestamps, count);
+            // Web MIDI (output.send inside drain) already ran above.
+            // Fan out to the OB-XD bridge — no-ops while the synth is
+            // unpowered or the AudioWorklet isn't up yet.
             obxdBridgeHandler?.(events, timestamps, count);
         },
     );
@@ -78,54 +75,20 @@ async function main() {
     // Manual rescan (covers hotplug and the Chrome-on-Linux late-enumeration case)
     document.getElementById("oct-midi-rescan")?.addEventListener("click", async () => {
         await Promise.all([hardwareOutput.rescan(), hardwareInput.rescan()]);
-        console.log("[octodaw] MIDI rescan complete");
+        console.log("[octobx] MIDI rescan complete");
     });
 
-    // --- In-browser Obxd synth panel (Phase 1: power + gain) ---
-    // The synth stays dormant until the user clicks "Synth: Off" — that click
-    // is the user gesture the AudioContext needs for autoplay policy.
-    // Phase 3 plugs the drain loop's onBatchDrained callback into
-    // sendObxdMidi() so the sequencer drives the synth. Install the handler
-    // BEFORE setupObxdPanel so it's already active when the user powers on;
-    // createObxdBridgeHandler() no-ops while isObxdReady() === false.
+    // --- In-browser Obxd synth rack (Phase C: 10 instances, one visible) ---
+    // The rack builds the knob grid eagerly (defaults baked in), wires all
+    // header controls, and lazy-inits the AudioContext on the first PLAY
+    // click — Octopus already needs PLAY to make sound, and that click is
+    // the user gesture the suspended AudioContext needs for autoplay
+    // compliance. createObxdBridgeHandler() no-ops while isObxdReady()
+    // returns false, so installing it now is safe.
     obxdBridgeHandler = createObxdBridgeHandler();
-    setupObxdPanel();
+    setupObxdRack();
 
-    // --- openDAW LAST, timeout-guarded so it can never block MIDI/hardware ---
-    // openDAW is non-functional (ProjectEnv needs fully-initialized services).
-    // We still attempt it, but cap the wait so a hang can't stall the app.
-    // On success, plug the bridge handler into the already-running drain loop.
-    logStatus("Attempting openDAW...");
-    try {
-        const result = await raceTimeout(setupEngineAsync(wasmModule), 4000);
-        if (result) {
-            bridgeHandler = createMidiBridgeHandler(result.assignments);
-            logStatus("Ready (openDAW + MIDI)");
-        }
-    } catch (e) {
-        console.warn("[octodaw] openDAW not available, running standalone:", e);
-    }
-
-    console.log("[octodaw] All systems go");
-}
-
-/** Build the AudioContext lazily and run openDAW setup. */
-async function setupEngineAsync(module: OctopusWasmModule): Promise<EngineResult | null> {
-    const audioContext = new AudioContext();
-    try { await audioContext.resume(); } catch { /* autoplay policy — non-fatal */ }
-    return setupEngine(audioContext, module);
-}
-
-/** Resolve with null after `ms` if `p` hasn't settled (guards against hangs). */
-function raceTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
-    return new Promise((resolve) => {
-        let done = false;
-        const t = setTimeout(() => { if (!done) { done = true; resolve(null); } }, ms);
-        p.then(
-            (v) => { if (!done) { done = true; clearTimeout(t); resolve(v); } },
-            () => { if (!done) { done = true; clearTimeout(t); resolve(null); } },
-        );
-    });
+    console.log("[octobx] All systems go");
 }
 
 function switchPanel(view: "classic" | "modern") {
@@ -180,9 +143,9 @@ function setupMobileToggle() {
 }
 
 function logStatus(text: string) {
-    console.log(`[octodaw] ${text}`);
+    console.log(`[octobx] ${text}`);
 }
 
 main().catch((e) => {
-    console.error("[octodaw] Fatal error:", e);
+    console.error("[octobx] Fatal error:", e);
 });

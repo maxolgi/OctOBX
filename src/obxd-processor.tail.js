@@ -15,6 +15,13 @@
  * that resolves with the WASM module instance. Until that resolves, process()
  * returns silence.
  *
+ * Multi-instance (Phase A): _obxd_init creates 10 SynthEngine instances
+ * in one WASM heap. Every MIDI/param/gain/fxp/etc message carries an
+ * `instance_id` (0..9). The render path is unchanged — the C side sums
+ * all 10 active engines into the master buffer with soft-clip and exposes
+ * it via the same _get_buf_l_ptr / _get_buf_r_ptr that the cached HEAPF32
+ * views already point at.
+ *
  * IMPORTANT: This file is plain JS (not an ES module, not TypeScript) so it
  * can be loaded via AudioWorklet.addModule() which expects a classic script.
  */
@@ -22,12 +29,14 @@
 // Top-level log — proves the combined file was parsed at addModule() time.
 console.log('[obxd-processor] module evaluating');
 
+const INSTANCE_COUNT = 10;       // MUST match main_obxd.cpp INSTANCE_COUNT
+const DEFAULT_INSTANCE_GAIN = 0.4 * 0.7;  // matches prior single-instance default (gainLinear * 0.4)
+
 let wasmModule = null;
 let initPromise = null;
 let bufLPtr = 0;
 let bufRPtr = 0;
 let pendingMidi = [];   // queued via port.onmessage, drained in process()
-let gainLinear = 0.2;   // internal default (~-14 dBFS sine)
 
 // Cached HEAPF32 views into the WASM linear memory. The raw `wasmModule.HEAPF32`
 // reference is replaced by emcc whenever WASM memory grows
@@ -37,8 +46,8 @@ let gainLinear = 0.2;   // internal default (~-14 dBFS sine)
 // significant source of GC pressure and caused periodic audio glitches on
 // sustained notes.
 let heapF32Ref = null;     // the ArrayBuffer HEAPF32 is currently backed by
-let bufLView = null;       // Float32Array view over g_buf_l
-let bufRView = null;       // Float32Array view over g_buf_r
+let bufLView = null;       // Float32Array view over g_master_l
+let bufRView = null;       // Float32Array view over g_master_r
 
 const RENDER_QUANTUM = 128;   // AWP quantum is fixed at 128 frames by spec
 
@@ -68,7 +77,7 @@ function ensureModule(wasmBytesArg) {
                     : new Uint8Array(wasmBytesArg);
                 const originalInstantiateStreaming = WebAssembly.instantiateStreaming;
                 WebAssembly.instantiateStreaming = async function (_response, imports) {
-                    console.log('[obxd-processor] instantiateStreaming patched → using pre-fetched bytes');
+                    console.log('[obxd-processor] instantiateStreaming patched -> using pre-fetched bytes');
                     return WebAssembly.instantiate(prefetchedBytes, imports);
                 };
                 // Also patch plain instantiate() in case emcc falls through
@@ -92,15 +101,25 @@ function ensureModule(wasmBytesArg) {
             });
             console.log('[obxd-processor] factory resolved; _exports:', Object.keys(m).filter(k => k.startsWith('_')).join(','));
             wasmModule = m;
+            // _obxd_init now creates all 10 SynthEngine instances and
+            // applies the matching factory patch to each. No additional
+            // per-instance setup is required from the constructor beyond
+            // seeding the default gain.
             wasmModule._obxd_init(sampleRate || 44100);
             bufLPtr = wasmModule._get_buf_l_ptr();
             bufRPtr = wasmModule._get_buf_r_ptr();
-            wasmModule._obxd_set_gain(gainLinear);
+            // Default each instance to the prior single-instance default
+            // gain (gainLinear * 0.4 where gainLinear was 0.7). The C side
+            // has no "global gain" any more — every instance manages its
+            // own VOLUME param, so we issue one set_gain per instance.
+            for (let i = 0; i < INSTANCE_COUNT; i++) {
+                wasmModule._obxd_set_gain(i, DEFAULT_INSTANCE_GAIN);
+            }
             // Seed the cached views now that WASM is up.
             heapF32Ref = wasmModule.HEAPF32.buffer;
             bufLView = new Float32Array(heapF32Ref, bufLPtr, RENDER_QUANTUM);
             bufRView = new Float32Array(heapF32Ref, bufRPtr, RENDER_QUANTUM);
-            console.log('[obxd-processor] WASM ready, bufLPtr=' + bufLPtr + ' bufRPtr=' + bufRPtr);
+            console.log('[obxd-processor] WASM ready, bufLPtr=' + bufLPtr + ' bufRPtr=' + bufRPtr + ' instances=' + INSTANCE_COUNT);
         } catch (e) {
             console.error('[obxd-processor] WASM load failed:', e && e.message, e && e.stack);
             throw e;
@@ -137,43 +156,52 @@ class ObxdProcessor extends AudioWorkletProcessor {
             this.alive = false;
         });
 
+        // Per-instance message routing. Every command carries an
+        // instance_id (0..9) so the C side can dispatch to the right
+        // SynthEngine. MIDI is queued and drained at the top of process()
+        // so we don't interrupt the audio thread with allocator/GC work
+        // mid-quantum.
         this.port.onmessage = (ev) => {
             const msg = ev.data;
             if (!msg) return;
+            const id = (typeof msg.instance_id === 'number') ? (msg.instance_id | 0) : 0;
             switch (msg.type) {
-                case 'gain':
-                    // UI sends 0..1; we scale down so the slider's max isn't deafening.
-                    gainLinear = Math.max(0, Math.min(1, msg.value)) * 0.4;
-                    if (wasmModule) wasmModule._obxd_set_gain(gainLinear);
-                    break;
-                case 'note':
-                    // Phase 1 test hook: sets the oscillator frequency directly.
-                    // Phase 3 replaces this with real MIDI parsing inside the C side.
-                    if (wasmModule) wasmModule._obxd_set_freq(msg.freq);
-                    break;
                 case 'midi':
-                    // Phase 3 will pass these to wasmModule._obxd_midi_in(...).
+                    // Queued; msg must carry {instance_id, status, d1, d2}.
+                    // Drained in process() so we don't dispatch from the
+                    // message thread while the audio thread is mid-render.
                     pendingMidi.push(msg);
+                    break;
+                case 'set_active':
+                    if (wasmModule) wasmModule._obxd_set_active(id, msg.active ? 1 : 0);
+                    break;
+                case 'set_polyphony':
+                    if (wasmModule) wasmModule._obxd_set_polyphony(id, msg.voice_count | 0);
                     break;
                 case 'set_param':
                     // idx is a ParamsEnum.h value; value is 0..1. Forwarded
-                    // directly to the engine. Useful for runtime patch tweaks
-                    // (e.g. setting a longer release to verify the ADSR).
+                    // directly to the engine. Useful for runtime patch tweaks.
                     if (wasmModule && typeof msg.idx === 'number' && typeof msg.value === 'number') {
-                        wasmModule._obxd_set_param(msg.idx | 0, +msg.value);
+                        wasmModule._obxd_set_param(id, msg.idx | 0, +msg.value);
                     }
                     break;
+                case 'gain':
+                    // UI sends 0..1; we scale down so the slider's max isn't
+                    // deafening (engine's processVolume maps 0..1 -> 0..0.30).
+                    if (wasmModule) wasmModule._obxd_set_gain(id, Math.max(0, Math.min(1, +msg.value)) * 0.4);
+                    break;
                 case 'load_fxp': {
-                    // Phase 4 — load a VST2 preset file. The main thread
-                    // sends the raw .fxp bytes as a Uint8Array; we copy
-                    // them into WASM linear memory via _malloc + HEAPU8.set
-                    // (the worklet can't read the FS — emcc was built with
-                    // -sFORCE_FILESYSTEM=0), then hand the pointer to the
-                    // C loader. Reply with the parsed patch name (or an
-                    // error code) so the UI can update its label.
+                    // Phase 4 — load a VST2 preset file into one instance.
+                    // The main thread sends the raw .fxp bytes as a
+                    // Uint8Array; we copy them into WASM linear memory
+                    // via _malloc + HEAPU8.set (the worklet can't read the
+                    // FS — emcc was built with -sFORCE_FILESYSTEM=0), then
+                    // hand the pointer to the C loader. Reply with the
+                    // parsed patch name (or an error code) so the UI can
+                    // update its label.
                     const bytes = msg.bytes;
                     if (!wasmModule || !bytes || !bytes.length) {
-                        this.port.postMessage({ type: 'fxp_loaded', success: false, rc: -1, name: '' });
+                        this.port.postMessage({ type: 'fxp_loaded', instance_id: msg.instance_id, success: false, rc: -1, name: '' });
                         break;
                     }
                     let rc = -1, name = '';
@@ -181,52 +209,65 @@ class ObxdProcessor extends AudioWorkletProcessor {
                         const ptr = wasmModule._malloc(bytes.length);
                         if (!ptr) throw new Error('_malloc returned 0');
                         wasmModule.HEAPU8.set(bytes, ptr);
-                        rc = wasmModule._obxd_load_fxp(ptr, bytes.length);
+                        rc = wasmModule._obxd_load_fxp(id, ptr, bytes.length);
                         wasmModule._free(ptr);
-                        name = wasmModule.UTF8ToString(wasmModule._obxd_get_patch_name()) || '';
+                        name = wasmModule.UTF8ToString(wasmModule._obxd_get_patch_name(id)) || '';
                     } catch (e) {
                         console.error('[obxd-processor] load_fxp threw:', e && e.message);
                         rc = -128;
                     }
                     this.port.postMessage({
                         type: 'fxp_loaded',
+                        instance_id: msg.instance_id,
                         success: rc === 0,
                         rc,
                         name,
                     });
                     break;
                 }
-                case 'all_notes_off':
-                    // Note-off only — release tails still audible.
-                    if (wasmModule) wasmModule._obxd_all_notes_off();
+                case 'set_factory_patch':
+                    if (wasmModule) wasmModule._obxd_set_factory_patch(id, msg.patch_id | 0);
                     break;
                 case 'panic':
-                    // Hard silence — kill every voice's envelope immediately.
-                    if (wasmModule) wasmModule._obxd_panic();
+                    if (wasmModule) wasmModule._obxd_panic(id);
+                    break;
+                case 'panic_all':
+                    if (wasmModule) wasmModule._obxd_panic_all();
                     break;
                 case 'reset_patch':
-                    // Re-apply engine defaults (clears the loaded .fxp).
-                    if (wasmModule) wasmModule._obxd_reset_patch();
+                    if (wasmModule) wasmModule._obxd_reset_patch(id);
                     break;
                 case 'get_param':
-                    // Query the current engine value for a single param
-                    // (used by the knob UI to read defaults after a patch
-                    // load). The reply goes back as `param_value` so the
-                    // requester can correlate by idx.
+                    // Query the current engine value for a single param on
+                    // the given instance (used by the knob UI to read
+                    // defaults after a patch load). Reply goes back as
+                    // `param_value` so the requester can correlate by idx.
                     if (wasmModule && typeof msg.idx === 'number') {
-                        const v = wasmModule._obxd_get_param(msg.idx | 0);
-                        this.port.postMessage({ type: 'param_value', idx: msg.idx | 0, value: v });
+                        const v = wasmModule._obxd_get_param(id, msg.idx | 0);
+                        this.port.postMessage({ type: 'param_value', instance_id: msg.instance_id, idx: msg.idx | 0, value: v });
                     }
                     break;
-                case 'ping':
+                case 'ping': {
+                    // Reply with a 10-float meter array — one RMS per
+                    // instance. The UI refreshes this at ~30 Hz.
+                    const meters = new Array(INSTANCE_COUNT);
+                    if (wasmModule) {
+                        for (let i = 0; i < INSTANCE_COUNT; i++) {
+                            meters[i] = wasmModule._obxd_get_instance_rms(i);
+                        }
+                    } else {
+                        for (let i = 0; i < INSTANCE_COUNT; i++) meters[i] = 0.0;
+                    }
                     this.port.postMessage({
                         type: 'pong',
                         alive: this.alive,
                         ready: wasmModule !== null,
+                        meters,
                         bufLPtr,
                         bufRPtr,
                     });
                     break;
+                }
                 default:
                     break;
             }
@@ -242,18 +283,22 @@ class ObxdProcessor extends AudioWorkletProcessor {
         const out = outputs[0];
         if (!out || out.length === 0) return true;
 
-        // Phase 2: drain any MIDI messages queued via port.onmessage into
-        // the engine before rendering this quantum. Timing granularity is
-        // the 128-sample AWP quantum (~2.9ms @ 44.1kHz) — well below
-        // perceptible MIDI jitter.
+        // Drain queued MIDI into the engine before rendering this quantum.
+        // Timing granularity is the 128-sample AWP quantum (~2.9ms @
+        // 44.1kHz) — well below perceptible MIDI jitter. Each message
+        // carries its own instance_id so the right SynthEngine receives it.
         if (pendingMidi.length > 0) {
             for (let i = 0; i < pendingMidi.length; i++) {
                 const m = pendingMidi[i];
-                wasmModule._obxd_midi_in(m.status | 0, m.d1 | 0, m.d2 | 0);
+                const id = (typeof m.instance_id === 'number') ? (m.instance_id | 0) : 0;
+                wasmModule._obxd_midi_in(id, m.status | 0, m.d1 | 0, m.d2 | 0);
             }
             pendingMidi.length = 0;
         }
 
+        // Renders every active engine, sums into g_master_l/r, applies
+        // soft-clip — all inside the C side. The worklet doesn't need to
+        // know there are 10 instances; it just sees the master buffer.
         wasmModule._obxd_render(RENDER_QUANTUM);
 
         // Refresh cached views if WASM memory grew (HEAPF32 buffer swapped).

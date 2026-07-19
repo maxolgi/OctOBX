@@ -25,7 +25,7 @@ export class HardwareMidiInput {
 
     async init(): Promise<boolean> {
         if (!navigator.requestMIDIAccess) {
-            console.log("[octodaw] Web MIDI API not available (use Chrome/Edge for hardware MIDI input)");
+            console.log("[octobx] Web MIDI API not available (use Chrome/Edge for hardware MIDI input)");
             return false;
         }
 
@@ -40,7 +40,7 @@ export class HardwareMidiInput {
             );
             return true;
         } catch (e) {
-            console.warn("[octodaw] Web MIDI access denied:", e);
+            console.warn("[octobx] Web MIDI access denied:", e);
             return false;
         }
     }
@@ -90,7 +90,7 @@ export class HardwareMidiInput {
 
         if (!this.midiAccess || !portId) {
             this.enabled = false;
-            console.log("[octodaw] Hardware MIDI input: none");
+            console.log("[octobx] Hardware MIDI input: none");
             return;
         }
 
@@ -103,7 +103,7 @@ export class HardwareMidiInput {
         this.inputPort = port;
         this.inputPort.onmidimessage = (ev: MIDIMessageEvent) => this.handleMessage(ev);
         this.enabled = true;
-        console.log(`[octodaw] Hardware MIDI input: ${port.name}`);
+        console.log(`[octobx] Hardware MIDI input: ${port.name}`);
     }
 
     private handleMessage(ev: MIDIMessageEvent) {

@@ -1,4 +1,4 @@
-# octodaw/wasm/Makefile — Emscripten WASM build for the Octopus engine
+# wasm/Makefile — Emscripten WASM build for the Octopus engine
 #
 # Usage:
 #   source /path/to/emsdk_env.sh

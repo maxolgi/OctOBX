@@ -3,7 +3,7 @@
 
 /*
  * hal_linux.h — eCos compatibility shim for the Octopus/Nemo firmware.
- * WASM/Emscripten version for OctoDAW.
+ * WASM/Emscripten version for OctOBX.
  *
  * Provides all eCos types, constants, HAL macros, and function declarations
  * that the original firmware expects. Built with -D__linux__ so the firmware

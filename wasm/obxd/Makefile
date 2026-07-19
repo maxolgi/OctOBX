@@ -50,16 +50,18 @@ CXXFLAGS = -O3 -g2 \
     -I ../../third_party/JUCE/modules
 
 # Export list MUST be kept in sync with src/obxd-processor.tail.js.
-# _obxd_set_freq is kept (as a no-op) for Phase 1 backwards compatibility.
-# Phase 4/5 additions: _obxd_get_param / _obxd_get_patch_name feed the knob
-# UI; _obxd_panic / _obxd_reset_patch back the panel's Panic/Reset buttons.
+# Multi-instance (Phase A) — every per-instance export takes an instance_id
+# first arg. _obxd_set_freq is kept (as a no-op) for backwards compat with
+# stale worklet messages. _obxd_panic_all is the global convenience.
 # (Keep on a single physical line — Make's `\<newline>` continuation
 # inserts whitespace, which the emcc settings parser rejects.)
-EXPORTS = _obxd_init,_obxd_render,_obxd_set_freq,_obxd_set_gain,_get_buf_l_ptr,_get_buf_r_ptr,_obxd_midi_in,_obxd_all_notes_off,_obxd_set_param,_obxd_load_fxp,_obxd_get_param,_obxd_get_patch_name,_obxd_panic,_obxd_reset_patch,_malloc,_free
+EXPORTS = _obxd_init,_obxd_render,_obxd_set_active,_obxd_set_polyphony,_obxd_get_polyphony,_obxd_midi_in,_obxd_set_gain,_obxd_set_param,_obxd_get_param,_obxd_load_fxp,_obxd_all_notes_off,_obxd_panic,_obxd_panic_all,_obxd_reset_patch,_obxd_get_patch_name,_obxd_set_factory_patch,_obxd_get_active,_obxd_get_instance_rms,_obxd_set_freq,_get_buf_l_ptr,_get_buf_r_ptr,_malloc,_free
 
-# INITIAL_MEMORY: 128 MB. The JUCE core (String/Random/etc.) and Obxd's
-#   8-voice engine + delay lines are heavier than the Phase 1 sine stub.
-#   ALLOW_MEMORY_GROWTH lets it expand further if needed.
+# INITIAL_MEMORY: 64 MB. Actual usage is ~20 MB (10 SynthEngine instances
+#   at ~1-2 MB each + JUCE core ~5-10 MB + small static state). Kept
+#   conservative because Windows Chrome/Edge frequently reject large
+#   initial WASM allocations inside AudioWorkletGlobalScope where Linux
+#   is permissive. ALLOW_MEMORY_GROWTH lets it expand at runtime if needed.
 # DISABLE_EXCEPTION_CATCHING=0: JUCE/Obxd use std::exception paths in
 #   a few places (notably juce::String); keeping EH enabled avoids UB
 #   if any of those throws. The default (1) would mask the throw and
@@ -75,7 +77,7 @@ LDFLAGS = -sWASM=1 \
     -sEXPORTED_FUNCTIONS=$(EXPORTS) \
     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPF32,HEAPU8,getValue,setValue,UTF8ToString \
     -sALLOW_MEMORY_GROWTH=1 \
-    -sINITIAL_MEMORY=134217728 \
+    -sINITIAL_MEMORY=67108864 \
     -sFORCE_FILESYSTEM=0 \
     -sDISABLE_EXCEPTION_CATCHING=0 \
     -o $(TARGET).js

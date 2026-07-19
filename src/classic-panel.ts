@@ -362,13 +362,13 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
 
         updateTransportIndicator(module);
 
-        if (renderFrame & 1) {
-            requestAnimationFrame(renderLoop);
-            return;
-        }
-
         module._page_refresh();
-        if (!mirAddr) mirAddr = module._get_mir_ptr();
+        // Use processed MIR (blink pre-applied). Must be called every frame:
+        // it refills a static buffer in WASM linear memory with MIR contents
+        // and clears red/green bits where the blink bit is set when the master
+        // blinker is in its off phase. Using the raw MIR (get_mir_ptr) leaves
+        // blink-only LEDs permanently dark and never animates blinking LEDs.
+        mirAddr = module._get_processed_mir_ptr();
         if (mirAddr) {
             const mir = new Uint8Array(module.HEAPU8.buffer, mirAddr, MIR_SIZE);
             if (mirChanged(mir)) {

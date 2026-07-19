@@ -1,13 +1,28 @@
 /*
- * midi-output.ts — Web MIDI API output for hardware synthesizers.
+ * midi-output.ts — Web MIDI API output for hardware synthesizers and the
+ * single 60Hz RAF drain loop that owns WASM ring-buffer access.
  *
- * openDAW's SDK does not yet expose MIDI output to external hardware.
- * This module drains the same Octopus ring buffer and dispatches raw
- * MIDI bytes to a selected Web MIDI output port (Chrome/Edge only).
+ * Drains the Octopus engine's MIDI ring buffer in batches (up to 128 events
+ * per frame) and fans each batch out to whatever consumers are attached
+ * via the `onBatchDrained` callback. Today the only consumer is the OB-XD
+ * synth bridge (`obxd-bridge.ts`); earlier revisions also routed to an
+ * openDAW NoteSignal bridge — openDAW has since been removed.
  */
 
 import type { OctopusWasmModule } from "./octopus-types";
 import { openMidiAccess, pollForPorts } from "./midi-access";
+
+/*
+ * Handler invoked once per frame with the batch of events drained from the
+ * WASM ring buffer. `events` and `timestamps` are direct typed-array views
+ * into WASM linear memory (or static batch buffers in the case of events);
+ * consumers MUST copy any data they need to retain past the handler return.
+ */
+export type BatchDrainHandler = (
+    events: Uint32Array,
+    timestamps: Float64Array,
+    count: number,
+) => void;
 
 /*
  * Frame a MIDI message into the correct number of bytes for a raw output port.
@@ -44,7 +59,7 @@ export class HardwareMidiOutput {
 
     async init(): Promise<boolean> {
         if (!navigator.requestMIDIAccess) {
-            console.log("[octodaw] Web MIDI API not available (use Chrome/Edge for hardware MIDI)");
+            console.log("[octobx] Web MIDI API not available (use Chrome/Edge for hardware MIDI)");
             return false;
         }
 
@@ -59,7 +74,7 @@ export class HardwareMidiOutput {
             );
             return true;
         } catch (e) {
-            console.warn("[octodaw] Web MIDI access denied:", e);
+            console.warn("[octobx] Web MIDI access denied:", e);
             return false;
         }
     }
@@ -96,7 +111,7 @@ export class HardwareMidiOutput {
         if (!this.midiAccess) return;
         this.outputPort = portId ? this.midiAccess.outputs.get(portId) ?? null : null;
         this.enabled = !!this.outputPort;
-        console.log(`[octodaw] Hardware MIDI output: ${this.outputPort?.name ?? "none"}`);
+        console.log(`[octobx] Hardware MIDI output: ${this.outputPort?.name ?? "none"}`);
     }
 
     send(status: number, data1: number, data2: number, timestamp?: number) {
@@ -178,7 +193,7 @@ export function drainMidiToHardware(
             frameSinceCheck = 0;
             const dropped = module._wasm_get_midi_dropped_count();
             if (dropped !== prevDropped) {
-                console.warn(`[octodaw] MIDI ring buffer dropped ${dropped - prevDropped} events (total: ${dropped})`);
+                console.warn(`[octobx] MIDI ring buffer dropped ${dropped - prevDropped} events (total: ${dropped})`);
                 prevDropped = dropped;
             }
         }

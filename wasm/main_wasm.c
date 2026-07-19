@@ -1,5 +1,5 @@
 /*
- * main_wasm.c — WASM entry point for the Octopus/Nemo engine (OctoDAW).
+ * main_wasm.c — WASM entry point for the Octopus/Nemo engine (OctOBX).
  *
  * Replaces main_linux.c for the Emscripten build. No blocking main() loop —
  * JavaScript drives initialization via engine_init() and calls exported

@@ -11,15 +11,25 @@
  *   LFO             — LFOFREQ/LFO1AMT/LFOFILTER/LFOOSC1/LFOPW1 + LFOSINWAVE (toggle)
  *   MASTER          — VOLUME/VOICE_COUNT/OCTAVE/TUNE/PORTAMENTO/UNISON
  *
- * Indices match ParamsEnum.h. Each control's `initial` is the post-
- * applyObxdDefaultPatch() state, so the UI renders correctly on first
- * power-on. After a .fxp load or Reset, syncObxdControlsFromEngine()
- * queries the engine for each control's current value and updates the
- * widget without re-firing the change handler (no write loop).
+ * Indices match ParamsEnum.h. Each control's `initial` is the engine's
+ * factory-patch state baked in C, so the UI renders correctly on first
+ * power-on. After a .fxp load, a Reset, or an instance-selector switch,
+ * syncObxdControlsFromEngine(instanceId) queries the engine for each
+ * control's current value on the chosen instance and updates the widget
+ * without re-firing the change handler (no write loop).
+ *
+ * Knob drags target the currently-selected instance (read via
+ * getObxdSelectedInstance()) so the user is always editing the instance
+ * they're looking at.
  */
 
 import { createObxdKnob, createObxdToggle } from "./obxd-knob";
-import { setObxdParam, getObxdParam, isObxdReady } from "./obxd-audio";
+import {
+    setObxdInstanceParam,
+    getObxdInstanceParam,
+    getObxdSelectedInstance,
+    isObxdReady,
+} from "./obxd-audio";
 
 interface KnobSpec {
     kind: "knob";
@@ -82,8 +92,8 @@ const OSC1Pul = 34;
 const OSC2Saw = 35;
 const OSC2Pul = 36;
 
-// Knob sections — `initial`/`default` are baked from apply_defaults()
-// (wasm/obxd/main_obxd.cpp) + applyObxdDefaultPatch() (src/obxd-audio.ts).
+// Knob sections — `initial`/`default` are baked from the engine defaults
+// (wasm/obxd/main_obxd.cpp `apply_defaults_for_instance()`).
 const SECTIONS: Section[] = [
     {
         title: "Oscillator",
@@ -177,19 +187,23 @@ export function buildObxdSynthUi(container: HTMLElement): void {
         gridEl.className = "obxd-section-grid";
 
         for (const c of section.controls) {
+            // onChange reads getObxdSelectedInstance() at event time so a
+            // knob drag always targets the instance the user is currently
+            // viewing — switching the selector mid-drag would otherwise
+            // split the gesture across two engines.
             const el = c.kind === "toggle"
                 ? createObxdToggle({
                       idx: c.idx,
                       label: c.label,
                       initial: c.initial,
-                      onChange: (idx, value) => setObxdParam(idx, value),
+                      onChange: (idx, value) => setObxdInstanceParam(getObxdSelectedInstance(), idx, value),
                   })
                 : createObxdKnob({
                       idx: c.idx,
                       label: c.label,
                       initial: c.initial,
                       defaultValue: c.default,
-                      onChange: (idx, value) => setObxdParam(idx, value),
+                      onChange: (idx, value) => setObxdInstanceParam(getObxdSelectedInstance(), idx, value),
                   });
             gridEl.appendChild(el);
             cachedControls.push({ idx: c.idx, el: el as HTMLElement & { setValue?: (v: number) => void } });
@@ -201,19 +215,21 @@ export function buildObxdSynthUi(container: HTMLElement): void {
 }
 
 /*
- * Re-query the engine for every control's current value and update
- * the widget position WITHOUT firing onChange (so a freshly loaded
- * patch doesn't get re-written back to the engine). Call after
- * applyObxdDefaultPatch(), a .fxp load, or obxdResetPatch().
+ * Re-query the engine for every control's current value on a specific
+ * instance and update the widget position WITHOUT firing onChange (so a
+ * freshly loaded patch doesn't get re-written back to the engine). Call
+ * after a .fxp load, a Reset, or an instance-selector switch.
  *
- * No-ops while the worklet is unpowered — knobs simply retain whatever
- * values were last set on them (or the baked-in defaults on first show).
+ * No-ops while the worklet is uninitialized — knobs simply retain
+ * whatever values were last set on them (or the baked-in defaults on
+ * first show). Returns silently if the cached control list is empty
+ * (buildObxdSynthUi() hasn't run yet).
  */
-export async function syncObxdControlsFromEngine(): Promise<void> {
+export async function syncObxdControlsFromEngine(instanceId: number): Promise<void> {
     if (cachedControls.length === 0) return;
     if (!isObxdReady()) return;
     await Promise.all(cachedControls.map(async (c) => {
-        const v = await getObxdParam(c.idx);
+        const v = await getObxdInstanceParam(instanceId, c.idx);
         if (v >= 0 && c.el.setValue) c.el.setValue(v);
     }));
 }

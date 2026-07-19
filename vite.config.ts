@@ -16,9 +16,6 @@ export default defineConfig({
             "Cross-Origin-Resource-Policy": "same-origin",
         },
     },
-    optimizeDeps: {
-        exclude: ["@opendaw/studio-core"],
-    },
     build: {
         target: "es2022",
     },

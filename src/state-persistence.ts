@@ -15,17 +15,17 @@ export function setupStatePersistence(module: OctopusWasmModule) {
 
     saveBtn?.addEventListener("click", () => {
         module._wasm_save_state();
-        console.log("[octodaw] State saved to IDBFS");
+        console.log("[octobx] State saved to IDBFS");
     });
 
     loadBtn?.addEventListener("click", () => {
         module.FS.syncfs(true, (err) => {
             if (err) {
-                console.error("[octodaw] IDBFS load failed:", err);
+                console.error("[octobx] IDBFS load failed:", err);
                 return;
             }
             module._wasm_load_state();
-            console.log("[octodaw] State loaded from IDBFS");
+            console.log("[octobx] State loaded from IDBFS");
         });
     });
 }

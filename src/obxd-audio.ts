@@ -1,32 +1,44 @@
 /*
- * obxd-audio.ts — Main-thread bootstrap for the in-browser Obxd synth.
+ * obxd-audio.ts — Main-thread bootstrap + per-instance API for the
+ * multi-instance OB-XD synth (Phase B/C of obx.md).
  *
- * Lazily creates an AudioContext under a user gesture (autoplay-policy
- * compliant), loads the AudioWorklet module, instantiates an AudioWorkletNode,
- * and connects it to the destination.
+ * The AudioWorklet + WASM loading strategy is unchanged from Phase 1:
+ * AudioWorkletGlobalScope forbids importScripts() AND dynamic import(),
+ * and Chrome's AWP also lacks XMLHttpRequest. We pre-fetch the WASM bytes
+ * on the main thread and hand them to the AudioWorkletProcessor via its
+ * constructor options (`processorOptions.wasmBinary`); the worklet then
+ * forwards them to the emcc factory as `wasmBinary`, which skips all of
+ * emcc's network-loading code paths.
  *
- * Phase 1 (this): sine-wave path. Phase 3 will add real MIDI plumbing via
- * sendObxdMidi(), to be called from the existing drainMidiToHardware loop's
- * onBatchDrained callback (see midi-output.ts).
- *
- * AWP/WASM loading strategy: AudioWorkletGlobalScope forbids importScripts()
- * AND dynamic import(), and Chrome's AWP also lacks XMLHttpRequest. The
- * cleanest path around all of that is to pre-fetch the WASM bytes on the
- * main thread (where fetch is fully functional) and hand them to the
- * AudioWorkletProcessor via its constructor options (`processorOptions`).
- * The processor forwards them to the emcc factory as `wasmBinary`, which
- * skips all of emcc's network-loading code paths.
+ * `_obxd_init()` on the C side now creates ALL 10 SynthEngine instances,
+ * applies their factory patches, and sets the default polyphony
+ * ({8,1,1,1,1,1,1,1,1,1}). All per-instance control is therefore via an
+ * `instance_id` (0..9) — selection is purely a UI concern tracked in
+ * `selectedInstance`; the bridge / rack / knob-grid pass the id
+ * explicitly so a future "multi-select" UI doesn't need an API change.
  */
 
 let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let moduleAdded = false;
 
-// One-shot reply router for worklet messages that need an async response
-// (fxp_loaded, param_value). Multiple concurrent callers (e.g. 37
-// getObxdParam calls from syncObxdControlsFromEngine) all install their
-// predicate into this map instead of swapping port.onmessage, which
-// would race and lose replies.
+// UI-edited instance (0..9). Defaults to 0. Per-instance param APIs do
+// NOT consult this — callers pass the id explicitly. Only the rack /
+// knob-grid read it back via getObxdSelectedInstance() so a knob drag
+// hits the instance the user is currently looking at.
+let selectedInstance = 0;
+
+// Last per-instance RMS values (length 10). Updated by the pong handler
+// installed in ensureRouter(). Stays zero until the first pong arrives.
+let lastMeters = new Float32Array(10);
+
+/*
+ * One-shot reply router for worklet messages that need an async response
+ * (fxp_loaded, param_value). Multiple concurrent callers (e.g. 30+
+ * getObxdInstanceParam calls from syncObxdControlsFromEngine) all install
+ * their predicate into this array instead of swapping port.onmessage,
+ * which would race and lose replies. See "MessagePort quirks" in obx.md.
+ */
 interface PendingReply {
     predicate: (msg: unknown) => boolean;
     resolve: (msg: unknown) => void;
@@ -43,6 +55,19 @@ function ensureRouter(): void {
     workletNode.port.addEventListener("message", (ev: MessageEvent) => {
         const msg = ev.data;
         if (!msg || typeof msg !== "object") return;
+
+        // Permanent meter listener: every pong refreshes lastMeters.
+        // Independent of pendingReplies so a ping without an awaitReply
+        // caller still updates the rack UI's meter bar.
+        if ((msg as { type?: string }).type === "pong") {
+            const meters = (msg as { meters?: number[] }).meters;
+            if (Array.isArray(meters)) {
+                for (let i = 0; i < 10 && i < meters.length; i++) {
+                    lastMeters[i] = Number(meters[i]) || 0;
+                }
+            }
+        }
+
         // Find the first predicate that claims this reply. Splice it
         // out BEFORE resolving so the callback can post another message
         // (which would race with the loop otherwise).
@@ -116,10 +141,8 @@ export async function setupObxdAudio(): Promise<void> {
 
     // Await the worklet's `{type:'ready'}` message before resolving. The
     // processor emits ready once emcc's WASM factory has resolved and
-    // _obxd_init() has run — until then, set_param / midi messages are
-    // dropped by the worklet's onmessage guard (`if (wasmModule && ...)`).
-    // Phase 3 relies on this so the panel can apply the default patch
-    // immediately after setupObxdAudio() resolves.
+    // _obxd_init() has run (creating all 10 instances). Until then, set_param
+    // / midi messages are dropped by the worklet's onmessage guard.
     //
     // Using `onmessage` (not addEventListener): MessagePort auto-calls
     // start() only for the onmessage setter; with addEventListener the
@@ -164,143 +187,166 @@ export function teardownObxdAudio(): void {
     }
 }
 
-/** Phase 1 test hook — sets oscillator frequency directly. */
-export function sendObxdNote(freq: number): void {
-    workletNode?.port.postMessage({ type: "note", freq });
+// ---------------------------------------------------------------------------
+// Per-instance controls — every message carries instance_id (0..9).
+// ---------------------------------------------------------------------------
+
+export function setObxdInstanceActive(id: number, active: boolean): void {
+    workletNode?.port.postMessage({ type: "set_active", instance_id: id, active });
 }
 
-/** Phase 3 will use this from the onBatchDrained handler. */
-export function sendObxdMidi(status: number, d1: number, d2: number): void {
-    workletNode?.port.postMessage({ type: "midi", status, d1, d2 });
-}
-
-export function setObxdGain(value01: number): void {
-    workletNode?.port.postMessage({ type: "gain", value: value01 });
-}
-
-/*
- * Forward a single ParamsEnum.h index + 0..1 value to the worklet's
- * `set_param` branch, which calls _obxd_set_param(idx, value). The C side
- * clamps and dispatches via apply_param(); unknown indices no-op.
- */
-export function setObxdParam(idx: number, value01: number): void {
-    workletNode?.port.postMessage({ type: "set_param", idx, value: value01 });
+export function setObxdInstancePolyphony(id: number, voiceCount: number): void {
+    workletNode?.port.postMessage({ type: "set_polyphony", instance_id: id, voice_count: voiceCount });
 }
 
 /*
- * Phase 4 — load a VST2 .fxp preset file. The bytes are handed to the
- * AudioWorkletProcessor via its MessagePort (we can't share memory with
- * the worklet directly, and emcc was built with -sFORCE_FILESYSTEM=0 so
+ * Load a VST2 .fxp preset into a specific instance. The bytes are handed
+ * to the worklet via its MessagePort (we can't share memory with the
+ * worklet directly, and emcc was built with -sFORCE_FILE_SYSTEM=0 so
  * FS.writeFile isn't available inside the worklet). The worklet copies
  * the bytes into WASM heap via _malloc + HEAPU8.set and calls
- * _obxd_load_fxp(ptr, len).
+ * _obxd_load_fxp(instance_id, ptr, len).
  *
- * Resolves with `{success, name}` — name is the program name parsed
- * from the .fxp header (or empty on failure). Rejects only if no
- * worklet is connected.
+ * Resolves with `{success, name}` — name is the program name parsed from
+ * the .fxp header (or empty on failure). Rejects only if no worklet is
+ * connected. The underlying ArrayBuffer is transferred (zero-copy) to
+ * avoid a structured-clone pass; callers must not retain a reference.
  */
-export function loadObxdFxp(bytes: Uint8Array): Promise<{ success: boolean; name: string; rc: number }> {
-    return new Promise((resolve, reject) => {
-        if (!workletNode) {
-            reject(new Error("obxd worklet not initialized"));
-            return;
-        }
-        const port = workletNode.port;
-        // Race the worklet reply against a 5s timeout. The router
-        // correlates via msg.type === "fxp_loaded".
-        awaitReply(
-            (m) => typeof m === "object" && m !== null && (m as { type?: string }).type === "fxp_loaded",
-            5000,
-        ).then((raw) => {
-            if (!raw) {
-                resolve({ success: false, name: "", rc: -200 });
-                return;
-            }
-            const msg = raw as { success?: boolean; name?: string; rc?: number };
-            resolve({ success: !!msg.success, name: String(msg.name || ""), rc: Number(msg.rc ?? -1) });
-        });
-        // Transfer the underlying buffer to avoid a copy across the
-        // structured-clone boundary. The Uint8Array is unusable on this
-        // thread afterwards — callers should not retain a reference.
-        const copy = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-        port.postMessage({ type: "load_fxp", bytes: copy }, [copy.buffer]);
-    });
-}
-
-/* Hard silence — allSoundOff (resets envelopes too, no release tail). */
-export function obxdPanic(): void {
-    workletNode?.port.postMessage({ type: "panic" });
-}
-
-/* Re-apply the engine's built-in defaults (clears the loaded .fxp). */
-export function obxdResetPatch(): void {
-    workletNode?.port.postMessage({ type: "reset_patch" });
-}
-
-/* Note-off only — preserves release tails. */
-export function obxdAllNotesOff(): void {
-    workletNode?.port.postMessage({ type: "all_notes_off" });
+export async function loadObxdInstanceFxp(
+    id: number,
+    bytes: Uint8Array,
+): Promise<{ success: boolean; name: string }> {
+    if (!workletNode) {
+        throw new Error("obxd worklet not initialized");
+    }
+    const port = workletNode.port;
+    // Race the worklet reply against a 5s timeout. Correlate by type AND
+    // instance_id so concurrent loads on different instances don't cross.
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "fxp_loaded"
+            && (m as { instance_id?: number }).instance_id === id,
+        5000,
+    );
+    const copy = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    port.postMessage({ type: "load_fxp", instance_id: id, bytes: copy }, [copy.buffer]);
+    const raw = await replyPromise;
+    if (!raw) return { success: false, name: "" };
+    const msg = raw as { success?: boolean; name?: string };
+    return { success: !!msg.success, name: String(msg.name || "") };
 }
 
 /*
- * Query the engine's current value for a single ParamsEnum.h index.
- * Resolves to the 0..1 value (or -1 if the index is out of range / the
- * engine isn't initialized). Used by the knob UI to seed positions after
- * applyObxdDefaultPatch() or a .fxp load.
+ * Forward a single ParamsEnum.h index + 0..1 value to a specific
+ * instance's `set_param` branch. The C side clamps and dispatches via
+ * apply_param(); unknown indices no-op.
  */
-export async function getObxdParam(idx: number): Promise<number> {
+export function setObxdInstanceParam(id: number, idx: number, value01: number): void {
+    workletNode?.port.postMessage({ type: "set_param", instance_id: id, idx, value: value01 });
+}
+
+/*
+ * Per-instance output gain. The worklet scales 0..1 by 0.4 internally
+ * (matches the original single-instance gain scaling).
+ */
+export function setObxdInstanceGain(id: number, gain01: number): void {
+    workletNode?.port.postMessage({ type: "gain", instance_id: id, value: gain01 });
+}
+
+/*
+ * Per-instance raw MIDI — used by obxd-bridge.ts to route Octopus ring
+ * buffer events to instances by channel. The worklet queues the message
+ * and the engine consumes it inside process() at the next 128-sample
+ * quantum (~2.9ms jitter at 44.1kHz — well below perceptible).
+ */
+export function sendObxdInstanceMidi(id: number, status: number, d1: number, d2: number): void {
+    workletNode?.port.postMessage({ type: "midi", instance_id: id, status, d1, d2 });
+}
+
+/* Hard silence — allSoundOff on one instance (resets envelopes too). */
+export function obxdInstancePanic(id: number): void {
+    workletNode?.port.postMessage({ type: "panic", instance_id: id });
+}
+
+/* Convenience: panic every instance in one round-trip. */
+export function obxdPanicAll(): void {
+    workletNode?.port.postMessage({ type: "panic_all" });
+}
+
+/* Re-apply the engine's built-in defaults for a specific instance. */
+export function obxdInstanceResetPatch(id: number): void {
+    workletNode?.port.postMessage({ type: "reset_patch", instance_id: id });
+}
+
+/*
+ * Swap a specific instance's patch to one of the 10 embedded factory
+ * patches (0..9). The C side keeps the byte arrays in patches.h and the
+ * worklet forwards to _obxd_set_factory_patch(instance_id, patch_id).
+ */
+export function applyObxdFactoryPatch(id: number, patchId: number): void {
+    workletNode?.port.postMessage({ type: "set_factory_patch", instance_id: id, patch_id: patchId });
+}
+
+/*
+ * Query the engine's current value for a single ParamsEnum.h index on a
+ * specific instance. Resolves to the 0..1 value (or -1 if the index is
+ * out of range / the engine isn't initialized / the 2s reply window
+ * elapsed). Used by the knob UI to seed positions after a .fxp load or
+ * an instance-selector switch.
+ *
+ * Correlates by (instance_id, idx) so concurrent queries across multiple
+ * instances (or even the same instance) don't cross-reply.
+ */
+export async function getObxdInstanceParam(id: number, idx: number): Promise<number> {
     if (!workletNode) return -1;
     const port = workletNode.port;
     // Install the predicate FIRST so a fast reply can't be missed.
     const replyPromise = awaitReply(
         (m) => typeof m === "object" && m !== null
             && (m as { type?: string }).type === "param_value"
+            && (m as { instance_id?: number }).instance_id === id
             && (m as { idx?: number }).idx === idx,
         2000,
     );
-    port.postMessage({ type: "get_param", idx });
+    port.postMessage({ type: "get_param", instance_id: id, idx });
     const raw = await replyPromise;
     if (!raw) return -1;
     return Number((raw as { value?: number }).value ?? -1);
 }
 
-/*
- * Default ADSR + filter patch applied on synth power-on. apply_defaults()
- * in main_obxd.cpp already seeds a dual-saw patch with full-level sustain
- * (LSUS = 1.0) and zero attack/decay/release — bright but very percussive.
- *
- * Override here for pleasant step-sequencer behaviour out of the box: a
- * softer attack, moderate decay, slightly relaxed sustain, and a useful
- * release tail so notes ring out cleanly between steps. Cutoff/resonance
- * and filter-envelope amount are nudged off the apply_defaults() values
- * for a more synth-pad character.
- *
- * Indices match ParamsEnum.h (third_party/Obxd/Source/Engine/ParamsEnum.h).
- */
-export function applyObxdDefaultPatch(): void {
-    if (!workletNode) return;
-    const VOICE_COUNT = 3;     // Polyphony cap. SynthEngine maps 0..1 to ~1..32 voices.
-                               // Default apply_defaults() sets 1.0 (max) which is too
-                               // CPU-heavy for a 48 kHz / 128-sample AWP quantum and
-                               // causes clicks on sustained notes. 0.25 → ~8 voices.
-    const LATK = 51;          // Loudness envelope attack
-    const LDEC = 52;          // Loudness envelope decay
-    const LSUS = 53;          // Loudness envelope sustain
-    const LREL = 54;          // Loudness envelope release
-    const CUTOFF = 44;        // Filter cutoff
-    const RESONANCE = 45;     // Filter resonance
-    const ENVELOPE_AMT = 50;  // Filter envelope amount
+// ---------------------------------------------------------------------------
+// Metering / liveness
+// ---------------------------------------------------------------------------
 
-    setObxdParam(VOICE_COUNT, 0.25);
-    setObxdParam(LATK, 0.2);
-    setObxdParam(LDEC, 0.4);
-    setObxdParam(LSUS, 0.7);
-    setObxdParam(LREL, 0.55);
-    setObxdParam(CUTOFF, 0.5);
-    setObxdParam(RESONANCE, 0.3);
-    setObxdParam(ENVELOPE_AMT, 0.3);
-    console.log("[obxd] default patch applied (~8 voices, ADSR + filter)");
+/*
+ * Post a ping; the worklet replies with `{type:'pong', meters:number[10]}`,
+ * which the permanent listener in ensureRouter() folds into lastMeters.
+ * The rack UI calls this on a 30Hz interval to refresh the meter bar.
+ */
+export function pingObxd(): void {
+    workletNode?.port.postMessage({ type: "ping" });
 }
+
+/* Last received per-instance RMS values (length 10, zeros before first pong). */
+export function getObxdInstanceMeters(): Float32Array {
+    return lastMeters;
+}
+
+// ---------------------------------------------------------------------------
+// Selection state — UI-only concern.
+// ---------------------------------------------------------------------------
+
+export function getObxdSelectedInstance(): number {
+    return selectedInstance;
+}
+
+export function setObxdSelectedInstance(id: number): void {
+    selectedInstance = id;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy / utility
+// ---------------------------------------------------------------------------
 
 export function isObxdReady(): boolean {
     return workletNode !== null;

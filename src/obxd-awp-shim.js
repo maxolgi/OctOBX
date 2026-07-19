@@ -33,8 +33,14 @@ var location = {
 };
 
 var fetch = function fetch(_url, _opts) {
-    return Promise.reject(new Error('fetch() is not available in AudioWorkletGlobalScope; '
-        + 'WASM bytes must be pre-fetched on the main thread and passed via processorOptions'));
+    // Never resolves, never rejects. The patched WebAssembly.instantiateStreaming
+    // (installed by obxd-processor.tail.js's ensureModule) wins the race with the
+    // pre-fetched bytes from processorOptions, so emcc's loader never actually
+    // awaits this promise. Returning a forever-pending promise (rather than
+    // rejecting) avoids an "Uncaught (in promise)" log from emcc's fetch
+    // fallback path that doesn't attach a .catch() — purely cosmetic, but
+    // keeps the console clean.
+    return new Promise(function () {});
 };
 
 var importScripts = function importScripts() {

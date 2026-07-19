@@ -1,5 +1,5 @@
 {
-  "name": "octodaw",
+  "name": "octobx",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,14 +9,7 @@
     "preview": "vite preview",
     "serve": "python3 serve.py"
   },
-  "dependencies": {
-    "@opendaw/lib-std": "latest",
-    "@opendaw/lib-dsp": "latest",
-    "@opendaw/lib-dom": "latest",
-    "@opendaw/studio-boxes": "latest",
-    "@opendaw/studio-adapters": "latest",
-    "@opendaw/studio-core": "latest"
-  },
+  "dependencies": {},
   "devDependencies": {
     "typescript": "^5.7.0",
     "vite": "^6.0.0"

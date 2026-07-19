@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OctoDAW — Octopus × openDAW</title>
+    <title>OctOBX — Octopus + OB-XD in your browser</title>
     <style>
         :root {
             --bg: #1a1a1a;
@@ -119,35 +119,6 @@
             border-radius: 3px;
         }
         #oct-midi-rescan:hover { background: #444; }
-        #oct-synth-power, #oct-synth-visibility {
-            background: #333;
-            color: var(--text-dim);
-            border: 1px solid var(--border);
-            padding: 6px 12px;
-            font-family: monospace;
-            font-size: 12px;
-            cursor: pointer;
-            border-radius: 3px;
-            min-width: 110px;
-        }
-        #oct-synth-power:hover, #oct-synth-visibility:hover { background: #444; }
-        #oct-synth-power:disabled, #oct-synth-visibility:disabled { opacity: 0.6; cursor: wait; }
-        #oct-synth-power.synth-on {
-            background: #1a3a1a;
-            color: #0f0;
-            border-color: #0c0;
-        }
-        /* Visibility button "panel visible" state — subdued so it never
-           reads as the bright synth-on green of #oct-synth-power. */
-        #oct-synth-visibility.synth-visible {
-            background: #2a3a2a;
-            color: #8c8;
-            border-color: #464;
-        }
-        #oct-synth-gain {
-            width: 90px;
-            vertical-align: middle;
-        }
         #octopus-grid {
             padding: 16px;
         }
@@ -272,6 +243,75 @@
             color: var(--accent);
             font-size: 12px;
         }
+        /* Instance selector + per-instance controls in the panel header.
+           Match the transport-bar select styling so the whole panel reads
+           as part of the same UI. */
+        #obxd-instance-selector {
+            background: #1a1a1a;
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            font-family: monospace;
+            font-size: 11px;
+            border-radius: 3px;
+            min-width: 170px;
+        }
+        #obxd-instance-polyphony,
+        #obxd-instance-channel {
+            background: #1a1a1a;
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 3px 6px;
+            font-family: monospace;
+            font-size: 11px;
+            border-radius: 3px;
+        }
+        .obxd-header-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            color: var(--text-dim);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        /* Per-instance power button — green when on (matches the knob
+           accent), subdued when off. */
+        #obxd-instance-power {
+            background: #333;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+            padding: 5px 12px;
+            font-family: monospace;
+            font-size: 11px;
+            cursor: pointer;
+            border-radius: 3px;
+            min-width: 44px;
+        }
+        #obxd-instance-power:hover { background: #444; }
+        #obxd-instance-power.synth-on {
+            background: #1a3a1a;
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+        /* Per-instance RMS meter. Inner bar width is driven by JS at
+           30Hz from pong `meters[selectedInstance]`. Gradient gives a
+           quick visual cue from green (quiet) to red (loud). */
+        #obxd-instance-meter.obxd-meter {
+            width: 80px;
+            height: 6px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+            flex: 0 0 auto;
+        }
+        #obxd-instance-meter .obxd-meter-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(to right, #0c0, #cc0, #f00);
+            transition: width 50ms linear;
+        }
         #obxd-patch-name {
             color: var(--text);
             font-size: 11px;
@@ -298,7 +338,7 @@
             border-radius: 3px;
         }
         .obxd-file-btn:hover { background: #444; }
-        #obxd-reset-btn, #obxd-panic-btn {
+        #obxd-reset-btn, #obxd-panic-btn, #obxd-panic-all-btn {
             background: #333;
             color: var(--text);
             border: 1px solid var(--border);
@@ -309,8 +349,8 @@
             border-radius: 3px;
         }
         #obxd-reset-btn:hover { background: #444; }
-        #obxd-panic-btn { color: #f55; border-color: #533; }
-        #obxd-panic-btn:hover { background: #422; }
+        #obxd-panic-btn, #obxd-panic-all-btn { color: #f55; border-color: #533; }
+        #obxd-panic-btn:hover, #obxd-panic-all-btn:hover { background: #422; }
 
         .obxd-knob-grid {
             display: flex;
@@ -413,10 +453,6 @@
     <span>MIDI In:</span>
     <select id="oct-midi-input"><option value="">None</option></select>
     <button id="oct-midi-rescan" title="Re-scan MIDI ports">↻ Rescan</button>
-    <span>Synth:</span>
-    <button id="oct-synth-power" aria-pressed="false">Synth: Off</button>
-    <button id="oct-synth-visibility" aria-pressed="false">Show Synth</button>
-    <input id="oct-synth-gain" type="range" min="0" max="1" step="0.01" value="0.7" title="Internal synth gain">
     <span style="margin-left:auto">View:</span>
     <select id="view-toggle">
         <option value="classic">Classic (full panel)</option>
@@ -428,16 +464,60 @@
     <div id="view-classic"></div>
     <div id="view-modern" style="display:none"></div>
 
-    <div id="obxd-panel" class="obxd-panel" style="display:none;">
+    <div id="obxd-panel" class="obxd-panel">
         <div class="obxd-panel-header">
             <span>OB-XD</span>
-            <span id="obxd-patch-name">&mdash; init &mdash;</span>
-            <label class="obxd-file-btn">
-                Load .fxp
+            <select id="obxd-instance-selector">
+                <option value="0">Instance 1 — Analog Pad</option>
+                <option value="1">Instance 2 — Bass Pulse</option>
+                <option value="2">Instance 3 — Lead Saw</option>
+                <option value="3">Instance 4 — Pluck</option>
+                <option value="4">Instance 5 — Strings</option>
+                <option value="5">Instance 6 — Keys</option>
+                <option value="6">Instance 7 — Drone</option>
+                <option value="7">Instance 8 — Stab</option>
+                <option value="8">Instance 9 — Noise Hat</option>
+                <option value="9">Instance 10 — Kick</option>
+            </select>
+            <button id="obxd-instance-power" aria-pressed="true">On</button>
+            <label class="obxd-header-label">Voices:
+                <select id="obxd-instance-polyphony">
+                    <option value="1">1 (mono)</option>
+                    <option value="2">2</option>
+                    <option value="4">4</option>
+                    <option value="8">8</option>
+                </select>
+            </label>
+            <label class="obxd-header-label">MIDI Ch:
+                <select id="obxd-instance-channel">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                    <option value="7">7</option>
+                    <option value="8">8</option>
+                    <option value="9">9</option>
+                    <option value="10">10</option>
+                    <option value="11">11</option>
+                    <option value="12">12</option>
+                    <option value="13">13</option>
+                    <option value="14">14</option>
+                    <option value="15">15</option>
+                    <option value="16">16</option>
+                </select>
+            </label>
+            <div id="obxd-instance-meter" class="obxd-meter">
+                <div class="obxd-meter-bar"></div>
+            </div>
+            <span id="obxd-patch-name">— Analog Pad —</span>
+            <label class="obxd-file-btn">Load .fxp
                 <input id="obxd-fxp-input" type="file" accept=".fxp,.fxb" hidden>
             </label>
             <button id="obxd-reset-btn" type="button">Reset</button>
             <button id="obxd-panic-btn" type="button">Panic</button>
+            <button id="obxd-panic-all-btn" type="button">Panic All</button>
         </div>
         <div id="obxd-knob-grid" class="obxd-knob-grid"></div>
     </div>
