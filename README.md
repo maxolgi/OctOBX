@@ -697,8 +697,6 @@ the dev server, and verify in the browser console:
 - `AGENTS.md` — engineering guide for AI assistants (firmware submodule,
   single-TU build, eCos shim mappings, runtime architecture, exported
   functions, MIDI routing, MIR format, known issues).
-- `obx.md` — design doc and phase plan for the multi-instance OB-XD
-  integration (also covers hard-won AWP/JUCE/HEAPF32 quirks).
 - `firmware/OCT_OS/COPYING.txt`, `firmware/OCT_OS/FACTORY_RESTORE.txt` —
   firmware license and factory-restore notes from the OCT_CE_OS submodule.
 
@@ -714,8 +712,7 @@ the dev server, and verify in the browser console:
    with `./build.sh synth` to embed real patches.
 3. **AudioWorklet reply correlation** is correct but untyped —
    `obxd-audio.ts` uses an `unknown`-typed predicate router to avoid
-   racing `port.onmessage` reassignments. See "MessagePort quirks" in
-   `obx.md`.
+   racing `port.onmessage` reassignments.
 4. **No automated tests** — verification is manual (see Testing above).
 
 ## License

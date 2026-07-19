@@ -51,8 +51,7 @@ const INSTANCE_COUNT = 10;
 
 // Patch name fallbacks used by the UI label before/without a real .fxp
 // load. The instance selector's <option> text uses these too. Mirrors
-// the names embedded on the C side as factory patches (patches.h, see
-// obx.md "Factory patches").
+// the names embedded on the C side as factory patches (patches.h).
 const FACTORY_PATCH_NAMES = [
     "Analog Pad",
     "Bass Pulse",
@@ -80,7 +79,7 @@ const instancePolyphony = DEFAULT_POLYPHONY.slice();
 const instancePatchName = FACTORY_PATCH_NAMES.slice();
 
 // EMS clips RMS to a 0..0.5 ish range for typical patches; *200 maps
-// 0.5 -> 100% bar fill. Tunable — see obx.md "Per-instance metering".
+// 0.5 -> 100% bar fill. Tunable.
 const METER_SCALE = 200;
 const METER_INTERVAL_MS = 33;   // ~30Hz
 

@@ -329,7 +329,7 @@ dev server, and verify in the browser console:
    embed real patches.
 3. **AudioWorklet reply correlation** is correct but untyped — `obxd-audio.ts`
    uses an `unknown`-typed predicate router to avoid racing `port.onmessage`
-   reassignments. See "MessagePort quirks" in `obx.md`.
+   reassignments.
 4. **No automated tests** — verification is manual (see Testing above).
 
 ## License
@@ -343,7 +343,5 @@ the License section in README for the table.
 
 - `README.md` — full project documentation (architecture, source-file specs,
   OB-XD integration, HTTPS/COOP-COEP, MIR format, known issues).
-- `obx.md` — design doc and phase plan for the multi-instance OB-XD integration
-  (also covers hard-won AWP/JUCE/HEAPF32 quirks).
 - `firmware/OCT_OS/COPYING.txt`, `firmware/OCT_OS/FACTORY_RESTORE.txt` —
   firmware license and factory-restore notes from the OCT_CE_OS submodule.

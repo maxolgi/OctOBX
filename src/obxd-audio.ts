@@ -1,6 +1,6 @@
 /*
  * obxd-audio.ts — Main-thread bootstrap + per-instance API for the
- * multi-instance OB-XD synth (Phase B/C of obx.md).
+ * multi-instance OB-XD synth.
  *
  * The AudioWorklet + WASM loading strategy is unchanged from Phase 1:
  * AudioWorkletGlobalScope forbids importScripts() AND dynamic import(),
@@ -37,7 +37,7 @@ let lastMeters = new Float32Array(10);
  * (fxp_loaded, param_value). Multiple concurrent callers (e.g. 30+
  * getObxdInstanceParam calls from syncObxdControlsFromEngine) all install
  * their predicate into this array instead of swapping port.onmessage,
- * which would race and lose replies. See "MessagePort quirks" in obx.md.
+ * which would race and lose replies.
  */
 interface PendingReply {
     predicate: (msg: unknown) => boolean;

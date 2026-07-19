@@ -1,6 +1,6 @@
 /*
  * obxd-bridge.ts — Channel-routed MIDI fan-out for the multi-instance
- * OB-XD synth (Phase B of obx.md).
+ * OB-XD synth.
  *
  * Same plumbing pattern as a hypothetical external-synth bridge: the
  * single drain loop in midi-output.ts (drainMidiToHardware) owns
