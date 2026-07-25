@@ -20,6 +20,7 @@ export interface OctopusWasmModule {
     _get_tempo(): number;
     _get_zoom_level(): number;
     _page_refresh(): void;
+    _wasm_check_refresh(): number;
     _wasm_has_midi_event(): number;
     _wasm_get_midi_event(): number;
     _wasm_drain_midi_batch(max_count: number): number;

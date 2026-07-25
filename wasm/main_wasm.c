@@ -362,13 +362,66 @@ unsigned char EMSCRIPTEN_KEEPALIVE get_zoom_level(void) {
     return G_zoom_level;
 }
 
-/* Page refresh — called from JS at ~60Hz via requestAnimationFrame */
+/* Page refresh — called from JS at ~60Hz via requestAnimationFrame.
+ *
+ * Kept for backward compatibility. New callers should use
+ * wasm_check_refresh() instead, which skips the expensive
+ * Page_full_refresh() when the firmware hasn't requested one.
+ */
 void EMSCRIPTEN_KEEPALIVE page_refresh(void) {
     blink_frame++;
     if (blink_frame % BLINK_FRAMES == 0) {
         G_master_blinker ^= 1;
     }
     Page_full_refresh();
+}
+
+/*
+ * Dirty-checked refresh — toggles the blink at the same rate as
+ * page_refresh() but only runs the expensive Page_full_refresh() when
+ * the display actually needs updating.
+ *
+ * Two refresh triggers:
+ *
+ *  1. Semaphore dirty — the firmware called Page_requestRefresh() (key
+ *     press, rotary, MIDI input, etc.). If the showPage_thread hasn't
+ *     consumed it yet, we drain and refresh ourselves.
+ *
+ *  2. Sequencer running — CONSTANT_BLINK mode (see defs_general.h) means
+ *     the timer interrupt does NOT post sem_showPage per-tick, so the
+ *     semaphore stays empty during playback. The lauflicht (playhead)
+ *     moves every step and needs a continuous refresh, so we force one
+ *     while G_run_bit is set.
+ *
+ * When the sequencer is stopped AND the firmware hasn't requested a
+ * refresh, this function is nearly free — just a blink tick and a
+ * sem_getvalue. That's the main CPU win over the old unconditional
+ * page_refresh().
+ *
+ * Returns 1 if a full refresh was performed, 0 otherwise.
+ */
+int EMSCRIPTEN_KEEPALIVE wasm_check_refresh(void) {
+    blink_frame++;
+    if (blink_frame % BLINK_FRAMES == 0) {
+        G_master_blinker ^= 1;
+    }
+
+    int semValue = 0;
+    cyg_semaphore_peek(&sem_showPage, &semValue);
+    if (semValue > 0) {
+        while (cyg_semaphore_trywait(&sem_showPage) == 0) {
+            /* drain all pending requests */
+        }
+        Page_full_refresh();
+        return 1;
+    }
+
+    if (G_run_bit) {
+        Page_full_refresh();
+        return 1;
+    }
+
+    return 0;
 }
 
 /* Save/load state to Emscripten virtual filesystem */

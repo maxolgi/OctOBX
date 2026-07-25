@@ -54,7 +54,7 @@ SRCS = main_wasm.c \
 # Emscripten link flags
 LDFLAGS = -sWASM=1 \
     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32,HEAPF64,getValue,setValue,UTF8ToString,FS \
-    -sEXPORTED_FUNCTIONS=_engine_init,_wasm_key_press,_wasm_rotary,_wasm_transport,_wasm_pause,_wasm_set_tempo,_wasm_midi_input,_wasm_save_state,_wasm_load_state,_wasm_shutdown,_get_mir_ptr,_get_processed_mir_ptr,_get_run_bit,_get_tempo,_get_zoom_level,_page_refresh,_wasm_has_midi_event,_wasm_get_midi_event,_wasm_drain_midi_batch,_get_midi_batch_events_ptr,_get_midi_batch_ts_ptr,_wasm_get_midi_dropped_count,_wasm_get_tick_ns,_wasm_get_sequencer_running,_wasm_get_tick_count \
+    -sEXPORTED_FUNCTIONS=_engine_init,_wasm_key_press,_wasm_rotary,_wasm_transport,_wasm_pause,_wasm_set_tempo,_wasm_midi_input,_wasm_save_state,_wasm_load_state,_wasm_shutdown,_get_mir_ptr,_get_processed_mir_ptr,_get_run_bit,_get_tempo,_get_zoom_level,_page_refresh,_wasm_check_refresh,_wasm_has_midi_event,_wasm_get_midi_event,_wasm_drain_midi_batch,_get_midi_batch_events_ptr,_get_midi_batch_ts_ptr,_wasm_get_midi_dropped_count,_wasm_get_tick_ns,_wasm_get_sequencer_running,_wasm_get_tick_count \
     -sALLOW_MEMORY_GROWTH=1 \
     -sINITIAL_MEMORY=67108864 \
     -sENVIRONMENT=web \

@@ -39,16 +39,9 @@ export function startOctopusPanel(module: OctopusWasmModule): () => void {
             }
         }
 
-        if (renderFrame & 1) {
-            requestAnimationFrame(renderLoop);
-            return;
-        }
+        module._wasm_check_refresh();
 
-        module._page_refresh();
-
-        if (!mirAddr) {
-            mirAddr = module._get_processed_mir_ptr();
-        }
+        mirAddr = module._get_processed_mir_ptr();
 
         if (mirAddr) {
             const mir = new Uint8Array(module.HEAPU8.buffer, mirAddr, MIR_SIZE);
