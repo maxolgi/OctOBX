@@ -279,10 +279,8 @@ int EMSCRIPTEN_KEEPALIVE engine_init(void) {
 
     fprintf(stderr, "engine_init: ready (tempo=%d BPM)\n", G_master_tempo);
 
-    /* Initialize sequencer transport state (matches main_linux.c) */
-    sequencer_START();
-
-    /* Start the sequencer thread */
+    /* Start the sequencer thread (G_run_bit stays 0 until the user
+     * presses PLAY — don't auto-start playback on page load). */
     start_sequencer_thread();
 
     return 0;

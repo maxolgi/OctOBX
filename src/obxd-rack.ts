@@ -331,6 +331,12 @@ function wireLazyAudioInit(): void {
         playBtn.addEventListener("click", startAudioInit);
     }
 
+    // Any user gesture satisfies the AudioContext autoplay policy.
+    // A single pointerdown anywhere on the page (step pad, knob, circle
+    // button, etc.) boots the synth so notes are audible from the first
+    // interaction — not just after pressing PLAY.
+    document.addEventListener("pointerdown", () => startAudioInit(), { once: true });
+
     // Fallback — poll the sequencer run-bit for the 0->1 transition.
     // Catches Octopus-panel PLAY (#ck-229), modern-grid PLAY, MIDI START,
     // and any other path that doesn't go through #oct-play. Cheap: one
