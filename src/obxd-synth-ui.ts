@@ -3,13 +3,13 @@
  *
  * Builds the grouped control layout (~30 controls total):
  *
+ *   MASTER          — VOLUME/VOICE_COUNT/OCTAVE/TUNE/PORTAMENTO/UNISON
  *   OSCILLATOR      — OSC1Saw/OSC1Pul/OSC2Saw/OSC2Pul/OSC1MIX/OSC2MIX/OSC2_DET/PW
  *   FILTER          — CUTOFF/RESONANCE/ENVELOPE_AMT/MULTIMODE/BRIGHTNESS/NOISEMIX
  *                      + FOURPOLE/BANDPASS/FILTER_WARM (toggles)
  *   LOUDNESS ENV    — LATK/LDEC/LSUS/LREL
  *   FILTER ENV      — FATK/FDEC/FSUS/FREL
  *   LFO             — LFOFREQ/LFO1AMT/LFOFILTER/LFOOSC1/LFOPW1 + LFOSINWAVE (toggle)
- *   MASTER          — VOLUME/VOICE_COUNT/OCTAVE/TUNE/PORTAMENTO/UNISON
  *
  * Indices match ParamsEnum.h. Each control's `initial` is the engine's
  * factory-patch state baked in C, so the UI renders correctly on first
@@ -96,6 +96,17 @@ const OSC2Pul = 36;
 // (wasm/obxd/main_obxd.cpp `apply_defaults_for_instance()`).
 const SECTIONS: Section[] = [
     {
+        title: "Master",
+        controls: [
+            { kind: "knob", idx: VOLUME,     label: "Volume", initial: 0.5, default: 0.5 },
+            { kind: "knob", idx: VOICE_COUNT,label: "Voices", initial: 0.25, default: 0.25 },
+            { kind: "knob", idx: OCTAVE,     label: "Octave", initial: 0.5, default: 0.5 },
+            { kind: "knob", idx: TUNE,       label: "Tune",   initial: 0.5, default: 0.5 },
+            { kind: "knob", idx: PORTAMENTO, label: "Porta",  initial: 0.0, default: 0.0 },
+            { kind: "knob", idx: UNISON,     label: "Unison", initial: 0.0, default: 0.0 },
+        ],
+    },
+    {
         title: "Oscillator",
         controls: [
             { kind: "knob", idx: OSC1Saw,  label: "Osc1 Saw", initial: 1.0, default: 1.0 },
@@ -149,17 +160,6 @@ const SECTIONS: Section[] = [
             { kind: "knob", idx: LFOOSC1,   label: "Osc1",   initial: 0.0, default: 0.0 },
             { kind: "knob", idx: LFOPW1,    label: "PW1",    initial: 0.0, default: 0.0 },
             { kind: "toggle", idx: LFOSINWAVE, label: "Sine", initial: 0 },
-        ],
-    },
-    {
-        title: "Master",
-        controls: [
-            { kind: "knob", idx: VOLUME,     label: "Volume", initial: 0.5, default: 0.5 },
-            { kind: "knob", idx: VOICE_COUNT,label: "Voices", initial: 0.25, default: 0.25 },
-            { kind: "knob", idx: OCTAVE,     label: "Octave", initial: 0.5, default: 0.5 },
-            { kind: "knob", idx: TUNE,       label: "Tune",   initial: 0.5, default: 0.5 },
-            { kind: "knob", idx: PORTAMENTO, label: "Porta",  initial: 0.0, default: 0.0 },
-            { kind: "knob", idx: UNISON,     label: "Unison", initial: 0.0, default: 0.0 },
         ],
     },
 ];
