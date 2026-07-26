@@ -18,6 +18,8 @@
  * explicitly so a future "multi-select" UI doesn't need an API change.
  */
 
+import { getOctopusModule } from "./octopus-module";
+
 let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let moduleAdded = false;
@@ -47,6 +49,14 @@ interface PendingReply {
 const pendingReplies: PendingReply[] = [];
 let routerInstalled = false;
 
+// Hardware MIDI forward handler — called when AudioWorklet forwards
+// events from the SAB ring buffer for hardware output. Set by midi-output.ts.
+let hwMidiHandler: ((packed: number[]) => void) | null = null;
+
+export function setHwMidiHandler(cb: ((packed: number[]) => void) | null): void {
+    hwMidiHandler = cb;
+}
+
 function ensureRouter(): void {
     if (routerInstalled || !workletNode) return;
     routerInstalled = true;
@@ -65,6 +75,15 @@ function ensureRouter(): void {
                 for (let i = 0; i < 10 && i < meters.length; i++) {
                     lastMeters[i] = Number(meters[i]) || 0;
                 }
+            }
+        }
+
+        // Hardware MIDI forward: AudioWorklet sends packed events from
+        // the SAB ring buffer for hardware synth output.
+        if ((msg as { type?: string }).type === "hw_midi") {
+            const packed = (msg as { packed?: number[] }).packed;
+            if (Array.isArray(packed) && hwMidiHandler) {
+                hwMidiHandler(packed);
             }
         }
 
@@ -125,11 +144,20 @@ export async function setupObxdAudio(): Promise<void> {
     }
     const wasmBinary = await wasmResponse.arrayBuffer();
 
+    // Gather the Octopus engine's SharedArrayBuffer-backed MIDI synth ring
+    // and its three byte offsets. The worklet reads events directly from
+    // this ring inside process() — no main-thread round trip per batch.
+    const octopusModule = getOctopusModule();
+    const midiSab = octopusModule.HEAPU8.buffer;
+    const midiSynthRingOffset = octopusModule._get_midi_synth_ring_ptr();
+    const midiSynthHeadOffset = octopusModule._get_midi_synth_ring_head_ptr();
+    const midiSynthTailOffset = octopusModule._get_midi_synth_ring_tail_ptr();
+
     workletNode = new AudioWorkletNode(audioContext, "obxd-processor", {
         numberOfInputs: 0,
         numberOfOutputs: 1,
         outputChannelCount: [2],
-        processorOptions: { wasmBinary },
+        processorOptions: { wasmBinary, midiSab, midiSynthRingOffset, midiSynthHeadOffset, midiSynthTailOffset },
     });
     workletNode.connect(audioContext.destination);
 
@@ -169,6 +197,10 @@ export async function setupObxdAudio(): Promise<void> {
                 // is safe too, but we wait for ready so the router doesn't
                 // intercept the ready message by accident.)
                 ensureRouter();
+                // Send default MIDI routing: channels 1-10 → instances 0-9
+                const defaultRouting = new Array(17).fill(-1);
+                for (let i = 0; i < 10; i++) defaultRouting[i + 1] = i;
+                sendObxdMidiRouting(defaultRouting);
                 resolve();
             } else if (msg.type === "error") {
                 cleanup();
@@ -261,6 +293,16 @@ export function setObxdInstanceGain(id: number, gain01: number): void {
  */
 export function sendObxdInstanceMidi(id: number, status: number, d1: number, d2: number): void {
     workletNode?.port.postMessage({ type: "midi", instance_id: id, status, d1, d2 });
+}
+
+/*
+ * Push the channel→instance routing table into the AudioWorklet. The
+ * routing is an array of 17 ints (index = MIDI channel 0-16, value =
+ * instance_id 0-9 or -1 for unmapped). The worklet uses this to dispatch
+ * events it reads directly from the Octopus engine's SAB MIDI ring.
+ */
+export function sendObxdMidiRouting(routing: number[]): void {
+    workletNode?.port.postMessage({ type: "set_routing", routing });
 }
 
 /* Hard silence — allSoundOff on one instance (resets envelopes too). */

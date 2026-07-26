@@ -52,6 +52,17 @@ static volatile uint32_t midi_dropped_count = 0;
 
 static pthread_mutex_t midi_ring_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* ============================================================ */
+/* Synth ring buffer — read directly by AudioWorklet via SAB    */
+/* ============================================================ */
+
+#define MIDI_SYNTH_RING_SIZE 512
+#define MIDI_SYNTH_RING_MASK (MIDI_SYNTH_RING_SIZE - 1)
+
+static uint32_t midi_synth_ring[MIDI_SYNTH_RING_SIZE];
+static volatile int midi_synth_ring_head = 0;
+static volatile int midi_synth_ring_tail = 0;
+
 static void midi_ring_push(uint8_t status, uint8_t data1, uint8_t data2, uint8_t channel) {
     pthread_mutex_lock(&midi_ring_mutex);
     int next = (midi_ring_tail + 1) & MIDI_RING_MASK;
@@ -66,6 +77,22 @@ static void midi_ring_push(uint8_t status, uint8_t data1, uint8_t data2, uint8_t
     midi_ring_ts[midi_ring_tail] = emscripten_get_now();
     midi_ring_tail = next;
     pthread_mutex_unlock(&midi_ring_mutex);
+
+    /* Also push to the synth ring buffer (lock-free, read by AudioWorklet) */
+    {
+        int stail = __atomic_load_n(&midi_synth_ring_tail, __ATOMIC_RELAXED);
+        int snext = (stail + 1) & MIDI_SYNTH_RING_MASK;
+        int shead = __atomic_load_n(&midi_synth_ring_head, __ATOMIC_ACQUIRE);
+        if (snext == shead) {
+            /* Overflow — advance head (overwrite oldest) */
+            __atomic_store_n(&midi_synth_ring_head, (shead + 1) & MIDI_SYNTH_RING_MASK, __ATOMIC_RELEASE);
+        }
+        midi_synth_ring[stail] = (uint32_t)status
+                               | ((uint32_t)data1 << 8)
+                               | ((uint32_t)data2 << 16)
+                               | ((uint32_t)channel << 24);
+        __atomic_store_n(&midi_synth_ring_tail, snext, __ATOMIC_RELEASE);
+    }
 }
 
 /* ============================================================ */
@@ -118,6 +145,18 @@ uint32_t* EMSCRIPTEN_KEEPALIVE get_midi_batch_events_ptr(void) {
 
 double* EMSCRIPTEN_KEEPALIVE get_midi_batch_ts_ptr(void) {
     return midi_batch_ts;
+}
+
+uint32_t* EMSCRIPTEN_KEEPALIVE get_midi_synth_ring_ptr(void) {
+    return midi_synth_ring;
+}
+
+int* EMSCRIPTEN_KEEPALIVE get_midi_synth_ring_head_ptr(void) {
+    return (int*)&midi_synth_ring_head;
+}
+
+int* EMSCRIPTEN_KEEPALIVE get_midi_synth_ring_tail_ptr(void) {
+    return (int*)&midi_synth_ring_tail;
 }
 
 uint32_t EMSCRIPTEN_KEEPALIVE wasm_get_midi_dropped_count(void) {

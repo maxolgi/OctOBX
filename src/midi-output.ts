@@ -11,6 +11,7 @@
 
 import type { OctopusWasmModule } from "./octopus-types";
 import { openMidiAccess, pollForPorts } from "./midi-access";
+import { isObxdReady, setHwMidiHandler } from "./obxd-audio";
 
 /*
  * Handler invoked once per frame with the batch of events drained from the
@@ -51,6 +52,7 @@ function frameMidi(status: number, d1: number, d2: number): number[] {
  * jitter instead of up to ±16.67ms of batch jitter.
  */
 const MIDI_FORWARD_OFFSET_MS = 20;
+const HW_FORWARD_OFFSET_AWP_MS = 5;
 
 export class HardwareMidiOutput {
     private midiAccess: MIDIAccess | null = null;
@@ -169,7 +171,11 @@ export function drainMidiToHardware(
 
         if (eventsPtr && tsPtr) {
             const count = module._wasm_drain_midi_batch(128);
-            if (count > 0) {
+            // When the AudioWorklet is up it forwards events at audio-quantum
+            // rate (~2.9ms) via hw_midi messages. We still drain midi_ring to
+            // prevent overflow, but skip the hardware send — the hw_midi
+            // handler does it with tighter timing.
+            if (count > 0 && !isObxdReady()) {
                 const events = new Uint32Array(module.HEAPU32.buffer, eventsPtr, count);
                 const timestamps = new Float64Array(module.HEAPF64.buffer, tsPtr, count);
 
@@ -201,6 +207,21 @@ export function drainMidiToHardware(
         requestAnimationFrame(drain);
     }
 
+    // Register handler for events forwarded by the AudioWorklet at
+    // audio-quantum rate (~2.9ms). Tighter than the 60Hz RAF fallback.
+    setHwMidiHandler((packed: number[]) => {
+        const deliveryTime = performance.now() + HW_FORWARD_OFFSET_AWP_MS;
+        for (const ev of packed) {
+            const status = ev & 0xff;
+            const data1 = (ev >> 8) & 0xff;
+            const data2 = (ev >> 16) & 0xff;
+            output.send(status, data1, data2, deliveryTime);
+        }
+    });
+
     requestAnimationFrame(drain);
-    return () => { running = false; };
+    return () => {
+        running = false;
+        setHwMidiHandler(null);
+    };
 }

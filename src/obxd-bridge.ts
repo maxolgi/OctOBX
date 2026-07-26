@@ -22,7 +22,7 @@
  * clicks PLAY to bring up the audio engine.
  */
 
-import { isObxdReady, sendObxdInstanceMidi } from "./obxd-audio";
+import { isObxdReady, sendObxdMidiRouting, sendObxdInstanceMidi } from "./obxd-audio";
 
 // Re-exported so main.ts can import both the handler factory and the
 // BatchDrainHandler type from one place.
@@ -54,6 +54,16 @@ for (let i = 0; i < INSTANCE_COUNT; i++) instanceChannels.set(i, i + 1);
 
 export function setObxdInstanceChannel(id: number, channel: number): void {
     instanceChannels.set(id, Math.max(1, Math.min(16, channel | 0)));
+    syncRoutingToAudioWorklet();
+}
+
+function syncRoutingToAudioWorklet(): void {
+    if (!isObxdReady()) return;
+    const routing = new Array(17).fill(-1);
+    for (const [id, ch] of instanceChannels) {
+        routing[ch] = id;
+    }
+    sendObxdMidiRouting(routing);
 }
 
 export function getObxdInstanceChannel(id: number): number {

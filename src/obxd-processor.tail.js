@@ -38,6 +38,14 @@ let bufLPtr = 0;
 let bufRPtr = 0;
 let pendingMidi = [];   // queued via port.onmessage, drained in process()
 
+// SAB-based MIDI ring buffer (direct from Octopus sequencer, no main thread)
+let midiSabRing = null;      // Uint32Array view over SAB
+let midiSabHead = null;      // Int32Array view (1 element)
+let midiSabTail = null;      // Int32Array view (1 element)
+const MIDI_SYNTH_RING_SIZE = 512;
+const MIDI_SYNTH_RING_MASK = 511;
+let midiRouting = null;      // array[17]: channel → instance_id (-1 = unmapped)
+
 // Cached HEAPF32 views into the WASM linear memory. The raw `wasmModule.HEAPF32`
 // reference is replaced by emcc whenever WASM memory grows
 // (-sALLOW_MEMORY_GROWTH=1), so we cache both the underlying ArrayBuffer
@@ -149,6 +157,25 @@ class ObxdProcessor extends AudioWorkletProcessor {
             '; wasmBytesArg type:', typeof wasmBytesArg,
             '; byteLength:', wasmBytesArg ? wasmBytesArg.byteLength : 0);
 
+        // Wire up the Octopus engine's SAB-backed MIDI ring. The main thread
+        // passes the SharedArrayBuffer (octopusModule.HEAPU8.buffer) plus the
+        // three byte offsets returned by the C getters. We build typed-array
+        // views over them and read events directly in process().
+        const midiSabArg = options && options.processorOptions && options.processorOptions.midiSab;
+        if (midiSabArg) {
+            try {
+                midiSabRing = new Uint32Array(midiSabArg, options.processorOptions.midiSynthRingOffset, MIDI_SYNTH_RING_SIZE);
+                midiSabHead = new Int32Array(midiSabArg, options.processorOptions.midiSynthHeadOffset, 1);
+                midiSabTail = new Int32Array(midiSabArg, options.processorOptions.midiSynthTailOffset, 1);
+                console.log('[obxd-processor] SAB MIDI ring connected');
+            } catch (e) {
+                console.warn('[obxd-processor] SAB MIDI ring init failed:', e && e.message);
+            }
+        }
+        // Default routing: channels 1-10 → instances 0-9
+        midiRouting = new Array(17).fill(-1);
+        for (let i = 0; i < 10; i++) midiRouting[i + 1] = i;
+
         ensureModule(wasmBytesArg).then(() => {
             this.port.postMessage({ type: 'ready' });
         }).catch((e) => {
@@ -171,6 +198,11 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     // Drained in process() so we don't dispatch from the
                     // message thread while the audio thread is mid-render.
                     pendingMidi.push(msg);
+                    break;
+                case 'set_routing':
+                    if (msg.routing && Array.isArray(msg.routing)) {
+                        midiRouting = msg.routing.slice();
+                    }
                     break;
                 case 'set_active':
                     if (wasmModule) wasmModule._obxd_set_active(id, msg.active ? 1 : 0);
@@ -282,6 +314,35 @@ class ObxdProcessor extends AudioWorkletProcessor {
 
         const out = outputs[0];
         if (!out || out.length === 0) return true;
+
+        // Read MIDI events directly from the Octopus SAB ring buffer.
+        // This runs BEFORE the pendingMidi drain so the lowest-latency path
+        // (lock-free, no main-thread round trip) always wins. System
+        // real-time (status >= 0xF0) is skipped — those have no channel.
+        if (midiSabRing && midiSabHead && midiSabTail && wasmModule) {
+            const tail = Atomics.load(midiSabTail, 0);
+            let head = Atomics.load(midiSabHead, 0);
+            const hwBatch = [];
+            while (head !== tail) {
+                const packed = Atomics.load(midiSabRing, head);
+                const status = packed & 0xff;
+                if (status < 0xf0) {
+                    const channel = (packed >> 24) & 0xff;
+                    const instanceId = midiRouting[channel];
+                    if (instanceId !== undefined && instanceId >= 0) {
+                        const d1 = (packed >> 8) & 0xff;
+                        const d2 = (packed >> 16) & 0xff;
+                        wasmModule._obxd_midi_in(instanceId, status, d1, d2);
+                    }
+                }
+                hwBatch.push(packed);
+                head = (head + 1) & MIDI_SYNTH_RING_MASK;
+            }
+            Atomics.store(midiSabHead, 0, head);
+            if (hwBatch.length > 0) {
+                this.port.postMessage({ type: 'hw_midi', packed: hwBatch });
+            }
+        }
 
         // Drain queued MIDI into the engine before rendering this quantum.
         // Timing granularity is the 128-sample AWP quantum (~2.9ms @

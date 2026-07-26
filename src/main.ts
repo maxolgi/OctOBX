@@ -3,12 +3,13 @@
  *
  * Loads the Octopus WASM engine, starts the grid panel, brings up the
  * OB-XD synth rack, and wires transport + hardware MIDI. The drain loop
- * is started early so the OB-XD bridge (installed by setupObxdRack) can
- * plug into it on the first PLAY.
+ * is started early so MIDI events reach the hardware output before the
+ * panel's DOM updates consume the frame. The OB-XD AudioWorklet reads
+ * MIDI directly from the SharedArrayBuffer, so it is not wired into the
+ * drain loop.
  */
 
 import { loadOctopusModule } from "./octopus-module";
-import { createObxdBridgeHandler, type BatchDrainHandler } from "./obxd-bridge";
 import { setupTransportSync } from "./transport-sync";
 import { startOctopusPanel } from "./octopus-panel";
 import { buildClassicPanel } from "./classic-panel";
@@ -40,17 +41,7 @@ async function main() {
     // Registering drain before render guarantees MIDI events are
     // dispatched before the 300+ DOM-element LED update consumes the frame.
     const hardwareOutput = new HardwareMidiOutput();
-    let obxdBridgeHandler: BatchDrainHandler | null = null;        // in-browser Obxd synth
-    drainMidiToHardware(
-        wasmModule,
-        hardwareOutput,
-        (events, timestamps, count) => {
-            // Web MIDI (output.send inside drain) already ran above.
-            // Fan out to the OB-XD bridge — no-ops while the synth is
-            // unpowered or the AudioWorklet isn't up yet.
-            obxdBridgeHandler?.(events, timestamps, count);
-        },
-    );
+    drainMidiToHardware(wasmModule, hardwareOutput);
 
     logStatus("Starting panel...");
     switchPanel("classic");
@@ -83,9 +74,8 @@ async function main() {
     // header controls, and lazy-inits the AudioContext on the first PLAY
     // click — Octopus already needs PLAY to make sound, and that click is
     // the user gesture the suspended AudioContext needs for autoplay
-    // compliance. createObxdBridgeHandler() no-ops while isObxdReady()
-    // returns false, so installing it now is safe.
-    obxdBridgeHandler = createObxdBridgeHandler();
+    // compliance. The AudioWorklet reads MIDI directly from the
+    // SharedArrayBuffer, so no drain-loop wiring is needed here.
     setupObxdRack();
 
     console.log("[octobx] All systems go");

@@ -28,6 +28,9 @@ export interface OctopusWasmModule {
     _get_midi_batch_events_ptr(): number;
     _get_midi_batch_ts_ptr(): number;
     _wasm_get_midi_dropped_count(): number;
+    _get_midi_synth_ring_ptr(): number;
+    _get_midi_synth_ring_head_ptr(): number;
+    _get_midi_synth_ring_tail_ptr(): number;
     HEAPU8: Uint8Array;
     HEAPU32: Uint32Array;
     HEAPF64: Float64Array;
