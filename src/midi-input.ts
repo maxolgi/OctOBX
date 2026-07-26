@@ -15,6 +15,7 @@
 
 import type { OctopusWasmModule } from "./octopus-types";
 import { openMidiAccess, pollForPorts } from "./midi-access";
+import { processHardwareCC } from "./obxf-midi-learn-integration";
 
 export class HardwareMidiInput {
     private midiAccess: MIDIAccess | null = null;
@@ -128,6 +129,27 @@ export class HardwareMidiInput {
         // Channel voice / system common: forward available data bytes.
         const d1 = data.length > 1 ? data[1] : 0;
         const d2 = data.length > 2 ? data[2] : 0;
+
+        // MIDI-learn CC interception (T24). CC status bytes 0xB0..0xBF
+        // (channel 1-16). If the OB-Xf learn manager has a binding for
+        // this CC (or learn mode is on with a target set), processCC
+        // dispatches the scaled value to the OB-XD engine directly and
+        // we DON'T forward the raw CC to the Octopus engine — the synth
+        // gets the right value through the learn path, and the sequencer
+        // doesn't need to react to it.
+        //
+        // Reserved CCs (mod wheel 1, sustain 64, all-sound-off 120,
+        // all-notes-off 123) ALSO return true from processHardwareCC
+        // (Fix 2): they are routed directly to the OB-Xf instance via
+        // dedicated exports and consumed here so the Octopus engine no
+        // longer needs to echo them for the synth to react.
+        if (status >= 0xB0 && status <= 0xBF) {
+            const channel = status & 0x0F;
+            if (processHardwareCC(channel, d1, d2)) {
+                return;
+            }
+        }
+
         this.module._wasm_midi_input(status, d1, d2);
     }
 

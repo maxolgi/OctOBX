@@ -4,6 +4,8 @@ node_modules/
 # Build output
 dist/
 wasm/build/
+# Generated from wasm/obxd/patches/*.fxp by build.sh's xxd step
+wasm/obxd/patches.h
 
 # Self-signed dev certs (regenerate per machine, see README)
 certs/*.pem
@@ -19,3 +21,4 @@ logs/
 
 # Emscripten / temp
 *.tmp
+tmp/

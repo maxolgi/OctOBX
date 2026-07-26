@@ -14,6 +14,9 @@
  *     |- #obxd-instance-power        (On / Off toggle)
  *     |- #obxd-instance-polyphony    (1 / 2 / 4 / 8 voices)
  *     |- #obxd-instance-channel      (MIDI channel 1..16)
+ *     |- #obxd-instance-mpe          (MPE On / Off toggle → setObxdInstanceMpe)
+ *     |- #obxd-instance-bendrange    (pitch-bend range 0..96 semitones)
+ *     |- #obxd-mpe-channels          (read-only: channels this instance owns)
  *     |- #obxd-instance-meter        (per-instance RMS bar, 30Hz refresh)
  *     |- #obxd-patch-name            (last loaded patch / init label)
  *     |- #obxd-fxp-input             (Load .fxp file picker)
@@ -34,6 +37,7 @@ import {
     setObxdSelectedInstance,
     setObxdInstanceActive,
     setObxdInstancePolyphony,
+    setObxdInstanceParam,
     loadObxdInstanceFxp,
     obxdInstancePanic,
     obxdInstanceResetPatch,
@@ -44,10 +48,23 @@ import {
 import {
     setObxdInstanceChannel,
     getObxdInstanceChannel,
+    setObxdInstanceMpe,
+    getObxdInstanceMpe,
+    getObxdMpeChannels,
 } from "./obxd-bridge";
 import { buildObxdSynthUi, syncObxdControlsFromEngine } from "./obxd-synth-ui";
 
 const INSTANCE_COUNT = 10;
+
+// Legacy OB-Xd parameter index for the pitch-bend range (ParamsEnum.h
+// BENDRANGE). The engine's apply_param_instance() maps this to
+// processBendUpRange + processBendDownRange, but only supports TWO values
+// today: v <= 0.5 → 2 semitones, v > 0.5 → 12 semitones. The full 0..96
+// range the UI exposes requires a new obxd_set_bend_range() engine export
+// (documented as a follow-up — do NOT modify the engine here). Until that
+// lands, applyLegacyBendRange() snaps the UI's 0..96 value to the nearest
+// supported {2, 12} bucket so the control still has an audible effect.
+const LEGACY_PARAM_BENDRANGE = 6;
 
 // Patch name fallbacks used by the UI label before/without a real .fxp
 // load. The instance selector's <option> text uses these too. Mirrors
@@ -77,6 +94,15 @@ const DEFAULT_POLYPHONY = [8, 1, 1, 1, 1, 1, 1, 1, 1, 1];
 const instancePower = new Array<boolean>(INSTANCE_COUNT).fill(true);
 const instancePolyphony = DEFAULT_POLYPHONY.slice();
 const instancePatchName = FACTORY_PATCH_NAMES.slice();
+
+// Per-instance pitch-bend-range UI state. Bend range defaults to 2
+// semitones (the conservative OB-Xd default); the engine's current binary
+// {2, 12} mapping is applied via the legacy BENDRANGE param — the stored
+// value is the user's intended 0..96 figure so it tracks the future
+// obxd_set_bend_range() engine export. The MPE flag itself is owned by
+// obxd-bridge.ts (single source of truth, read back via getObxdInstanceMpe).
+const DEFAULT_BENDRANGE = 2;
+const instanceBendRange = new Array<number>(INSTANCE_COUNT).fill(DEFAULT_BENDRANGE);
 
 // EMS clips RMS to a 0..0.5 ish range for typical patches; *200 maps
 // 0.5 -> 100% bar fill. Tunable.
@@ -133,7 +159,66 @@ function updateHeaderForInstance(id: number): void {
         chanSel.value = String(getObxdInstanceChannel(id));
     }
 
+    // MPE toggle — reads back the bridge's per-instance flag (single source
+    // of truth). Matches the power button's On/Off + .synth-on styling.
+    const mpeBtn = document.getElementById("obxd-instance-mpe") as HTMLButtonElement | null;
+    if (mpeBtn) {
+        const on = getObxdInstanceMpe(id);
+        mpeBtn.textContent = on ? "On" : "Off";
+        mpeBtn.setAttribute("aria-pressed", on ? "true" : "false");
+        mpeBtn.classList.toggle("synth-on", on);
+    }
+
+    // Pitch-bend range — the UI stores the user's intended 0..96 value; the
+    // engine currently only honours {2, 12} via the legacy BENDRANGE param
+    // (see applyLegacyBendRange). The input reflects the stored intent.
+    const bendInput = document.getElementById("obxd-instance-bendrange") as HTMLInputElement | null;
+    if (bendInput) {
+        bendInput.value = String(instanceBendRange[id]);
+    }
+
+    updateMpeChannelsLabel(id);
+
     setPatchName(formatPatchName(instancePatchName[id]));
+}
+
+/*
+ * Render the read-only "#obxd-mpe-channels" label for the selected
+ * instance. In non-MPE mode it shows the single MIDI channel; in MPE mode
+ * it shows the master + voice-channel range (e.g. "MPE 3→10"). Reads the
+ * zone straight from the bridge (getObxdMpeChannels) so it always matches
+ * the live routing table.
+ */
+function updateMpeChannelsLabel(id: number): void {
+    const el = document.getElementById("obxd-mpe-channels");
+    if (!el) return;
+    const chans = getObxdMpeChannels(id);
+    if (chans.length === 0) {
+        el.textContent = "CH —";
+        return;
+    }
+    if (!getObxdInstanceMpe(id)) {
+        el.textContent = `CH ${chans[0]}`;
+        return;
+    }
+    const first = chans[0];
+    const last = chans[chans.length - 1];
+    el.textContent = first === last ? `MPE ${first}` : `MPE ${first}→${last}`;
+}
+
+/*
+ * Apply the user's 0..96 pitch-bend-range intent to the engine. The OB-Xf
+ * engine exposes processBendUpRange/processBendDownRange directly, but
+ * neither is exported (no obxd_set_bend_range wrapper). The only reachable
+ * path today is the legacy BENDRANGE param (idx 6), which the engine
+ * collapses to two buckets: v <= 0.5 → 2 semitones, v > 0.5 → 12. We snap
+ * the UI value to the nearest bucket so the control is still audible. A
+ * finer-grained 0..96 follow-up needs a new engine export — documented,
+ * not implemented here (do NOT modify the WASM engine).
+ */
+function applyLegacyBendRange(id: number, semitones: number): void {
+    const v = semitones > 6 ? 1 : 0;   // >6 → 12-st bucket; else 2-st bucket
+    setObxdInstanceParam(id, LEGACY_PARAM_BENDRANGE, v);
 }
 
 function ensureUiBuilt(): void {
@@ -251,6 +336,58 @@ function wireChannelSelector(): void {
         const id = getObxdSelectedInstance();
         const v = parseInt(sel.value, 10) || 1;
         setObxdInstanceChannel(id, v);
+        // The MPE zone (master + voices) derives from this channel, so the
+        // channel-assignment label needs a refresh after a reassignment.
+        updateMpeChannelsLabel(id);
+    });
+}
+
+/*
+ * MPE toggle — flips per-instance MPE on the bridge (which mirrors the
+ * flag to g_mpe_enabled[id] AND rebuilds the channel→instance routing so
+ * the instance claims its lower zone). The bridge is the source of truth;
+ * we read it straight back to set the button styling. Toggling also
+ * refreshes the channel-assignment label (single channel ↔ master+voices).
+ */
+function wireMpeToggle(): void {
+    const btn = document.getElementById("obxd-instance-mpe") as HTMLButtonElement | null;
+    if (!btn || btn.dataset.wired) return;
+    btn.dataset.wired = "1";
+
+    btn.addEventListener("click", () => {
+        const id = getObxdSelectedInstance();
+        const next = !getObxdInstanceMpe(id);
+        setObxdInstanceMpe(id, next);
+        btn.textContent = next ? "On" : "Off";
+        btn.setAttribute("aria-pressed", next ? "true" : "false");
+        btn.classList.toggle("synth-on", next);
+        updateMpeChannelsLabel(id);
+        console.log(`[obxd] instance ${id} MPE ${next ? "on" : "off"} — ` +
+            getObxdMpeChannels(id).join(","));
+    });
+}
+
+/*
+ * Pitch-bend range — stores the user's 0..96 intent per instance and
+ * applies the closest engine-supported value via the legacy BENDRANGE
+ * param (see applyLegacyBendRange). Clamped to [0, 96] (the input's own
+ * min/max also enforces this, but the explicit clamp guards against
+ * spinners/paste). Changing the bend range does not affect MPE routing —
+ * it is a per-instance synth parameter.
+ */
+function wireBendRangeControl(): void {
+    const input = document.getElementById("obxd-instance-bendrange") as HTMLInputElement | null;
+    if (!input || input.dataset.wired) return;
+    input.dataset.wired = "1";
+
+    input.addEventListener("change", () => {
+        const id = getObxdSelectedInstance();
+        let v = parseInt(input.value, 10);
+        if (isNaN(v)) v = DEFAULT_BENDRANGE;
+        v = Math.max(0, Math.min(96, v));
+        input.value = String(v);
+        instanceBendRange[id] = v;
+        applyLegacyBendRange(id, v);
     });
 }
 
@@ -363,6 +500,8 @@ export function setupObxdRack(): void {
     wirePowerButton();
     wirePolyphonySelector();
     wireChannelSelector();
+    wireMpeToggle();
+    wireBendRangeControl();
     wireFxLoader();
     wireResetButton();
     wirePanicButtons();

@@ -232,6 +232,36 @@ export function setObxdInstancePolyphony(id: number, voiceCount: number): void {
 }
 
 /*
+ * Toggle per-instance MPE mode on the OB-Xf engine. Forwards to the
+ * AudioWorklet, which calls _obxd_set_mpe(instance_id, enabled ? 1 : 0).
+ * The flag is stored on the C side (g_mpe_enabled[id]) but does NOT yet
+ * change MIDI routing — actual per-channel MPE dispatch is task T20.
+ * Like the other instance-aware setters, this no-ops if the worklet
+ * hasn't been brought up yet.
+ */
+export function setObxdInstanceMpe(id: number, enabled: boolean): void {
+    workletNode?.port.postMessage({ type: "set_mpe", instance_id: id, enabled: enabled ? 1 : 0 });
+}
+
+/*
+ * Fix 2: per-instance mod-wheel direct routing (reserved CC 1). The MIDI-
+ * learn layer lets CC 1 fall through; obxf-midi-learn-integration.ts calls
+ * this to send it straight to the OB-Xf engine's processModWheel, bypassing
+ * the unreliable Octopus-engine SAB-echo path. `v` is 0..1.
+ */
+export function setObxdInstanceModWheel(id: number, v: number): void {
+    workletNode?.port.postMessage({ type: "set_mod_wheel", instance_id: id, value: v });
+}
+
+/*
+ * Fix 2: per-instance sustain-pedal direct routing (reserved CC 64). Same
+ * rationale as setObxdInstanceModWheel — sends straight to sustainOn/Off.
+ */
+export function setObxdInstanceSustain(id: number, on: boolean): void {
+    workletNode?.port.postMessage({ type: "set_sustain", instance_id: id, enabled: on ? 1 : 0 });
+}
+
+/*
  * Load a VST2 .fxp preset into a specific instance. The bytes are handed
  * to the worklet via its MessagePort (we can't share memory with the
  * worklet directly, and emcc was built with -sFORCE_FILE_SYSTEM=0 so

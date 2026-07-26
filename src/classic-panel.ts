@@ -90,7 +90,12 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
         k.appendChild(cap);
         let rot = 0;
         function tick(d: number) { rrot(idx, d); rot += d === 2 ? 20 : -20; cap.style.transform = `rotate(${rot}deg)`; }
-        k.addEventListener("wheel", (e) => { e.preventDefault(); tick(e.deltaY < 0 ? 2 : 1); }, { passive: false });
+        k.addEventListener("wheel", (e) => {
+            const canScrollDown = window.scrollY + window.innerHeight < document.documentElement.scrollHeight - 1;
+            const canScrollUp = window.scrollY > 0;
+            if ((e.deltaY > 0 && canScrollDown) || (e.deltaY < 0 && canScrollUp)) return;
+            e.preventDefault(); tick(e.deltaY < 0 ? 2 : 1);
+        }, { passive: false });
         k.addEventListener("mousedown", (e) => { e.preventDefault(); knobDrag = { el: k, y: e.clientY, acc: 0, t: tick }; k.style.cursor = "grabbing"; });
         return k;
     }

@@ -81,20 +81,28 @@ async function main() {
     console.log("[octobx] All systems go");
 }
 
-function switchPanel(view: "classic" | "modern") {
+function switchPanel(view: "classic" | "modern" | "synth") {
     if (!wasmModule) return;
     if (activePanelCleanup) { activePanelCleanup(); activePanelCleanup = null; }
 
     const classicEl = document.getElementById("view-classic")!;
     const modernEl = document.getElementById("view-modern")!;
+    const obxdEl = document.getElementById("obxd-panel")!;
 
-    if (view === "classic") {
+    if (view === "synth") {
+        classicEl.style.display = "none";
+        modernEl.style.display = "none";
+        obxdEl.style.display = "";
+        window.scrollTo(0, 0);
+    } else if (view === "classic") {
         classicEl.style.display = "";
         modernEl.style.display = "none";
+        obxdEl.style.display = "";
         activePanelCleanup = buildClassicPanel(wasmModule);
     } else {
         classicEl.style.display = "none";
         modernEl.style.display = "";
+        obxdEl.style.display = "";
         activePanelCleanup = startOctopusPanel(wasmModule);
     }
 }
@@ -103,7 +111,7 @@ function setupViewToggle() {
     const toggle = document.getElementById("view-toggle") as HTMLSelectElement | null;
     if (!toggle) return;
     toggle.addEventListener("change", () => {
-        switchPanel(toggle.value as "classic" | "modern");
+        switchPanel(toggle.value as "classic" | "modern" | "synth");
     });
 }
 

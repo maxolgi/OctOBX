@@ -1,45 +1,64 @@
 /*
- * wasm/obxd/main_obxd.cpp — multi-instance Obxd engine wrapper.
+ * wasm/obxd/main_obxd.cpp — multi-instance OB-Xf synth engine wrapper.
  *
- * Replaces the single-instance Phase 2 wrapper with a 10-instance rig:
- * up to 10 SynthEngine instances share one WASM heap, are summed per
- * quantum into a master stereo buffer, and run through an always-on
- * x/(1+|x|) soft-clip before being handed back to the AudioWorklet.
+ * This is the OB-Xd → OB-Xf migration target. It drives the Surge-maintained
+ * OB-Xf SynthEngine (obxf_imported/engine/SynthEngine.h) instead of the
+ * legacy 2DaT/Obxd engine. The engine API is richer (MPE channel-aware note
+ * handlers, ~30 more processX() params, 32-voice polyphony, second LFO) but
+ * the wrapper preserves the existing 10-instance rig contract: up to 10
+ * SynthEngine instances share one WASM heap, are summed per quantum into a
+ * master stereo buffer, and run through an always-on x/(1+|x|) soft-clip
+ * before being handed back to the AudioWorklet.
  *
- * Each instance has its own active flag, polyphony, gain, patch name,
- * param mirror, and RMS meter. obxd_init() creates all 10 and seeds
- * them with programmatic factory patches (see g_factory_programs below).
+ * Legacy parameter compatibility:
+ *   The UI knob layer (.fxp loaders, obxd-synth-ui.ts) still speaks the OLD
+ *   OB-Xd integer param indices 0..79 (ParamsEnum.h order). apply_param_instance()
+ *   dispatches those legacy indices onto the NEW OB-Xf processX() methods,
+ *   applying the value rescales documented in obxf_param_mappings.h and
+ *   verified against obxf_imported/state/ObxdImporter.cpp (the canonical
+ *   OB-Xd→OB-Xf translator). Rescale rules implemented:
+ *     - VOICE_COUNT:   old 1..8 voices → new polyphony midpoint
+ *     - OCTAVE:        → Transpose, semantic shift (round(v*4)+1 clamped 0..4)*0.25
+ *     - BENDRANGE:     SPLIT → processBendUpRange + processBendDownRange
+ *     - BENDLFORATE:   → processVibratoLFORate (logsc→linsc Hz remap)
+ *     - UDET:          → processUnisonDetune (logsc range 0.9 → 1.0)
+ *     - LFOFREQ:       → processLFO1Rate (~75x rate rescale; synced bucket map)
+ *     - XMOD:          → processCrossmod (v*0.5; old v*24 st, new v*48 st)
+ *     - ENVPITCH:      → processEnvToPitchAmount (v*36/40)
+ *     - NOISEMIX:      → processNoiseVolume (bake logsc(v,0,1,35) into value)
+ *     - LATK/FATK:     attack /3 (OB-Xf env sustains at 90%)
+ *     - PW_ENV:        → processEnvToPWAmount (v*0.85/1.0556)
+ *     - PW_OSC2_OFS:   → processOsc2PWOffset (v*0.75/0.95)
+ *     - LFO wave/dest: bool→blend/tri-state (lfoBoolToBlend / lfoBoolToTriState)
+ *     - ASPLAYEDALLOCATION: bool→tri NotePriority
+ *   REMOVED (no-op): MIDILEARN(1), OSCQuantize(32), UNLEARN(70), ECONOMY_MODE(71)
  *
- * If a generated `patches.h` is present at compile time (produced by
- * build.sh's xxd step from real .fxp files in wasm/obxd/patches/), it
- * takes precedence over the programmatic table — see obxd_set_factory_patch.
- *
- * Engine API (per third_party/Obxd/Source/Engine/SynthEngine.h):
- *   - SynthEngine()                       // default ctor, no args
+ * Engine API (per obxf_imported/engine/SynthEngine.h):
+ *   - SynthEngine()                          // default ctor, no args
  *   - void setSampleRate(float sr)
- *   - void processSample(float* L, float* R)   // ONE stereo sample
- *   - void procNoteOn(int note, float vel01)
- *   - void procNoteOff(int note)
+ *   - void processSample(float* L, float* R)  // ONE stereo sample
+ *   - void processNoteOn(int note, float vel, int8_t channel)   // MPE-aware
+ *   - void processNoteOff(int note, float vel, int8_t channel)
  *   - void allNotesOff() / allSoundOff()
  *   - void sustainOn() / sustainOff()
- *   - void procPitchWheel(float v)        // [-1, 1] (centered)
- *   - void procModWheel(float v)          // [0, 1]
- *   - void processX(float v)              // ~60 per-param setters
- *   - void setVoiceCount(float v)         // roundToInt(v*7 + 1) voices
+ *   - void processPitchWheel(float v)        // [-1, 1] (smoother.setStep)
+ *   - void processModWheel(float v)          // [0, 1]
+ *   - void processPolyphony(float v)         // 1 + (int)(v*MAX_VOICES), MAX_VOICES=32
+ *   - void processX(float v) / processX(v, idx)  // ~80 per-param setters
  *
- * SynthEngine has NO setParameter(idx, val) dispatch — that lived on
- * the JUCE AudioProcessor wrapper (ObxdAudioProcessor::setParameter in
- * Source/PluginProcessor.cpp). We replicate the switch locally in
- * apply_param_instance() so we can seed defaults and implement
- * _obxd_set_param without depending on PluginProcessor.cpp.
+ * If a generated `patches.h` is present at compile time (produced by
+ * build.sh's xxd step from real .fxp files in wasm/obxd/patches/), real
+ * factory patches take precedence over the programmatic init patch — see
+ * obxd_set_factory_patch.
  *
- * Exports are mirrored by the Makefile's -sEXPORTED_FUNCTIONS list and
- * by the per-instance message routing in src/obxd-processor.tail.js.
+ * Exports are mirrored by the Makefile's -sEXPORTED_FUNCTIONS list and by
+ * the per-instance message routing in src/obxd-processor.tail.js.
  */
 
 #include <emscripten.h>
-#include <cstdint>
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -62,35 +81,39 @@
 #define JUCE_ASSERTIONS 0
 #define JUCE_LOG_ASSERTIONS 0
 
-// juce_audio_basics.h pulls in juce_core.h transitively.
+// juce_audio_basics.h pulls in juce_core.h transitively. The NEW OB-Xf
+// SynthEngine.h → Program.h → ParameterList.h → SynthParam.h chain reaches
+// juce::AudioParameterFloat / juce::AudioProcessorParameter, which live in
+// the GUI-free juce_audio_processors_headless split (amalgamated in
+// juce_amalgam.cpp). ObxdImporter.cpp includes the same header for the same
+// reason — see the note there.
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_audio_processors_headless/juce_audio_processors_headless.h>
 
-// The Obxd engine headers were authored against JuceHeader.h, which
-// ends with `using namespace juce;`. The unqualified `Random`, `String`,
-// `jmin`, `float_Pi` references in ObxdVoice.h / ObxdOscillatorB.h /
-// AudioUtils.h require the same directive here. Scope is local to this
-// TU (and the synth build is a single combined TU).
-using namespace juce;
+// =========================================================================
+// OB-Xf engine headers (resolved via -I obxf_imported).
+//
+// obxf_imported/engine/SynthEngine.h transitively pulls in Motherboard,
+// Voice, VoiceMatrix, Lfo, Program, ParameterList, SynthParam, Constants,
+// configuration — the full OB-Xf parameter/engine subsystem. Lfo.h includes
+// <juce_dsp/juce_dsp.h> for FastMathApproximations::sin (a header-only
+// template); juce_dsp is therefore declared available (Makefile define) but
+// NOT amalgamated — its .cpp needs juce_audio_formats/FFT/Convolution which
+// we do not build. SIMD auto-disables under JUCE_WASM, dodging juce_dsp.h's
+// `#error "SIMD register support not implemented for this platform"`.
+// =========================================================================
+#include "engine/SynthEngine.h"
+#include "engine/Program.h"
 
-// SynthEngine.h does `#include "../PluginProcessor.h"` for historical
-// reasons (the engine doesn't actually use anything from it). The real
-// PluginProcessor.h pulls in juce::AudioProcessor (lives in
-// juce_audio_processors, which we deliberately don't compile) and
-// JuceHeader.h. Predefining its include guard short-circuits the file
-// at the #ifndef check, so the include becomes a no-op.
-#define PLUGINPROCESSOR_H_INCLUDED 1
-
-#include "SynthEngine.h"
-#include "ParamsEnum.h"
+#include "obxf_param_mappings.h"   // legacy → new dispatch documentation
 
 // =========================================================================
 // Optional real-.fxp factory patches
 //
-// If build.sh generated patches.h from wasm/obxd/patches/*.fxp, it
-// declares `static const unsigned char patch_<name>[]` arrays and is
-// accompanied by sizeof() lookups. HAS_FACTORY_FXP then routes
-// obxd_set_factory_patch() through load_fxp_data() with those bytes
-// instead of the programmatic table below.
+// If build.sh generated patches.h from wasm/obxd/patches/*.fxp, it declares
+// `static const unsigned char patch_<name>[]` arrays. HAS_FACTORY_FXP then
+// routes obxd_set_factory_patch() through load_fxp_data() with those bytes
+// instead of the programmatic init patch below.
 // =========================================================================
 
 #if __has_include("patches.h")
@@ -99,6 +122,47 @@ using namespace juce;
 #else
 #define HAS_FACTORY_FXP 0
 #endif
+
+// =========================================================================
+// Legacy OB-Xd parameter indices (ParamsEnum.h order, frozen).
+//
+// The NEW OB-Xf engine has no integer param index — every parameter is a
+// named processX() method. We keep the legacy 0..79 integer space ONLY as
+// the wire format for .fxp files, the knob UI (obxd_set_param), and
+// obxf_param_mappings.h. PARAM_COUNT is the legacy count (80), NOT the
+// OB-Xf parameter count.
+//
+// These names intentionally match the old ParamsEnum.h identifiers so the
+// dispatch switch reads naturally; they live in the global namespace here
+// and do not collide with any OB-Xf symbol (the engine uses lower-case
+// members / qualified juce:: names).
+// =========================================================================
+
+#define PARAM_COUNT 80
+
+namespace LegacyParam {
+enum : int {
+    UNDEFINED = 0, MIDILEARN = 1, VOLUME = 2, VOICE_COUNT = 3, TUNE = 4,
+    OCTAVE = 5, BENDRANGE = 6, BENDOSC2 = 7, LEGATOMODE = 8, BENDLFORATE = 9,
+    VFLTENV = 10, VAMPENV = 11, ASPLAYEDALLOCATION = 12, PORTAMENTO = 13,
+    UNISON = 14, UDET = 15, OSC2_DET = 16, LFOFREQ = 17, LFOSINWAVE = 18,
+    LFOSQUAREWAVE = 19, LFOSHWAVE = 20, LFO1AMT = 21, LFO2AMT = 22,
+    LFOOSC1 = 23, LFOOSC2 = 24, LFOFILTER = 25, LFOPW1 = 26, LFOPW2 = 27,
+    OSC2HS = 28, XMOD = 29, OSC1P = 30, OSC2P = 31, OSCQuantize = 32,
+    OSC1Saw = 33, OSC1Pul = 34, OSC2Saw = 35, OSC2Pul = 36, PW = 37,
+    BRIGHTNESS = 38, ENVPITCH = 39, OSC1MIX = 40, OSC2MIX = 41, NOISEMIX = 42,
+    FLT_KF = 43, CUTOFF = 44, RESONANCE = 45, MULTIMODE = 46, FILTER_WARM = 47,
+    BANDPASS = 48, FOURPOLE = 49, ENVELOPE_AMT = 50, LATK = 51, LDEC = 52,
+    LSUS = 53, LREL = 54, FATK = 55, FDEC = 56, FSUS = 57, FREL = 58,
+    ENVDER = 59, FILTERDER = 60, PORTADER = 61, PAN1 = 62, PAN2 = 63,
+    PAN3 = 64, PAN4 = 65, PAN5 = 66, PAN6 = 67, PAN7 = 68, PAN8 = 69,
+    UNLEARN = 70, ECONOMY_MODE = 71, LFO_SYNC = 72, PW_ENV = 73,
+    PW_ENV_BOTH = 74, ENV_PITCH_BOTH = 75, FENV_INVERT = 76, PW_OSC2_OFS = 77,
+    LEVEL_DIF = 78, SELF_OSC_PUSH = 79,
+};
+} // namespace LegacyParam
+
+using namespace LegacyParam;
 
 // =========================================================================
 // State
@@ -112,548 +176,573 @@ using namespace juce;
 // 128. obxd_render() sums every active instance into this pair.
 #define BUF_FRAMES 1024
 
-// VST2 preset header layout used by obxd_load_fxp(). All multi-byte
-// integer/float fields are big-endian (network byte order), per the
-// Steinberg VST2 fxp/fxb spec.
-#define FXP_HEADER_SIZE   52    // 0x34 — fixed header before the data section
-#define FXP_PRGNAME_OFF   24    // 0x18 — 28-byte program name field
+// VST2 preset header layout (fxProgramSet — see obxf_imported/core/Constants.h).
+// All multi-byte integer/float fields are big-endian (network byte order),
+// per the Steinberg VST2 fxp/fxb spec. Both fxProgram (regular) and
+// fxProgramSet (chunk) share the same 56-byte fixed prefix; the chunk
+// variant then carries a 4-byte chunkSize + variable chunk bytes.
+//
+//   0x00  char[4]  chunkMagic — "CcnK" (always; identifies a VST2 preset)
+//   0x04  int32    byteSize   — size of the rest (often 0 in saved files)
+//   0x08  char[4]  fxMagic    — "FxCk"(reg program) "FPCh"(chunk program)
+//                               "FxBk"(reg bank)   "FBCh"(chunk bank)
+//   0x0C  int32    version    — 1
+//   0x10  char[4]  fxID       — "OBXf"(native) / "Obxd"(legacy import)
+//   0x14  int32    fxVersion
+//   0x18  int32    numParams  — (numPrograms slot in fxProgramSet)
+//   0x1C  char[28] prgName    — null-padded, NOT null-terminated
+//   0x38  ...data:
+//           FxCk: float[numParams] params (BE floats)
+//           FPCh: int32 BE chunkSize + char[chunkSize]
+//                   chunk may be a JUCE copyXmlToBinary blob
+//                   (4-byte BE size + XML) OR the "VC2!" legacy wrapper
+//                   ('VC2!' + LE uint32 xmlLen + raw UTF-8 XML) used by
+//                   every native OB-Xf patch on disk today.
+#define FXP_HEADER_SIZE   56    // 0x38 — fixed prefix before the variable data
+#define FXP_PRGNAME_OFF   28    // 0x1C — 28-byte program name field
 #define FXP_PRGNAME_LEN   28
-#define FXP_DATA_OFF      52    // 0x34 — first byte after the header
-#define FXP_NUMPARAMS_OFF 20    // 0x14
-#define FXP_VERSION_OFF   8     // 0x08
-#define FXP_FXID_OFF      12    // 0x0C
+#define FXP_DATA_OFF      56    // 0x38 — first byte of params (FxCk) / chunkSize (FPCh)
+#define FXP_NUMPARAMS_OFF 24    // 0x18
+#define FXP_VERSION_OFF   12    // 0x0C
+#define FXP_FXID_OFF      16    // 0x10
+#define FXP_FXMAGIC_OFF   8     // 0x08
 
 static SynthEngine* g_engines[INSTANCE_COUNT] = {};
 static bool  g_engine_active[INSTANCE_COUNT] = {};
 static int   g_engine_polyphony[INSTANCE_COUNT] = {};
 static float g_engine_rms[INSTANCE_COUNT] = {};
+static bool  g_mpe_enabled[INSTANCE_COUNT] = {};   // per-instance MPE flag (T9)
 
-// Per-instance param mirror — SynthEngine has no getter API, so we
-// maintain our own copy alongside the engine state. _obxd_get_param()
-// reads from here; the knob UI uses it to render values after a patch
-// load. Indexed [instance_id][param_idx].
+// Per-instance param mirror — SynthEngine has no getter API, so we maintain
+// our own copy alongside the engine state. obxd_get_param() reads from here;
+// the knob UI uses it to render values after a patch load. Indexed
+// [instance_id][legacy_param_idx]; values are in the LEGACY 0..1 space.
 static float g_param_mirror[INSTANCE_COUNT][PARAM_COUNT] = {};
 
 // Per-instance last-loaded program name (empty until a load succeeds).
-// Sized to FXP_PRGNAME_LEN + small slack; UTF8ToString reads it as a
-// null-terminated C string.
 static char g_patch_name[INSTANCE_COUNT][64] = {};
 
 // Master mix bus — every active engine's output is summed here each
-// quantum, then x/(1+|x|) soft-clipped per sample. The worklet reads
-// this via _get_buf_l_ptr / _get_buf_r_ptr and Float32Array views.
+// quantum, then x/(1+|x|) soft-clipped per sample.
 static float g_master_l[BUF_FRAMES];
 static float g_master_r[BUF_FRAMES];
 
 // =========================================================================
-// Parameter dispatch (replicates ObxdAudioProcessor::setParameter)
+// OB-Xd → OB-Xf rescale helpers (verbatim from ObxdImporter.cpp)
 //
-// apply_param_instance() is the instance-aware form of the Phase 2
-// apply_param(). It reads g_engines[id] and writes g_param_mirror[id],
-// leaving the giant switch statement otherwise identical.
+// These reimplement OB-Xd's logsc/linsc plus inverses so legacy 0..1
+// normalized values can be remapped onto the OB-Xf engine's different
+// internal ranges. Kept byte-for-byte aligned with the importer so a
+// runtime knob turn produces the same value an .fxp import would.
+// =========================================================================
+
+inline float xdLogsc(float p, float lo, float hi, float rolloff = 19.f)
+{
+    return ((std::exp(p * std::log(rolloff + 1.f)) - 1.f) / rolloff) * (hi - lo) + lo;
+}
+
+inline float xdInvLinsc(float y, float lo, float hi)
+{
+    if (hi == lo)
+        return 0.f;
+    return juce::jlimit(0.f, 1.f, (y - lo) / (hi - lo));
+}
+
+inline float xdInvLogsc(float y, float lo, float hi, float rolloff = 19.f)
+{
+    if (hi == lo)
+        return 0.f;
+    const float t = rolloff * (y - lo) / (hi - lo) + 1.f;
+    if (t <= 0.f)
+        return 0.f;
+    return juce::jlimit(0.f, 1.f, std::log(t) / std::log(rolloff + 1.f));
+}
+
+// OB-Xd LFO1 sync rate (9 buckets) → OB-Xf's 21-bucket synced table.
+// Mirrors ObxdImporter.cpp::mapLfoSyncedRate.
+inline float mapLfoSyncedRate(float vXd)
+{
+    static constexpr int xdToXf[9] = {1, 4, 5, 7, 10, 11, 13, 15, 16};
+    const int kXd = juce::jlimit(0, 8, static_cast<int>(vXd * 8.f));
+    return static_cast<float>(xdToXf[kXd]) / 20.f; // syncedRatesCount - 1 == 20
+}
+
+// OB-Xd LFO waveform bool toggle → OB-Xf continuous blend [-1..1].
+// Importer only emits 0 or 0.5 (never negative).
+inline float lfoBoolToBlend(float v) { return v >= 0.5f ? 0.f : 0.5f; }
+
+// OB-Xd LFO destination bool toggle → OB-Xf tri-state {Off, On, Inv} = 0/0.5/1.
+// Importer only emits 0 or 0.5 (the Inv state has no OB-Xd ancestor).
+inline float lfoBoolToTriState(float v) { return v >= 0.5f ? 0.5f : 0.f; }
+
+// =========================================================================
+// Parameter dispatch (legacy OB-Xd idx → OB-Xf processX() method)
+//
+// apply_param_instance() is the instance-aware dispatch. It reads
+// g_engines[id], writes g_param_mirror[id] (in legacy 0..1 space), and
+// calls the matching NEW SynthEngine method — applying the rescale rules
+// documented in obxf_param_mappings.h.
 // =========================================================================
 
 static void apply_param_instance(int instance_id, int idx, float v);
 
-// Per-instance form of Phase 2's apply_defaults(). Replicates
-// ObxdParams::setDefaultValues() from Source/Engine/Params.h. We can't
-// link ObxdParams directly (it transitively depends on the full
-// PluginProcessor header chain) so we re-seed the engine the same way
-// the upstream AudioProcessor constructor does. Result: a bright-ish
-// dual-saw patch with full-level sustain, modest cutoff, and 8 voices.
-static void apply_defaults_for_instance(int instance_id) {
-    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
-    for (int i = 0; i < PARAM_COUNT; ++i) apply_param_instance(instance_id, i, 0.0f);
-
-    apply_param_instance(instance_id, VOICE_COUNT,  1.0f);
-    apply_param_instance(instance_id, BRIGHTNESS,   1.0f);
-    apply_param_instance(instance_id, OCTAVE,       0.5f);
-    apply_param_instance(instance_id, TUNE,         0.5f);
-    apply_param_instance(instance_id, OSC2_DET,     0.4f);
-    apply_param_instance(instance_id, LSUS,         1.0f);
-    apply_param_instance(instance_id, CUTOFF,       0.5f);
-    apply_param_instance(instance_id, VOLUME,       0.5f);
-    apply_param_instance(instance_id, OSC1MIX,      1.0f);
-    apply_param_instance(instance_id, OSC2MIX,      1.0f);
-    apply_param_instance(instance_id, OSC1Saw,      1.0f);
-    apply_param_instance(instance_id, OSC2Saw,      1.0f);
-    apply_param_instance(instance_id, BENDLFORATE,  0.6f);
-    apply_param_instance(instance_id, PAN1, 0.5f);
-    apply_param_instance(instance_id, PAN2, 0.5f);
-    apply_param_instance(instance_id, PAN3, 0.5f);
-    apply_param_instance(instance_id, PAN4, 0.5f);
-    apply_param_instance(instance_id, PAN5, 0.5f);
-    apply_param_instance(instance_id, PAN6, 0.5f);
-    apply_param_instance(instance_id, PAN7, 0.5f);
-    apply_param_instance(instance_id, PAN8, 0.5f);
-    apply_param_instance(instance_id, ECONOMY_MODE, 1.0f);
-    apply_param_instance(instance_id, ENVDER,       0.3f);
-    apply_param_instance(instance_id, FILTERDER,    0.3f);
-    apply_param_instance(instance_id, LEVEL_DIF,    0.3f);
-    apply_param_instance(instance_id, PORTADER,     0.3f);
-    apply_param_instance(instance_id, UDET,         0.2f);
+// Fix 3: dispatch for the 28 NEW OB-Xf params (no OB-Xd legacy ancestor).
+//
+// The UI (obxd-synth-ui.ts) assigns these a sentinel legacy index
+// NEW_PARAM_BASE (200) + position, where position is the 0-based ordinal in
+// which the paramBound controls with no legacy mapping are encountered during
+// buildObxdSynthUi. That ordering matches obxf_dispatch_reference.md's NEW
+// FEATURE list AND the SynthEngine.h method declaration order, so the switch
+// below is keyed on new_idx = (sentinel - 200). Values are passed 1:1 to the
+// matching processX() method with NO rescale (these are native OB-Xf params).
+//
+// IMPORTANT: if obxf-layout.ts's obxfControls array order changes, the
+// sentinel↔param mapping changes and this switch MUST be re-synchronized.
+// All 28 method names verified present in obxf_imported/engine/SynthEngine.h.
+static void apply_new_param_instance(SynthEngine& s, int new_idx, float v) {
+    switch (new_idx) {
+        case 0:  s.processUnisonVoices(v); break;        // UnisonVoices
+        case 1:  s.processVoiceReassign(v); break;        // VoiceReassign
+        case 2:  s.processOsc2Keytrack(v); break;         // Osc2Keytrack
+        case 3:  s.processEnvToPitchInvert(v); break;     // EnvToPitchInvert
+        case 4:  s.processEnvToPWInvert(v); break;        // EnvToPWInvert
+        case 5:  s.processRingModVolume(v); break;        // RingModMix
+        case 6:  s.processNoiseColor(v); break;           // NoiseColor
+        case 7:  s.processVibratoLFOWave(v); break;       // VibratoWave
+        case 8:  s.processFilter4PoleXpander(v); break;   // Filter4PoleXpander
+        case 9:  s.processFilterXpanderMode(v); break;    // FilterXpanderMode
+        case 10: s.processLFO1PW(v); break;               // LFO1PW
+        case 11: s.processLFO1ToVolume(v); break;         // LFO1ToVolume
+        case 12: s.processLFO2Sync(v); break;             // LFO2TempoSync
+        case 13: s.processLFO2Rate(v); break;             // LFO2Rate
+        case 14: s.processLFO2ModAmount1(v); break;       // LFO2ModAmount1
+        case 15: s.processLFO2ModAmount2(v); break;       // LFO2ModAmount2
+        case 16: s.processLFO2Wave1(v); break;            // LFO2Wave1
+        case 17: s.processLFO2Wave2(v); break;            // LFO2Wave2
+        case 18: s.processLFO2Wave3(v); break;            // LFO2Wave3
+        case 19: s.processLFO2PW(v); break;               // LFO2PW
+        case 20: s.processLFO2ToOsc1Pitch(v); break;      // LFO2ToOsc1Pitch
+        case 21: s.processLFO2ToOsc2Pitch(v); break;      // LFO2ToOsc2Pitch
+        case 22: s.processLFO2ToFilterCutoff(v); break;   // LFO2ToFilterCutoff
+        case 23: s.processLFO2ToOsc1PW(v); break;         // LFO2ToOsc1PW
+        case 24: s.processLFO2ToOsc2PW(v); break;         // LFO2ToOsc2PW
+        case 25: s.processLFO2ToVolume(v); break;         // LFO2ToVolume
+        case 26: s.processFilterEnvAttackCurve(v); break; // FilterEnvAttackCurve
+        case 27: s.processAmpEnvAttackCurve(v); break;    // AmpEnvAttackCurve
+        default: break;   // unknown sentinel — silently ignore
+    }
 }
 
-// Replicates the switch in ObxdAudioProcessor::setParameter (Source/PluginProcessor.cpp)
-// — only the synth.processX(...) calls, not the ObxdAudioProcessor bookkeeping.
-// Also writes into g_param_mirror[id] so _obxd_get_param() can report
-// current state to the UI (the engine itself has no getter API).
+// Seed an instance with a sensible OB-Xf init patch by calling the NEW
+// processX() methods directly (no legacy rescale — we set the values the
+// NEW engine expects). Also resets the legacy mirror so the knob UI starts
+// from a known state. This is the minimum-viable factory patch; real
+// hand-tuned OB-Xf patches are task T10.
+static void apply_defaults_for_instance(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    SynthEngine* e = g_engines[instance_id];
+    if (!e) return;
+
+    for (int i = 0; i < PARAM_COUNT; ++i) g_param_mirror[instance_id][i] = 0.0f;
+
+    SynthEngine& s = *e;
+    // Master / global
+    s.processVolume(0.5f);
+    s.processTune(0.5f);          // center (0 st)
+    s.processTranspose(0.5f);     // center (0 st)
+    s.processPolyphony(((8.f - 1.f) + 0.5f) / 32.f); // 8 voices
+    s.processUnison(0.0f);
+    // Oscillators / mixer
+    s.processOsc1Volume(1.0f);
+    s.processOsc2Volume(1.0f);
+    s.processOsc1Saw(1.0f);
+    s.processOsc2Saw(1.0f);
+    s.processOsc2Detune(0.4f);
+    // Filter (open, no resonance)
+    s.processFilterCutoff(1.0f);
+    s.processFilterResonance(0.0f);
+    // Amp env: instant attack, short decay, full sustain, short release
+    s.processAmpEnvAttack(0.0f);
+    s.processAmpEnvDecay(0.3f);
+    s.processAmpEnvSustain(1.0f);
+    s.processAmpEnvRelease(0.3f);
+
+    // Reflect those settings back into the legacy mirror so the knob UI
+    // renders consistent positions after init / reset.
+    g_param_mirror[instance_id][VOLUME]     = 0.5f;
+    g_param_mirror[instance_id][VOICE_COUNT]= 1.0f;   // 8 voices (old max)
+    g_param_mirror[instance_id][TUNE]       = 0.5f;
+    g_param_mirror[instance_id][OCTAVE]     = 0.5f;
+    g_param_mirror[instance_id][UNISON]     = 0.0f;
+    g_param_mirror[instance_id][OSC1MIX]    = 1.0f;
+    g_param_mirror[instance_id][OSC2MIX]    = 1.0f;
+    g_param_mirror[instance_id][OSC1Saw]    = 1.0f;
+    g_param_mirror[instance_id][OSC2Saw]    = 1.0f;
+    g_param_mirror[instance_id][OSC2_DET]   = 0.4f;
+    g_param_mirror[instance_id][CUTOFF]     = 1.0f;
+    g_param_mirror[instance_id][RESONANCE]  = 0.0f;
+    g_param_mirror[instance_id][LATK]       = 0.0f;
+    g_param_mirror[instance_id][LDEC]       = 0.3f;
+    g_param_mirror[instance_id][LSUS]       = 1.0f;
+    g_param_mirror[instance_id][LREL]       = 0.3f;
+}
+
+// Dispatch one legacy (idx, v) pair to the NEW engine. `v` is clamped to
+// [0,1] and stored in the legacy mirror BEFORE the (possibly rescaled)
+// call. See the file header for the full rescale rule list.
 static void apply_param_instance(int instance_id, int idx, float v) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     SynthEngine* e = g_engines[instance_id];
     if (!e) return;
-    if (idx < 0 || idx >= PARAM_COUNT) return;
     if (v < 0.0f) v = 0.0f;
     if (v > 1.0f) v = 1.0f;
-    g_param_mirror[instance_id][idx] = v;
     SynthEngine& s = *e;
+
+    // Fix 3: sentinel indices >= NEW_PARAM_BASE (200) are OB-Xf params with
+    // no legacy ancestor. Dispatch 1:1 to the NEW processX() methods (no
+    // rescale, no g_param_mirror — there is no legacy slot for them).
+    if (idx >= 200) {
+        apply_new_param_instance(s, idx - 200, v);
+        return;
+    }
+
+    if (idx < 0 || idx >= PARAM_COUNT) return;
+    g_param_mirror[instance_id][idx] = v;
     switch (idx) {
-        case SELF_OSC_PUSH:      s.processSelfOscPush(v);        break;
-        case PW_ENV_BOTH:        s.processPwEnvBoth(v);          break;
-        case PW_OSC2_OFS:        s.processPwOfs(v);              break;
-        case ENV_PITCH_BOTH:     s.processPitchModBoth(v);       break;
-        case FENV_INVERT:        s.processInvertFenv(v);         break;
-        case LEVEL_DIF:          s.processLoudnessDetune(v);     break;
-        case PW_ENV:             s.processPwEnv(v);              break;
-        case LFO_SYNC:           s.procLfoSync(v);               break;
-        case ECONOMY_MODE:       s.procEconomyMode(v);           break;
-        case VAMPENV:            s.procAmpVelocityAmount(v);     break;
-        case VFLTENV:            s.procFltVelocityAmount(v);     break;
-        case ASPLAYEDALLOCATION: s.procAsPlayedAlloc(v);         break;
-        case BENDLFORATE:        s.procModWheelFrequency(v);     break;
-        case FOURPOLE:           s.processFourPole(v);           break;
-        case LEGATOMODE:         s.processLegatoMode(v);         break;
-        case ENVPITCH:           s.processEnvelopeToPitch(v);    break;
-        case OSCQuantize:        s.processPitchQuantization(v);  break;
-        case VOICE_COUNT:        s.setVoiceCount(v);             break;
-        case BANDPASS:           s.processBandpassSw(v);         break;
-        case FILTER_WARM:        s.processOversampling(v);       break;
-        case BENDOSC2:           s.procPitchWheelOsc2Only(v);    break;
-        case BENDRANGE:          s.procPitchWheelAmount(v);      break;
-        case NOISEMIX:           s.processNoiseMix(v);           break;
-        case OCTAVE:             s.processOctave(v);             break;
-        case TUNE:               s.processTune(v);               break;
-        case BRIGHTNESS:         s.processBrightness(v);         break;
-        case MULTIMODE:          s.processMultimode(v);          break;
-        case LFOFREQ:            s.processLfoFrequency(v);       break;
-        case LFO1AMT:            s.processLfoAmt1(v);            break;
-        case LFO2AMT:            s.processLfoAmt2(v);            break;
-        case LFOSINWAVE:         s.processLfoSine(v);            break;
-        case LFOSQUAREWAVE:      s.processLfoSquare(v);          break;
-        case LFOSHWAVE:          s.processLfoSH(v);              break;
-        case LFOFILTER:          s.processLfoFilter(v);          break;
-        case LFOOSC1:            s.processLfoOsc1(v);            break;
-        case LFOOSC2:            s.processLfoOsc2(v);            break;
-        case LFOPW1:             s.processLfoPw1(v);             break;
-        case LFOPW2:             s.processLfoPw2(v);             break;
-        case PORTADER:           s.processPortamentoDetune(v);   break;
-        case FILTERDER:          s.processFilterDetune(v);       break;
-        case ENVDER:             s.processEnvelopeDetune(v);     break;
-        case XMOD:               s.processOsc2Xmod(v);           break;
-        case OSC2HS:             s.processOsc2HardSync(v);       break;
-        case OSC2P:              s.processOsc2Pitch(v);          break;
-        case OSC1P:              s.processOsc1Pitch(v);          break;
-        case PORTAMENTO:         s.processPortamento(v);         break;
-        case UNISON:             s.processUnison(v);             break;
-        case FLT_KF:             s.processFilterKeyFollow(v);    break;
-        case OSC1MIX:            s.processOsc1Mix(v);            break;
-        case OSC2MIX:            s.processOsc2Mix(v);            break;
-        case PW:                 s.processPulseWidth(v);         break;
-        case OSC1Saw:            s.processOsc1Saw(v);            break;
-        case OSC2Saw:            s.processOsc2Saw(v);            break;
-        case OSC1Pul:            s.processOsc1Pulse(v);          break;
-        case OSC2Pul:            s.processOsc2Pulse(v);          break;
-        case VOLUME:             s.processVolume(v);             break;
-        case UDET:               s.processDetune(v);             break;
-        case OSC2_DET:           s.processOsc2Det(v);            break;
-        case CUTOFF:             s.processCutoff(v);             break;
-        case RESONANCE:          s.processResonance(v);          break;
-        case ENVELOPE_AMT:       s.processFilterEnvelopeAmt(v);  break;
-        case LATK:               s.processLoudnessEnvelopeAttack(v);  break;
-        case LDEC:               s.processLoudnessEnvelopeDecay(v);   break;
-        case LSUS:               s.processLoudnessEnvelopeSustain(v); break;
-        case LREL:               s.processLoudnessEnvelopeRelease(v); break;
-        case FATK:               s.processFilterEnvelopeAttack(v);    break;
-        case FDEC:               s.processFilterEnvelopeDecay(v);     break;
-        case FSUS:               s.processFilterEnvelopeSustain(v);   break;
-        case FREL:               s.processFilterEnvelopeRelease(v);   break;
-        case PAN1: s.processPan(v, 1); break;
-        case PAN2: s.processPan(v, 2); break;
-        case PAN3: s.processPan(v, 3); break;
-        case PAN4: s.processPan(v, 4); break;
-        case PAN5: s.processPan(v, 5); break;
-        case PAN6: s.processPan(v, 6); break;
-        case PAN7: s.processPan(v, 7); break;
-        case PAN8: s.processPan(v, 8); break;
-        // MIDILEARN / UNLEARN are UI-only parameters — no engine action.
+        case UNDEFINED:        break;                                  // 0  sentinel
+        case MIDILEARN:        break;                                  // 1  REMOVED
+        case VOLUME:           s.processVolume(v); break;              // 2  1:1
+        case VOICE_COUNT: {                                            // 3  RESCALE old 1..8 → new
+            int xdVoices = juce::jlimit(1, 8, (int)std::round(v * 7.f) + 1);
+            s.processPolyphony(((float)(xdVoices - 1) + 0.5f) / 32.f);
+        } break;
+        case TUNE:             s.processTune(v); break;                // 4  1:1
+        case OCTAVE: {                                                 // 5  → Transpose (semantic shift)
+            int transpose = juce::jlimit(0, 4, (int)std::round(v * 4.f) + 1);
+            s.processTranspose((float)transpose * 0.25f);
+        } break;
+        case BENDRANGE: {                                              // 6  SPLIT → Up + Down
+            int range = (v > 0.5f) ? 12 : 2;
+            float n = (float)range / 48.f;                             // MAX_BEND_RANGE
+            s.processBendUpRange(n);
+            s.processBendDownRange(n);
+        } break;
+        case BENDOSC2:        s.processBendOsc2Only(v); break;         // 7  1:1
+        case LEGATOMODE:      s.processEnvLegatoMode(v); break;        // 8  importer copies 1:1
+        case BENDLFORATE: {                                            // 9  → VibratoRate (rescale+rename)
+            float hzXd = xdLogsc(v, 3.f, 10.f);
+            s.processVibratoLFORate(xdInvLinsc(hzXd, 2.f, 12.f));
+        } break;
+        case VFLTENV:         s.processVelToFilterEnv(v); break;       // 10 1:1
+        case VAMPENV:         s.processVelToAmpEnv(v); break;          // 11 1:1
+        case ASPLAYEDALLOCATION:                                       // 12 bool→tri NotePriority
+            s.processNotePriority(v > 0.5f ? 0.0f : 0.5f); break;
+        case PORTAMENTO:      s.processPortamento(v); break;           // 13 1:1
+        case UNISON:          s.processUnison(v); break;               // 14 1:1
+        case UDET: {                                                   // 15 → UnisonDetune (rescale)
+            float dXd = xdLogsc(v, 0.001f, 0.90f);
+            s.processUnisonDetune(xdInvLogsc(dXd, 0.001f, 1.0f));
+        } break;
+        case OSC2_DET:        s.processOsc2Detune(v); break;           // 16 1:1
+        case LFOFREQ: {                                                // 17 → LFO1Rate (~75x rescale)
+            // Synced path uses the 9→21 bucket map; consult the live mirror
+            // for LFO_SYNC. (During .fxp load, LFO_SYNC may not yet be set
+            // when LFOFREQ is dispatched — known limitation, see header.)
+            if (g_param_mirror[instance_id][LFO_SYNC] > 0.5f) {
+                s.processLFO1Rate(mapLfoSyncedRate(v));
+            } else {
+                float hzXd = xdLogsc(v, 0.f, 50.f, 120.f);
+                s.processLFO1Rate(xdInvLogsc(hzXd, 0.f, 250.f, 3775.f));
+            }
+        } break;
+        case LFOSINWAVE:      s.processLFO1Wave1(lfoBoolToBlend(v)); break;   // 18 bool→blend
+        case LFOSQUAREWAVE:   s.processLFO1Wave2(lfoBoolToBlend(v)); break;   // 19
+        case LFOSHWAVE:       s.processLFO1Wave3(lfoBoolToBlend(v)); break;   // 20
+        case LFO1AMT:         s.processLFO1ModAmount1(v); break;       // 21 1:1
+        case LFO2AMT:         s.processLFO1ModAmount2(v); break;       // 22 1:1 (NOT LFO2)
+        case LFOOSC1:         s.processLFO1ToOsc1Pitch(lfoBoolToTriState(v)); break;   // 23 bool→tri
+        case LFOOSC2:         s.processLFO1ToOsc2Pitch(lfoBoolToTriState(v)); break;   // 24
+        case LFOFILTER:       s.processLFO1ToFilterCutoff(lfoBoolToTriState(v)); break;// 25
+        case LFOPW1:          s.processLFO1ToOsc1PW(lfoBoolToTriState(v)); break;      // 26
+        case LFOPW2:          s.processLFO1ToOsc2PW(lfoBoolToTriState(v)); break;      // 27 (NOT LFO2)
+        case OSC2HS:          s.processOscSync(v); break;              // 28 1:1
+        case XMOD:            s.processCrossmod(v * 0.5f); break;      // 29 RESCALE (old v*24, new v*48)
+        case OSC1P:           s.processOsc1Pitch(v); break;            // 30 1:1
+        case OSC2P:           s.processOsc2Pitch(v); break;            // 31 1:1
+        case OSCQuantize:     break;                                   // 32 REMOVED
+        case OSC1Saw:         s.processOsc1Saw(v); break;              // 33 1:1
+        case OSC1Pul:         s.processOsc1Pulse(v); break;            // 34 1:1
+        case OSC2Saw:         s.processOsc2Saw(v); break;              // 35 1:1
+        case OSC2Pul:         s.processOsc2Pulse(v); break;            // 36 1:1
+        case PW:              s.processOscPW(v); break;                // 37 1:1
+        case BRIGHTNESS:      s.processOscBrightness(v); break;        // 38 1:1
+        case ENVPITCH:        s.processEnvToPitchAmount(v * (36.f / 40.f)); break; // 39 RESCALE
+        case OSC1MIX:         s.processOsc1Volume(v); break;           // 40 1:1 (method=processOsc1Volume)
+        case OSC2MIX:         s.processOsc2Volume(v); break;           // 41 1:1 (method=processOsc2Volume)
+        case NOISEMIX:        s.processNoiseVolume(xdLogsc(v, 0.f, 1.f, 35.f)); break; // 42 RESCALE (bake logsc)
+        case FLT_KF:          s.processFilterKeyTrack(v); break;       // 43 1:1
+        case CUTOFF:          s.processFilterCutoff(v); break;         // 44 1:1
+        case RESONANCE:       s.processFilterResonance(v); break;      // 45 1:1
+        case MULTIMODE:       s.processFilterMode(v); break;           // 46 1:1
+        case FILTER_WARM:     s.processHQMode(v); break;               // 47 1:1 (engine toggles allSoundOff internally)
+        case BANDPASS:        s.processFilter2PoleBPBlend(v); break;   // 48 1:1
+        case FOURPOLE:        s.processFilter4PoleMode(v); break;      // 49 1:1
+        case ENVELOPE_AMT:    s.processFilterEnvAmount(v); break;      // 50 1:1
+        case LATK: {                                                   // 51 → AmpEnvAttack (rescale /3)
+            float msXd = xdLogsc(v, 4.f, 60000.f, 900.f);
+            s.processAmpEnvAttack(xdInvLogsc(msXd / 3.f, 4.f, 60000.f, 900.f));
+        } break;
+        case LDEC:            s.processAmpEnvDecay(v); break;          // 52 1:1
+        case LSUS:            s.processAmpEnvSustain(v); break;        // 53 1:1
+        case LREL:            s.processAmpEnvRelease(v); break;        // 54 1:1
+        case FATK: {                                                    // 55 → FilterEnvAttack (rescale /3)
+            float msXd = xdLogsc(v, 1.f, 60000.f, 900.f);
+            s.processFilterEnvAttack(xdInvLogsc(msXd / 3.f, 1.f, 60000.f, 900.f));
+        } break;
+        case FDEC:            s.processFilterEnvDecay(v); break;       // 56 1:1
+        case FSUS:            s.processFilterEnvSustain(v); break;     // 57 1:1
+        case FREL:            s.processFilterEnvRelease(v); break;     // 58 1:1
+        case ENVDER:          s.processEnvelopeSlop(v); break;         // 59 1:1
+        case FILTERDER:       s.processFilterSlop(v); break;           // 60 1:1
+        case PORTADER:        s.processPortamentoSlop(v); break;       // 61 1:1
+        case PAN1:            s.processPan(v, 1); break;               // 62 1:1
+        case PAN2:            s.processPan(v, 2); break;               // 63
+        case PAN3:            s.processPan(v, 3); break;               // 64
+        case PAN4:            s.processPan(v, 4); break;               // 65
+        case PAN5:            s.processPan(v, 5); break;               // 66
+        case PAN6:            s.processPan(v, 6); break;               // 67
+        case PAN7:            s.processPan(v, 7); break;               // 68
+        case PAN8:            s.processPan(v, 8); break;               // 69
+        case UNLEARN:         break;                                   // 70 REMOVED
+        case ECONOMY_MODE:    break;                                   // 71 REMOVED
+        case LFO_SYNC:        s.processLFO1Sync(v); break;             // 72 1:1
+        case PW_ENV:          s.processEnvToPWAmount(v * (0.85f / 1.0555555555f)); break; // 73 RESCALE
+        case PW_ENV_BOTH:     s.processEnvToPWBothOscs(v); break;      // 74 1:1
+        case ENV_PITCH_BOTH:  s.processPitchBothOscs(v); break;        // 75 1:1 (method has no "EnvTo")
+        case FENV_INVERT:     s.processFilterEnvInvert(v); break;      // 76 1:1
+        case PW_OSC2_OFS:     s.processOsc2PWOffset(v * (0.75f / 0.95f)); break; // 77 RESCALE
+        case LEVEL_DIF:       s.processLevelSlop(v); break;            // 78 1:1
+        case SELF_OSC_PUSH:   s.processFilter2PolePush(v); break;      // 79 1:1
         default: break;
     }
 }
 
 // =========================================================================
-// Programmatic factory patches
+// Named-attribute dispatch (native OB-Xf XML schema → processX())
 //
-// Used when patches.h is NOT present (i.e. no real .fxp files supplied
-// in wasm/obxd/patches/). Each entry is ~15-25 (ParamsEnum.h index, value)
-// pairs hand-tuned to match its name. Values are 0..1 per the engine's
-// convention; the same switch in apply_param_instance() maps them to the
-// correct processX() call.
+// Native OB-Xf .fxp files serialize parameters by their SynthParam::ID
+// STREAMING name (see obxf_imported/parameter/SynthParam.h): e.g.
+// `Volume="0.5"`, `FilterCutoff="0.26"`, `PitchBendUp="0.0417"`. These are
+// already native engine normalized 0..1 values, so they map 1:1 onto the
+// matching processX() method with NO rescale — unlike the legacy integer
+// dispatch above, which must undo OB-Xd's different internal ranges.
 //
-// Patch names MUST match the option labels in index.html's instance
-// selector so the UI shows a consistent label after init.
+// apply_named_param_instance() is the per-attribute entry point used by
+// parse_chunk_xml_named(). It writes g_param_mirror for any param that maps
+// to a legacy index 0..79 (Fix 4a) so the knob UI syncs after a patch load;
+// the 28 NEW params (no legacy ancestor) are not mirrored. The knob grid is
+// a legacy OB-Xd control surface and cannot represent the full OB-Xf
+// parameter space — NEW-param knob sync after patch load is a follow-up.
 // =========================================================================
 
-struct FactoryParam { int idx; float v; };
+static int nameeq(const char* a, int alen, const char* b) {
+    // Compare a (length alen, NOT null-terminated) against b (C string).
+    int i = 0;
+    for (; i < alen && b[i]; ++i) {
+        if (a[i] != b[i]) return 0;
+    }
+    return (i == alen && b[i] == '\0') ? 1 : 0;
+}
 
-struct FactoryProgram {
-    const char* name;
-    const FactoryParam* params;
-    int count;
-};
+// Fix 4(a): reverse-lookup an OB-Xf streaming param name → legacy
+// ParamsEnum.h index (0..79), using obxf_param_mappings.h. Returns -1 when
+// the name has no legacy ancestor (one of the 28 NEW params) so the caller
+// can skip the g_param_mirror write. Each streaming name is unique in the
+// table (BENDRANGE splits to "PitchBendUp" + "PitchBendDown", both → 6).
+static int legacy_index_for_streaming_name(const char* name, int nlen) {
+    for (int i = 0; i < obxf_param_mappings_count; ++i) {
+        const obxf_param_mapping_t* m = &obxf_param_mappings[i];
+        if (m->new_id && m->new_id[0] != '\0' && nameeq(name, nlen, m->new_id)) {
+            return m->legacy_index;
+        }
+    }
+    return -1;
+}
 
-// 0: "Analog Pad" — slow-attack dual-saw pad with a filter sweep.
-static const FactoryParam fp_analog_pad[] = {
-    { VOLUME,        0.50f },
-    { OCTAVE,        0.50f },
-    { TUNE,          0.50f },
-    { PORTAMENTO,    1.00f },
-    { UNISON,        1.00f },
-    { UDET,          0.30f },
-    { OSC2_DET,      0.40f },
-    { OSC1Saw,       1.00f },
-    { OSC2Saw,       1.00f },
-    { OSC1MIX,       1.00f },
-    { OSC2MIX,       1.00f },
-    { CUTOFF,        0.30f },
-    { RESONANCE,     0.40f },
-    { ENVELOPE_AMT,  0.40f },
-    { BRIGHTNESS,    0.60f },
-    { FLT_KF,        0.50f },
-    { LATK,          0.60f },
-    { LDEC,          0.50f },
-    { LSUS,          0.90f },
-    { LREL,          0.70f },
-    { FATK,          0.70f },
-    { FDEC,          0.50f },
-    { FSUS,          0.60f },
-    { FREL,          0.70f },
-    { ECONOMY_MODE,  1.00f },
-};
+static void apply_named_param_instance(int instance_id, const char* name, int nlen, float v) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    SynthEngine* e = g_engines[instance_id];
+    if (!e) return;
+    if (!name || nlen <= 0) return;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    SynthEngine& s = *e;
 
-// 1: "Bass Pulse" — focused low-end pulse bass with a 4-pole filter env.
-static const FactoryParam fp_bass_pulse[] = {
-    { VOLUME,        0.55f },
-    { OCTAVE,        0.00f },
-    { TUNE,          0.50f },
-    { UNISON,        0.00f },
-    { OSC1Saw,       0.00f },
-    { OSC1Pul,       1.00f },
-    { OSC2Saw,       0.00f },
-    { OSC2Pul,       1.00f },
-    { OSC1MIX,       1.00f },
-    { OSC2MIX,       0.50f },
-    { PW,            0.50f },
-    { OSC2_DET,      0.20f },
-    { CUTOFF,        0.30f },
-    { RESONANCE,     0.50f },
-    { ENVELOPE_AMT,  0.60f },
-    { BRIGHTNESS,    0.50f },
-    { FLT_KF,        0.50f },
-    { FOURPOLE,      1.00f },
-    { LATK,          0.00f },
-    { LDEC,          0.40f },
-    { LSUS,          0.50f },
-    { LREL,          0.30f },
-    { FATK,          0.00f },
-    { FDEC,          0.40f },
-    { FSUS,          0.30f },
-    { FREL,          0.30f },
-    { ECONOMY_MODE,  1.00f },
-};
+    // Fix 4(a): mirror legacy-indexed params so the knob UI syncs correctly
+    // after a native OB-Xf .fxp load (syncObxdControlsFromEngine reads
+    // g_param_mirror). The value stored is the NATIVE OB-Xf 0..1 value,
+    // which matches the legacy value for the 41 clean 1:1 params. For the
+    // 14 rescaled params (OCTAVE/Transpose, BENDRANGE, LATK/FATK, …) the
+    // stored native value differs from what the legacy knob WOULD produce,
+    // so grabbing such a knob after a patch load may cause a small jump —
+    // a known trade-off of option (a) vs a full main-thread XML re-parse
+    // (option b). The 28 NEW params (no legacy index) are not mirrored;
+    // their knobs still don't sync after a patch load (follow-up).
+    int legacy_idx = legacy_index_for_streaming_name(name, nlen);
+    if (legacy_idx >= 0 && legacy_idx < PARAM_COUNT) {
+        g_param_mirror[instance_id][legacy_idx] = v;
+    }
 
-// 2: "Lead Saw" — bright unison saw lead with mild portamento.
-static const FactoryParam fp_lead_saw[] = {
-    { VOLUME,        0.50f },
-    { OCTAVE,        0.50f },
-    { TUNE,          0.50f },
-    { PORTAMENTO,    0.90f },
-    { UNISON,        1.00f },
-    { UDET,          0.25f },
-    { OSC2_DET,      0.30f },
-    { OSC1Saw,       1.00f },
-    { OSC2Saw,       1.00f },
-    { OSC1MIX,       1.00f },
-    { OSC2MIX,       1.00f },
-    { CUTOFF,        0.60f },
-    { RESONANCE,     0.30f },
-    { ENVELOPE_AMT,  0.20f },
-    { BRIGHTNESS,    0.80f },
-    { FLT_KF,        0.30f },
-    { BENDRANGE,     0.50f },
-    { LATK,          0.00f },
-    { LDEC,          0.30f },
-    { LSUS,          0.80f },
-    { LREL,          0.30f },
-    { FATK,          0.00f },
-    { FDEC,          0.30f },
-    { FSUS,          0.50f },
-    { FREL,          0.30f },
-    { ECONOMY_MODE,  1.00f },
-};
-
-// 3: "Pluck" — sharp attack, fast decay, bright saw pluck.
-static const FactoryParam fp_pluck[] = {
-    { VOLUME,        0.50f },
-    { OCTAVE,        0.50f },
-    { TUNE,          0.50f },
-    { OSC1Saw,       1.00f },
-    { OSC1Pul,       0.00f },
-    { OSC2Saw,       0.00f },
-    { OSC2Pul,       0.00f },
-    { OSC1MIX,       1.00f },
-    { OSC2MIX,       0.00f },
-    { CUTOFF,        0.50f },
-    { RESONANCE,     0.40f },
-    { ENVELOPE_AMT,  0.70f },
-    { BRIGHTNESS,    0.70f },
-    { FLT_KF,        0.40f },
-    { LATK,          0.00f },
-    { LDEC,          0.20f },
-    { LSUS,          0.00f },
-    { LREL,          0.20f },
-    { FATK,          0.00f },
-    { FDEC,          0.15f },
-    { FSUS,          0.00f },
-    { FREL,          0.15f },
-    { ECONOMY_MODE,  1.00f },
-};
-
-// 4: "Strings" — slow-attack sustained ensemble.
-static const FactoryParam fp_strings[] = {
-    { VOLUME,        0.50f },
-    { OCTAVE,        0.50f },
-    { TUNE,          0.50f },
-    { UNISON,        1.00f },
-    { UDET,          0.30f },
-    { OSC2_DET,      0.30f },
-    { OSC1Saw,       1.00f },
-    { OSC2Saw,       1.00f },
-    { OSC1MIX,       0.80f },
-    { OSC2MIX,       0.80f },
-    { CUTOFF,        0.50f },
-    { RESONANCE,     0.20f },
-    { ENVELOPE_AMT,  0.00f },
-    { BRIGHTNESS,    0.50f },
-    { FLT_KF,        0.30f },
-    { LATK,          0.70f },
-    { LDEC,          0.50f },
-    { LSUS,          1.00f },
-    { LREL,          0.60f },
-    { FATK,          0.50f },
-    { FDEC,          0.50f },
-    { FSUS,          1.00f },
-    { FREL,          0.50f },
-    { ECONOMY_MODE,  1.00f },
-};
-
-// 5: "Keys" — medium-attack mixed-wave electric-piano-ish tone.
-static const FactoryParam fp_keys[] = {
-    { VOLUME,        0.50f },
-    { OCTAVE,        0.50f },
-    { TUNE,          0.50f },
-    { OSC1Pul,       1.00f },
-    { OSC2Saw,       1.00f },
-    { OSC1MIX,       0.70f },
-    { OSC2MIX,       0.70f },
-    { PW,            0.40f },
-    { CUTOFF,        0.60f },
-    { RESONANCE,     0.20f },
-    { ENVELOPE_AMT,  0.30f },
-    { BRIGHTNESS,    0.70f },
-    { FLT_KF,        0.50f },
-    { LATK,          0.10f },
-    { LDEC,          0.40f },
-    { LSUS,          0.60f },
-    { LREL,          0.40f },
-    { FATK,          0.10f },
-    { FDEC,          0.40f },
-    { FSUS,          0.40f },
-    { FREL,          0.40f },
-    { ECONOMY_MODE,  1.00f },
-};
-
-// 6: "Drone" — heavy-detune sustained pad with slow LFO movement.
-static const FactoryParam fp_drone[] = {
-    { VOLUME,        0.50f },
-    { OCTAVE,        0.50f },
-    { TUNE,          0.50f },
-    { PORTAMENTO,    0.00f },   // max glide (1-param=1)
-    { UNISON,        1.00f },
-    { UDET,          0.50f },
-    { OSC2_DET,      0.50f },
-    { OSC1Saw,       1.00f },
-    { OSC2Saw,       1.00f },
-    { OSC1MIX,       1.00f },
-    { OSC2MIX,       1.00f },
-    { LFOSINWAVE,    1.00f },
-    { LFOFREQ,       0.20f },
-    { LFO1AMT,       0.30f },
-    { CUTOFF,        0.30f },
-    { RESONANCE,     0.50f },
-    { ENVELOPE_AMT,  0.30f },
-    { BRIGHTNESS,    0.50f },
-    { FLT_KF,        0.30f },
-    { LATK,          0.60f },
-    { LDEC,          0.60f },
-    { LSUS,          1.00f },
-    { LREL,          0.90f },
-    { FATK,          0.60f },
-    { FDEC,          0.60f },
-    { FSUS,          0.80f },
-    { FREL,          0.90f },
-    { ECONOMY_MODE,  1.00f },
-};
-
-// 7: "Stab" — sharp, short, bright saw stab.
-static const FactoryParam fp_stab[] = {
-    { VOLUME,        0.50f },
-    { OCTAVE,        0.50f },
-    { TUNE,          0.50f },
-    { OSC1Saw,       1.00f },
-    { OSC2Saw,       1.00f },
-    { OSC1MIX,       1.00f },
-    { OSC2MIX,       0.90f },
-    { OSC2_DET,      0.30f },
-    { CUTOFF,        0.70f },
-    { RESONANCE,     0.50f },
-    { ENVELOPE_AMT,  0.50f },
-    { BRIGHTNESS,    0.80f },
-    { FLT_KF,        0.30f },
-    { LATK,          0.00f },
-    { LDEC,          0.20f },
-    { LSUS,          0.00f },
-    { LREL,          0.15f },
-    { FATK,          0.00f },
-    { FDEC,          0.20f },
-    { FSUS,          0.20f },
-    { FREL,          0.20f },
-    { ECONOMY_MODE,  1.00f },
-};
-
-// 8: "Noise Hat" — bandpass-filtered noise with very short envelopes.
-static const FactoryParam fp_noise_hat[] = {
-    { VOLUME,        0.45f },
-    { OCTAVE,        0.50f },
-    { OSC1Saw,       0.00f },
-    { OSC1Pul,       0.00f },
-    { OSC2Saw,       0.00f },
-    { OSC2Pul,       0.00f },
-    { OSC1MIX,       0.00f },
-    { OSC2MIX,       0.00f },
-    { NOISEMIX,      0.60f },
-    { CUTOFF,        0.80f },
-    { RESONANCE,     0.40f },
-    { ENVELOPE_AMT,  0.80f },
-    { BRIGHTNESS,    1.00f },
-    { FLT_KF,        0.00f },
-    { MULTIMODE,     0.70f },
-    { BANDPASS,      1.00f },
-    { LATK,          0.00f },
-    { LDEC,          0.10f },
-    { LSUS,          0.00f },
-    { LREL,          0.05f },
-    { FATK,          0.00f },
-    { FDEC,          0.10f },
-    { FSUS,          0.00f },
-    { FREL,          0.05f },
-    { ECONOMY_MODE,  1.00f },
-};
-
-// 9: "Kick" — low-octave pulse with pitch-drop filter env.
-static const FactoryParam fp_kick[] = {
-    { VOLUME,        0.60f },
-    { OCTAVE,        0.00f },   // -24 semitones
-    { TUNE,          0.50f },
-    { OSC1Saw,       0.00f },
-    { OSC1Pul,       1.00f },
-    { OSC2Saw,       0.00f },
-    { OSC2Pul,       0.00f },
-    { OSC1MIX,       1.00f },
-    { OSC2MIX,       0.00f },
-    { PW,            0.50f },
-    { CUTOFF,        0.30f },
-    { RESONANCE,     0.80f },
-    { ENVELOPE_AMT,  0.90f },
-    { ENVPITCH,      1.00f },   // 0..1 -> 0..36 semitone env-to-pitch drop
-    { BRIGHTNESS,    0.30f },
-    { FLT_KF,        0.00f },
-    { FOURPOLE,      1.00f },
-    { LATK,          0.00f },
-    { LDEC,          0.10f },
-    { LSUS,          0.00f },
-    { LREL,          0.10f },
-    { FATK,          0.00f },
-    { FDEC,          0.10f },
-    { FSUS,          0.00f },
-    { FREL,          0.10f },
-    { ECONOMY_MODE,  1.00f },
-};
-
-static const FactoryProgram g_factory_programs[INSTANCE_COUNT] = {
-    { "Analog Pad",  fp_analog_pad,  sizeof(fp_analog_pad)  / sizeof(FactoryParam) },
-    { "Bass Pulse",  fp_bass_pulse,  sizeof(fp_bass_pulse)  / sizeof(FactoryParam) },
-    { "Lead Saw",    fp_lead_saw,    sizeof(fp_lead_saw)    / sizeof(FactoryParam) },
-    { "Pluck",       fp_pluck,       sizeof(fp_pluck)       / sizeof(FactoryParam) },
-    { "Strings",     fp_strings,     sizeof(fp_strings)     / sizeof(FactoryParam) },
-    { "Keys",        fp_keys,        sizeof(fp_keys)        / sizeof(FactoryParam) },
-    { "Drone",       fp_drone,       sizeof(fp_drone)       / sizeof(FactoryParam) },
-    { "Stab",        fp_stab,        sizeof(fp_stab)        / sizeof(FactoryParam) },
-    { "Noise Hat",   fp_noise_hat,   sizeof(fp_noise_hat)   / sizeof(FactoryParam) },
-    { "Kick",        fp_kick,        sizeof(fp_kick)        / sizeof(FactoryParam) },
-};
-
-#if HAS_FACTORY_FXP
-// Order MUST match obxd_set_factory_patch's patch_id indexing — the
-// build.sh xxd step emits arrays named patch_<basename-of-fxp>, and we
-// expect them in alphabetical order so patch_id 0..9 lines up with the
-// instance selector's option order in index.html.
-static const unsigned char* g_factory_patches[INSTANCE_COUNT] = {
-    patch_01_pad, patch_02_bass, patch_03_lead, patch_04_pluck, patch_05_strings,
-    patch_06_keys, patch_07_drone, patch_08_stab, patch_09_hat, patch_10_kick,
-};
-static const unsigned g_factory_patch_sizes[INSTANCE_COUNT] = {
-    sizeof(patch_01_pad), sizeof(patch_02_bass), sizeof(patch_03_lead),
-    sizeof(patch_04_pluck), sizeof(patch_05_strings), sizeof(patch_06_keys),
-    sizeof(patch_07_drone), sizeof(patch_08_stab), sizeof(patch_09_hat),
-    sizeof(patch_10_kick),
-};
-#endif
+    // MASTER
+    if      (nameeq(name,nlen,"Volume"))             s.processVolume(v);
+    else if (nameeq(name,nlen,"Transpose"))          s.processTranspose(v);
+    else if (nameeq(name,nlen,"Tune"))               s.processTune(v);
+    // GLOBAL
+    else if (nameeq(name,nlen,"Polyphony"))          s.processPolyphony(v);
+    else if (nameeq(name,nlen,"HQMode"))             s.processHQMode(v);
+    else if (nameeq(name,nlen,"UnisonVoices"))       s.processUnisonVoices(v);
+    else if (nameeq(name,nlen,"Portamento"))         s.processPortamento(v);
+    else if (nameeq(name,nlen,"Unison"))             s.processUnison(v);
+    else if (nameeq(name,nlen,"UnisonDetune"))       s.processUnisonDetune(v);
+    else if (nameeq(name,nlen,"EnvLegatoMode"))      s.processEnvLegatoMode(v);
+    else if (nameeq(name,nlen,"NotePriority"))       s.processNotePriority(v);
+    // OSCILLATORS
+    else if (nameeq(name,nlen,"Osc1Pitch"))          s.processOsc1Pitch(v);
+    else if (nameeq(name,nlen,"Osc2Detune"))         s.processOsc2Detune(v);
+    else if (nameeq(name,nlen,"Osc2Pitch"))          s.processOsc2Pitch(v);
+    else if (nameeq(name,nlen,"Osc1SawWave"))        s.processOsc1Saw(v);
+    else if (nameeq(name,nlen,"Osc1PulseWave"))      s.processOsc1Pulse(v);
+    else if (nameeq(name,nlen,"Osc2SawWave"))        s.processOsc2Saw(v);
+    else if (nameeq(name,nlen,"Osc2PulseWave"))      s.processOsc2Pulse(v);
+    else if (nameeq(name,nlen,"OscPW"))              s.processOscPW(v);
+    else if (nameeq(name,nlen,"Osc2PWOffset"))       s.processOsc2PWOffset(v);
+    else if (nameeq(name,nlen,"EnvToPitchAmount"))   s.processEnvToPitchAmount(v);
+    else if (nameeq(name,nlen,"EnvToPitchBothOscs")) s.processPitchBothOscs(v);
+    else if (nameeq(name,nlen,"EnvToPitchInvert"))   s.processEnvToPitchInvert(v);
+    else if (nameeq(name,nlen,"EnvToPWAmount"))      s.processEnvToPWAmount(v);
+    else if (nameeq(name,nlen,"EnvToPWBothOscs"))    s.processEnvToPWBothOscs(v);
+    else if (nameeq(name,nlen,"EnvToPWInvert"))      s.processEnvToPWInvert(v);
+    else if (nameeq(name,nlen,"OscCrossmod"))        s.processCrossmod(v);
+    else if (nameeq(name,nlen,"OscSync"))            s.processOscSync(v);
+    else if (nameeq(name,nlen,"OscBrightness"))      s.processOscBrightness(v);
+    // MIXER — streaming names are Osc1Mix/Osc2Mix (ID constants are Osc1Vol/Osc2Vol)
+    else if (nameeq(name,nlen,"Osc1Mix"))            s.processOsc1Volume(v);
+    else if (nameeq(name,nlen,"Osc2Mix"))            s.processOsc2Volume(v);
+    else if (nameeq(name,nlen,"RingModMix"))         s.processRingModVolume(v);
+    else if (nameeq(name,nlen,"NoiseMix"))           s.processNoiseVolume(v);
+    else if (nameeq(name,nlen,"NoiseColor"))         s.processNoiseColor(v);
+    // CONTROL — streaming names PitchBendUp/PitchBendDown (ID: BendUpRange/Down)
+    else if (nameeq(name,nlen,"PitchBendUp"))        s.processBendUpRange(v);
+    else if (nameeq(name,nlen,"PitchBendDown"))      s.processBendDownRange(v);
+    else if (nameeq(name,nlen,"BendOsc2Only"))       s.processBendOsc2Only(v);
+    else if (nameeq(name,nlen,"VibratoWave"))        s.processVibratoLFOWave(v);
+    else if (nameeq(name,nlen,"VibratoRate"))        s.processVibratoLFORate(v);
+    // FILTER
+    else if (nameeq(name,nlen,"Filter4PoleMode"))    s.processFilter4PoleMode(v);
+    else if (nameeq(name,nlen,"FilterCutoff"))       s.processFilterCutoff(v);
+    else if (nameeq(name,nlen,"FilterResonance"))    s.processFilterResonance(v);
+    else if (nameeq(name,nlen,"FilterEnvAmount"))    s.processFilterEnvAmount(v);
+    else if (nameeq(name,nlen,"FilterKeyFollow"))    s.processFilterKeyTrack(v); // ID: FilterKeyTrack
+    else if (nameeq(name,nlen,"FilterMode"))         s.processFilterMode(v);
+    else if (nameeq(name,nlen,"Filter2PoleBPBlend")) s.processFilter2PoleBPBlend(v);
+    else if (nameeq(name,nlen,"Filter2PolePush"))    s.processFilter2PolePush(v);
+    else if (nameeq(name,nlen,"Filter4PoleXpander")) s.processFilter4PoleXpander(v);
+    else if (nameeq(name,nlen,"FilterXpanderMode"))  s.processFilterXpanderMode(v);
+    // LFO 1 — streaming "LFO1TempoSync" → processLFO1Sync
+    else if (nameeq(name,nlen,"LFO1TempoSync"))      s.processLFO1Sync(v);
+    else if (nameeq(name,nlen,"LFO1Rate"))           s.processLFO1Rate(v);
+    else if (nameeq(name,nlen,"LFO1ModAmount1"))     s.processLFO1ModAmount1(v);
+    else if (nameeq(name,nlen,"LFO1ModAmount2"))     s.processLFO1ModAmount2(v);
+    else if (nameeq(name,nlen,"LFO1Wave1"))          s.processLFO1Wave1(v);
+    else if (nameeq(name,nlen,"LFO1Wave2"))          s.processLFO1Wave2(v);
+    else if (nameeq(name,nlen,"LFO1Wave3"))          s.processLFO1Wave3(v);
+    else if (nameeq(name,nlen,"LFO1PW"))             s.processLFO1PW(v);
+    else if (nameeq(name,nlen,"LFO1ToOsc1Pitch"))    s.processLFO1ToOsc1Pitch(v);
+    else if (nameeq(name,nlen,"LFO1ToOsc2Pitch"))    s.processLFO1ToOsc2Pitch(v);
+    else if (nameeq(name,nlen,"LFO1ToFilterCutoff")) s.processLFO1ToFilterCutoff(v);
+    else if (nameeq(name,nlen,"LFO1ToOsc1PW"))       s.processLFO1ToOsc1PW(v);
+    else if (nameeq(name,nlen,"LFO1ToOsc2PW"))       s.processLFO1ToOsc2PW(v);
+    else if (nameeq(name,nlen,"LFO1ToVolume"))       s.processLFO1ToVolume(v);
+    // LFO 2 — has no legacy ancestor; only reachable via native .fxp
+    else if (nameeq(name,nlen,"LFO2TempoSync"))      s.processLFO2Sync(v);
+    else if (nameeq(name,nlen,"LFO2Rate"))           s.processLFO2Rate(v);
+    else if (nameeq(name,nlen,"LFO2ModAmount1"))     s.processLFO2ModAmount1(v);
+    else if (nameeq(name,nlen,"LFO2ModAmount2"))     s.processLFO2ModAmount2(v);
+    else if (nameeq(name,nlen,"LFO2Wave1"))          s.processLFO2Wave1(v);
+    else if (nameeq(name,nlen,"LFO2Wave2"))          s.processLFO2Wave2(v);
+    else if (nameeq(name,nlen,"LFO2Wave3"))          s.processLFO2Wave3(v);
+    else if (nameeq(name,nlen,"LFO2PW"))             s.processLFO2PW(v);
+    else if (nameeq(name,nlen,"LFO2ToOsc1Pitch"))    s.processLFO2ToOsc1Pitch(v);
+    else if (nameeq(name,nlen,"LFO2ToOsc2Pitch"))    s.processLFO2ToOsc2Pitch(v);
+    else if (nameeq(name,nlen,"LFO2ToFilterCutoff")) s.processLFO2ToFilterCutoff(v);
+    else if (nameeq(name,nlen,"LFO2ToOsc1PW"))       s.processLFO2ToOsc1PW(v);
+    else if (nameeq(name,nlen,"LFO2ToOsc2PW"))       s.processLFO2ToOsc2PW(v);
+    else if (nameeq(name,nlen,"LFO2ToVolume"))       s.processLFO2ToVolume(v);
+    // FILTER ENVELOPE
+    else if (nameeq(name,nlen,"FilterEnvInvert"))    s.processFilterEnvInvert(v);
+    else if (nameeq(name,nlen,"FilterEnvAttack"))    s.processFilterEnvAttack(v);
+    else if (nameeq(name,nlen,"FilterEnvDecay"))     s.processFilterEnvDecay(v);
+    else if (nameeq(name,nlen,"FilterEnvSustain"))   s.processFilterEnvSustain(v);
+    else if (nameeq(name,nlen,"FilterEnvRelease"))   s.processFilterEnvRelease(v);
+    else if (nameeq(name,nlen,"FilterEnvAttackCurve")) s.processFilterEnvAttackCurve(v);
+    else if (nameeq(name,nlen,"VelToFilterEnv"))     s.processVelToFilterEnv(v);
+    // AMP ENVELOPE
+    else if (nameeq(name,nlen,"AmpEnvAttack"))       s.processAmpEnvAttack(v);
+    else if (nameeq(name,nlen,"AmpEnvDecay"))        s.processAmpEnvDecay(v);
+    else if (nameeq(name,nlen,"AmpEnvSustain"))      s.processAmpEnvSustain(v);
+    else if (nameeq(name,nlen,"AmpEnvRelease"))      s.processAmpEnvRelease(v);
+    else if (nameeq(name,nlen,"AmpEnvAttackCurve"))  s.processAmpEnvAttackCurve(v);
+    else if (nameeq(name,nlen,"VelToAmpEnv"))        s.processVelToAmpEnv(v);
+    // VOICE VARIATION / PAN
+    else if (nameeq(name,nlen,"PortamentoSlop"))     s.processPortamentoSlop(v);
+    else if (nameeq(name,nlen,"FilterSlop"))         s.processFilterSlop(v);
+    else if (nameeq(name,nlen,"EnvelopeSlop"))       s.processEnvelopeSlop(v);
+    else if (nameeq(name,nlen,"LevelSlop"))          s.processLevelSlop(v);
+    else if (nameeq(name,nlen,"PanVoice1"))          s.processPan(v, 1);
+    else if (nameeq(name,nlen,"PanVoice2"))          s.processPan(v, 2);
+    else if (nameeq(name,nlen,"PanVoice3"))          s.processPan(v, 3);
+    else if (nameeq(name,nlen,"PanVoice4"))          s.processPan(v, 4);
+    else if (nameeq(name,nlen,"PanVoice5"))          s.processPan(v, 5);
+    else if (nameeq(name,nlen,"PanVoice6"))          s.processPan(v, 6);
+    else if (nameeq(name,nlen,"PanVoice7"))          s.processPan(v, 7);
+    else if (nameeq(name,nlen,"PanVoice8"))          s.processPan(v, 8);
+    // Metadata / non-param attributes (programName, author, category,
+    // license, voiceCount, ob-xf_version) are intentionally ignored here.
+}
 
 // =========================================================================
 // .fxp (VST2 preset) loading — instance-aware
 //
-// Format (Steinberg VST2 preset spec — all ints/floats big-endian):
+// Format (Steinberg VST2 preset spec — fxProgramSet, all ints/floats BE):
 //
-//   0x00  char[4]  chunkMagic — "Ccka" (regular) or "Ccmb" (chunk)
-//   0x04  char[4]  byteMagic  — "FBCh" (ignored)
-//   0x08  int32    version    — 1 = regular, 2 = chunk
-//   0x0C  char[4]  fxUniqueID — plugin ID (ignored)
-//   0x10  int32    fxVersion  — ignored
-//   0x14  int32    numParams
-//   0x18  char[28] prgName    — null-padded, NOT null-terminated
-//   0x34  data:
-//           version 1: float[numParams] params (BE floats)
-//           version 2: char[4] "FBCh" + int32 chunkSize + char[chunkSize]
+//   0x00  char[4]  chunkMagic — "CcnK" (every VST2 preset, regular or chunk)
+//   0x08  char[4]  fxMagic    — "FxCk"(regular) / "FPCh"(chunk program) /
+//                               "FBCh"(chunk bank)
+//   0x10  char[4]  fxID       — "OBXf" (native OB-Xf) or "Obxd" (legacy)
+//   0x18  int32    numParams
+//   0x1C  char[28] prgName    — null-padded, NOT null-terminated
+//   0x38  data:
+//           FxCk: float[numParams] params (BE floats) — legacy regular form
+//           FPCh: int32 BE chunkSize + char[chunkSize]
+//                   The chunk is one of:
+//                   • "VC2!" + LE uint32 xmlLen + raw UTF-8 XML
+//                     (the ONLY form native OB-Xf patches ship in today —
+//                      see wasm/obxd/patches/*.fxp, all CC0/Public Domain)
+//                   • JUCE copyXmlToBinary blob (4-byte BE size + XML)
+//                     (older JUCE-saved OB-Xd chunks)
 //
-// Obxd chunk data is the JUCE `copyXmlToBinary` output of an XmlElement
-// tree (see Source/PluginProcessor.cpp::setStateInformation /
-// setCurrentProgramStateInformation): a 4-byte BE size prefix followed
-// by UTF-8 XML of either:
-//   • Single-program preset (most .fxp files): the root element carries
-//     numeric attributes 0..PARAM_COUNT-1 directly:
-//       <Datsounds programName="..." 0="0.5" 1="0.2" ...>
-//   • Bank-style chunk (rare for .fxp but legal): nested <programs> with
-//     128 <program> children; we use the FIRST program's values.
+// The XML payload itself comes in two attribute schemas:
+//   • Native OB-Xf NAMED attributes: `Volume="0.5" FilterCutoff="0.26" ...`
+//     (SynthParam::ID streaming names). These are native engine values and
+//     are dispatched 1:1 to processX() methods with NO rescaling, via
+//     apply_named_param_instance(). This is what the factory patches use.
+//   • Legacy OB-Xd INTEGER attributes: bare `0="0.5"` or `Val_<k>="..."`.
+//     These are legacy 0..1 values dispatched through apply_param_instance()
+//     (which applies the OB-Xd→OB-Xf rescales). Kept as a fallback so the
+//     file picker still loads old OB-Xd .fxp exports.
+//
+// Bank chunks (FBCh) carry <programs><program/>...; we use the FIRST program
+// (or the currentProgram-indexed one) only.
 // =========================================================================
 
 static inline uint32_t rd_be_u32(const uint8_t* p) {
@@ -672,15 +761,13 @@ static inline float rd_be_f32(const uint8_t* p) {
 }
 
 // Copy up to n-1 bytes from src (length src_len, NOT null-terminated)
-// into a fixed buffer and null-terminate. Used for the prgName field,
-// which VST2 leaves null-padded but not null-terminated.
+// into a fixed buffer and null-terminate. Used for the prgName field.
 static void copy_name(char* dst, const uint8_t* src, int src_len, size_t n) {
     if (n == 0) return;
     size_t i = 0;
     size_t cap = (size_t)src_len < (n - 1) ? (size_t)src_len : (n - 1);
     for (; i < cap; ++i) {
         char c = (char)src[i];
-        // Stop at the field's first NUL pad byte.
         if (c == 0) break;
         dst[i] = c;
     }
@@ -704,36 +791,38 @@ static int apply_regular_params_instance(int instance_id, const uint8_t* data, i
 }
 
 // Parse JUCE-flavoured XML chunk for Obxd parameter values, applying
-// each parsed value to instance `instance_id`. See the format notes
-// above. Returns the number of (idx,value) pairs successfully applied.
+// each parsed value to instance `instance_id`. Accepts both the legacy
+// bare-integer attribute schema (`0="0.5"`) and the newer `Val_<k>`
+// schema. Returns the number of (idx,value) pairs successfully applied.
 static int parse_chunk_xml_instance(int instance_id, const char* xml, int xml_len) {
     int applied = 0;
     int i = 0;
-    // For bank-format chunks we want only the first <program>...</program>.
-    // Single-program chunks have no </program> boundary, so we scan to end.
     while (i < xml_len) {
-        // Find the next attribute opening: a digit followed by `="` or
-        // `='`. (JUCE always emits double quotes; the single-quote branch
-        // is defensive.)
         char c = xml[i];
-        if (c < '0' || c > '9') {
-            // Cheap `</program>` detection — bail out so a bank chunk only
-            // applies its first program.
-            if (c == '<' && i + 9 <= xml_len) {
-                if (xml[i+1] == '/' &&
-                    xml[i+2] == 'p' && xml[i+3] == 'r' && xml[i+4] == 'o' &&
-                    xml[i+5] == 'g' && xml[i+6] == 'r' && xml[i+7] == 'a' &&
-                    xml[i+8] == 'm') {
-                    break;
-                }
+        // Cheap `</program>` detection — bail out so a bank chunk only
+        // applies its first program.
+        if (c == '<' && i + 9 <= xml_len) {
+            if (xml[i+1] == '/' &&
+                xml[i+2] == 'p' && xml[i+3] == 'r' && xml[i+4] == 'o' &&
+                xml[i+5] == 'g' && xml[i+6] == 'r' && xml[i+7] == 'a' &&
+                xml[i+8] == 'm') {
+                break;
             }
-            ++i;
-            continue;
         }
 
+        // Attribute names we care about are either a bare digit run
+        // (legacy `0="..."`) or `Val_<digits>`. Look for either.
+        bool isVal = (c == 'V' && i + 4 <= xml_len &&
+                      xml[i+1] == 'a' && xml[i+2] == 'l' && xml[i+3] == '_');
+        bool isDigit = (c >= '0' && c <= '9');
+        if (!isVal && !isDigit) { ++i; continue; }
+
+        int j = i;
+        if (isVal) {
+            j += 4; // skip "Val_"
+        }
         // Parse integer attribute name.
         int idx = 0;
-        int j = i;
         while (j < xml_len && xml[j] >= '0' && xml[j] <= '9') {
             idx = idx * 10 + (xml[j] - '0');
             if (idx >= 100000) { idx = 100000; break; }
@@ -741,7 +830,7 @@ static int parse_chunk_xml_instance(int instance_id, const char* xml, int xml_le
         }
         // Skip whitespace before `=`.
         while (j < xml_len && (xml[j] == ' ' || xml[j] == '\t')) ++j;
-        if (j >= xml_len || xml[j] != '=') { i = j; continue; }
+        if (j >= xml_len || xml[j] != '=') { i = (isVal ? j : j); continue; }
         ++j;  // consume '='
         while (j < xml_len && (xml[j] == ' ' || xml[j] == '\t')) ++j;
         if (j >= xml_len) break;
@@ -760,11 +849,82 @@ static int parse_chunk_xml_instance(int instance_id, const char* xml, int xml_le
             char buf[32];
             __builtin_memcpy(buf, xml + val_start, (size_t)val_len);
             buf[val_len] = '\0';
-            // Use strtod — accepts leading sign, decimals, exponents.
             char* endp = nullptr;
             double dv = strtod(buf, &endp);
             if (endp != buf) {
                 apply_param_instance(instance_id, idx, (float)dv);
+                ++applied;
+            }
+        }
+
+        i = j;
+    }
+    return applied;
+}
+
+// Parse XML chunk for native OB-Xf NAMED attributes (`Volume="0.5"` etc.),
+// dispatching each via apply_named_param_instance() (1:1, no rescale). This
+// is the schema every shipped factory patch uses (see SynthParam::ID
+// streaming names). Stops at `</program>` so a bank chunk only applies its
+// first/current program. Returns the number of (name,value) pairs applied.
+static int parse_chunk_xml_named(int instance_id, const char* xml, int xml_len) {
+    int applied = 0;
+    int i = 0;
+    while (i < xml_len) {
+        char c = xml[i];
+        // Cheap `</program>` detection — bail out so a bank chunk only
+        // applies its first program.
+        if (c == '<' && i + 9 <= xml_len) {
+            if (xml[i+1] == '/' &&
+                xml[i+2] == 'p' && xml[i+3] == 'r' && xml[i+4] == 'o' &&
+                xml[i+5] == 'g' && xml[i+6] == 'r' && xml[i+7] == 'a' &&
+                xml[i+8] == 'm') {
+                break;
+            }
+        }
+
+        // Attribute names start with an ASCII letter ([A-Za-z]); the OB-Xf
+        // streaming names continue with [A-Za-z0-9]. Anything else cannot be
+        // a named attribute we care about (tags, digits = legacy schema).
+        bool isAlpha = ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'));
+        if (!isAlpha) { ++i; continue; }
+
+        int j = i;
+        while (j < xml_len) {
+            char d = xml[j];
+            if ((d >= 'A' && d <= 'Z') || (d >= 'a' && d <= 'z') ||
+                (d >= '0' && d <= '9')) {
+                ++j;
+            } else break;
+        }
+        int name_start = i;
+        int name_len = j - i;
+        if (name_len >= 48) { i = j; continue; } // absurd; skip
+
+        // Skip whitespace before '='.
+        while (j < xml_len && (xml[j] == ' ' || xml[j] == '\t')) ++j;
+        if (j >= xml_len || xml[j] != '=') { i = (j > i ? j : i + 1); continue; }
+        ++j;  // consume '='
+        while (j < xml_len && (xml[j] == ' ' || xml[j] == '\t')) ++j;
+        if (j >= xml_len) break;
+        char quote = xml[j];
+        if (quote != '"' && quote != '\'') { i = j; continue; }
+        ++j;  // consume opening quote
+
+        int val_start = j;
+        while (j < xml_len && xml[j] != quote) ++j;
+        if (j >= xml_len) break;
+        int val_len = j - val_start;
+        ++j;  // consume closing quote
+
+        if (val_len > 0 && val_len < 31) {
+            char buf[32];
+            __builtin_memcpy(buf, xml + val_start, (size_t)val_len);
+            buf[val_len] = '\0';
+            char* endp = nullptr;
+            double dv = strtod(buf, &endp);
+            if (endp != buf) {
+                apply_named_param_instance(instance_id, xml + name_start, name_len, (float)dv);
                 ++applied;
             }
         }
@@ -784,14 +944,21 @@ static int load_fxp_data(int instance_id, const uint8_t* ptr, int len) {
 
     g_patch_name[instance_id][0] = '\0';
 
-    // Magic at offset 0 — "Ccka" (0x43636B61) regular, "Ccmb" (0x43636D62) chunk.
-    bool is_regular = (ptr[0] == 'C' && ptr[1] == 'c' && ptr[2] == 'k' && ptr[3] == 'a');
-    bool is_chunk   = (ptr[0] == 'C' && ptr[1] == 'c' && ptr[2] == 'm' && ptr[3] == 'b');
-    if (!is_regular && !is_chunk) return -5;
+    // chunkMagic MUST be "CcnK" (the only valid VST2 preset magic).
+    if (!(ptr[0] == 'C' && ptr[1] == 'c' && ptr[2] == 'n' && ptr[3] == 'K'))
+        return -5;
 
-    int version  = (int)rd_be_u32(ptr + FXP_VERSION_OFF);
+    // fxMagic at 0x08 selects regular vs chunk form.
+    bool is_regular = (ptr[FXP_FXMAGIC_OFF+0] == 'F' && ptr[FXP_FXMAGIC_OFF+1] == 'x' &&
+                       ptr[FXP_FXMAGIC_OFF+2] == 'C' && ptr[FXP_FXMAGIC_OFF+3] == 'k');
+    bool is_chunk   = (ptr[FXP_FXMAGIC_OFF+0] == 'F' && ptr[FXP_FXMAGIC_OFF+1] == 'P' &&
+                       ptr[FXP_FXMAGIC_OFF+2] == 'C' && ptr[FXP_FXMAGIC_OFF+3] == 'h') ||
+                      (ptr[FXP_FXMAGIC_OFF+0] == 'F' && ptr[FXP_FXMAGIC_OFF+1] == 'B' &&
+                       ptr[FXP_FXMAGIC_OFF+2] == 'C' && ptr[FXP_FXMAGIC_OFF+3] == 'h');
+    if (!is_regular && !is_chunk) return -6;
+
     int num_params = (int)rd_be_u32(ptr + FXP_NUMPARAMS_OFF);
-    (void)version;
+    (void)num_params;
 
     copy_name(g_patch_name[instance_id], ptr + FXP_PRGNAME_OFF, FXP_PRGNAME_LEN,
               sizeof(g_patch_name[instance_id]));
@@ -801,46 +968,69 @@ static int load_fxp_data(int instance_id, const uint8_t* ptr, int len) {
 
     const uint8_t* data = ptr + FXP_DATA_OFF;
     int data_len = len - FXP_DATA_OFF;
-    if (data_len < 0) return -6;
+    if (data_len < 0) return -7;
 
     if (is_regular) {
+        // FxCk: float[numParams] params, no chunk wrapper.
         int applied = apply_regular_params_instance(instance_id, data, data_len, num_params);
         if (applied == 0) {
             g_patch_name[instance_id][0] = '\0';
-            return -7;
+            return -8;
         }
         return 0;
     }
 
-    // Chunk format: expect "FBCh" magic, then int32 BE size, then bytes.
-    if (data_len < 8) { g_patch_name[instance_id][0] = '\0'; return -8; }
-    if (!(data[0] == 'F' && data[1] == 'B' && data[2] == 'C' && data[3] == 'h')) {
-        g_patch_name[instance_id][0] = '\0';
-        return -9;
-    }
-    int chunk_size = (int)rd_be_u32(data + 4);
-    if (chunk_size < 4 || chunk_size > data_len - 8) {
+    // Chunk (FPCh program / FBCh bank): int32 BE chunkSize at data[0..3],
+    // then chunk bytes.
+    if (data_len < 12) { g_patch_name[instance_id][0] = '\0'; return -9; }
+    int chunk_size = (int)rd_be_u32(data);
+    if (chunk_size < 4 || chunk_size > data_len - 4) {
         g_patch_name[instance_id][0] = '\0';
         return -10;
     }
 
-    const uint8_t* chunk = data + 8;
-    // JUCE's copyXmlToBinary prepends a 4-byte BE size prefix with the
-    // XML byte count. We don't need it (we already know chunk_size), so
-    // skip 4 bytes and parse the rest as XML text.
-    const char* xml = (const char*)(chunk + 4);
-    int xml_len = chunk_size - 4;
-    if (xml_len <= 0) { g_patch_name[instance_id][0] = '\0'; return -11; }
+    const uint8_t* chunk = data + 4;
+    const char* xml = nullptr;
+    int xml_len = 0;
 
-    int applied = parse_chunk_xml_instance(instance_id, xml, xml_len);
+    if (chunk_size >= 8 && chunk[0] == 'V' && chunk[1] == 'C' &&
+        chunk[2] == '2' && chunk[3] == '!') {
+        // OB-Xf native "VC2!" wrapper: 4-byte magic + LE uint32 xmlLen +
+        // raw UTF-8 XML. This is what every shipped OB-Xf patch uses.
+        uint32_t xml_len_le;
+        __builtin_memcpy(&xml_len_le, chunk + 4, 4);
+        xml_len = (int)xml_len_le;
+        if (xml_len < 0 || xml_len > chunk_size - 8) {
+            g_patch_name[instance_id][0] = '\0';
+            return -11;
+        }
+        xml = (const char*)(chunk + 8);
+    } else {
+        // JUCE copyXmlToBinary blob: 4-byte BE size prefix + XML text.
+        // Used by older JUCE-saved OB-Xd chunks.
+        xml = (const char*)(chunk + 4);
+        xml_len = chunk_size - 4;
+    }
+    if (xml_len <= 0) { g_patch_name[instance_id][0] = '\0'; return -12; }
+
+    // Try native OB-Xf named attributes first (factory patches); fall back
+    // to the legacy OB-Xd integer schema (old .fxp exports via file picker).
+    int applied = parse_chunk_xml_named(instance_id, xml, xml_len);
+    if (applied == 0) {
+        applied = parse_chunk_xml_instance(instance_id, xml, xml_len);
+    }
     if (applied == 0) {
         g_patch_name[instance_id][0] = '\0';
-        return -12;
+        return -13;
     }
     return 0;
 }
 
 // Copy a program name (NUL-terminated) into g_patch_name[id], clamped.
+// Only referenced by the programmatic-init fallback branch of
+// obxd_set_factory_patch (HAS_FACTORY_FXP == 0); guarded so the
+// real-patch build stays warning-free.
+#if !HAS_FACTORY_FXP
 static void set_patch_name(int instance_id, const char* name) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     char* dst = g_patch_name[instance_id];
@@ -849,6 +1039,24 @@ static void set_patch_name(int instance_id, const char* name) {
     for (; i < cap && name && name[i]; ++i) dst[i] = name[i];
     dst[i] = '\0';
 }
+#endif
+
+#if HAS_FACTORY_FXP
+// Order MUST match obxd_set_factory_patch's patch_id indexing — the
+// build.sh xxd step emits arrays named patch_<basename-of-fxp>, and we
+// expect them in alphabetical order so patch_id 0..9 lines up with the
+// instance selector's option order in index.html.
+static const unsigned char* g_factory_patches[INSTANCE_COUNT] = {
+    patch_01_pad, patch_02_bass, patch_03_lead, patch_04_pluck, patch_05_strings,
+    patch_06_keys, patch_07_drone, patch_08_stab, patch_09_hat, patch_10_kick,
+};
+static const unsigned g_factory_patch_sizes[INSTANCE_COUNT] = {
+    sizeof(patch_01_pad), sizeof(patch_02_bass), sizeof(patch_03_lead),
+    sizeof(patch_04_pluck), sizeof(patch_05_strings), sizeof(patch_06_keys),
+    sizeof(patch_07_drone), sizeof(patch_08_stab), sizeof(patch_09_hat),
+    sizeof(patch_10_kick),
+};
+#endif
 
 // =========================================================================
 // C exports (consumed by the AudioWorkletProcessor tail)
@@ -861,9 +1069,9 @@ extern "C" {
 EMSCRIPTEN_KEEPALIVE void obxd_set_factory_patch(int instance_id, int patch_id);
 EMSCRIPTEN_KEEPALIVE void obxd_set_polyphony(int instance_id, int voice_count);
 
-// Creates all 10 SynthEngine instances, applies the matching factory
-// patch to each, and seeds default polyphony (instance 0 polyphonic,
-// rest mono). Idempotent — frees any prior instances first.
+// Creates all 10 SynthEngine instances, applies the OB-Xf init patch to
+// each, and seeds default polyphony (instance 0 polyphonic 8 voices, rest
+// mono). Idempotent — frees any prior instances first.
 EMSCRIPTEN_KEEPALIVE
 void obxd_init(int sample_rate) {
     float sr = sample_rate ? (float)sample_rate : 44100.0f;
@@ -873,11 +1081,12 @@ void obxd_init(int sample_rate) {
         g_engines[i]->setSampleRate(sr);
         for (int p = 0; p < PARAM_COUNT; ++p) g_param_mirror[i][p] = 0.0f;
         g_patch_name[i][0] = '\0';
+        g_mpe_enabled[i] = false;
         apply_defaults_for_instance(i);
-        obxd_set_factory_patch(i, i);   // each instance gets its own factory program
+        obxd_set_factory_patch(i, i);   // init patch (or real .fxp if present)
         g_engine_active[i] = true;
     }
-    // Default polyphony: instance 0 = 8 voices, others = 1 voice.
+    // Default polyphony: instance 0 = 8 voices, others = 1 voice (mono).
     obxd_set_polyphony(0, 8);
     for (int i = 1; i < INSTANCE_COUNT; ++i) obxd_set_polyphony(i, 1);
 }
@@ -939,21 +1148,27 @@ int obxd_get_active(int instance_id) {
     return g_engine_active[instance_id] ? 1 : 0;
 }
 
-// SynthEngine::setVoiceCount(param) calls roundToInt(param*7+1), so
-// param 0 → 1 voice, param 1 → 8 voices (MAX_VOICES). For an integer
-// voice_count in [1,8] the corresponding param is (voice_count-1)/7.
-// We mirror the int in g_engine_polyphony[id] for obxd_get_polyphony.
+// OB-Xf processPolyphony(v) gives 1 + (int)(v * MAX_VOICES) voices,
+// MAX_VOICES = 32. For a desired integer voice_count in [1,32] the
+// bucket-midpoint normalized value is (voice_count-1+0.5)/32. We mirror
+// the int in g_engine_polyphony[id] for obxd_get_polyphony and keep a
+// legacy-scale mirror entry so the knob UI stays consistent.
 EMSCRIPTEN_KEEPALIVE
 void obxd_set_polyphony(int instance_id, int voice_count) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     if (voice_count < 1) voice_count = 1;
-    if (voice_count > 8) voice_count = 8;
-    float param = (float)(voice_count - 1) / 7.0f;
+    if (voice_count > 32) voice_count = 32;   // OB-Xf MAX_VOICES
     g_engine_polyphony[instance_id] = voice_count;
-    apply_param_instance(instance_id, VOICE_COUNT, param);
+    if (g_engines[instance_id]) {
+        float v_new = ((float)(voice_count - 1) + 0.5f) / 32.0f;
+        g_engines[instance_id]->processPolyphony(v_new);
+    }
+    // Legacy mirror (old 1..8 scale, clamped) for UI consistency.
+    float v_legacy = (float)(voice_count - 1) / 7.0f;
+    if (v_legacy > 1.0f) v_legacy = 1.0f;
+    g_param_mirror[instance_id][VOICE_COUNT] = v_legacy;
 }
 
-// Inverse of the set_polyphony mapping: round(param*7+1).
 EMSCRIPTEN_KEEPALIVE
 int obxd_get_polyphony(int instance_id) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return 0;
@@ -972,14 +1187,15 @@ void obxd_set_gain(int instance_id, double gain) {
 }
 
 // Synchronous MIDI message handler for one instance. Called from the
-// worklet between renders (each pending message is flushed at the top
-// of process()). Sample-accurate scheduling is intentionally not
-// implemented — the worklet drains at 128-sample boundaries (~2.9ms
-// @ 44.1kHz), which is well below perceptible MIDI jitter.
+// worklet between renders. Sample-accurate scheduling is intentionally
+// not implemented — the worklet drains at 128-sample boundaries.
+//
+// OB-Xf note handlers are channel-aware (MPE). When g_mpe_enabled[id] is
+// set, the status byte's low nibble is forwarded so the engine tracks
+// per-channel note signatures. Otherwise channel 0 is used (non-MPE).
 //
 // Status byte high nibble routing per the GM standard; we drop all
-// system-common / system-real-time bytes (>=0xF0) because the engine
-// has no use for them.
+// system-common / system-real-time bytes (>=0xF0).
 EMSCRIPTEN_KEEPALIVE
 void obxd_midi_in(int instance_id, uint8_t status, uint8_t d1, uint8_t d2) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
@@ -987,18 +1203,23 @@ void obxd_midi_in(int instance_id, uint8_t status, uint8_t d1, uint8_t d2) {
     if (!e) return;
     if (status >= 0xF0) return;   // active sensing, clock, sysex, reset, etc.
 
+    // Channel arg: when MPE is enabled for this instance, forward the
+    // status byte's low nibble so the OB-Xf engine tracks per-channel
+    // note signatures (processNoteOn/Off are channel-aware). Otherwise
+    // pass 0 (the OB-Xf engine treats channel 0 as the global channel).
+    const int8_t channel = g_mpe_enabled[instance_id] ? (status & 0x0F) : 0;
     SynthEngine& s = *e;
     switch (status & 0xF0) {
         case 0x80:  // Note off
-            s.procNoteOff(d1 & 0x7F);
+            s.processNoteOff(d1 & 0x7F, (d2 & 0x7F) / 127.0f, channel);
             break;
         case 0x90:  // Note on; velocity 0 is interpreted as note-off
-            if (d2 == 0) s.procNoteOff(d1 & 0x7F);
-            else         s.procNoteOn(d1 & 0x7F, (d2 & 0x7F) / 127.0f);
+            if (d2 == 0) s.processNoteOff(d1 & 0x7F, 0.0f, channel);
+            else         s.processNoteOn(d1 & 0x7F, (d2 & 0x7F) / 127.0f, channel);
             break;
         case 0xB0:  // CC
             switch (d1 & 0x7F) {
-                case 1:    s.procModWheel((d2 & 0x7F) / 127.0f); break;
+                case 1:    s.processModWheel((d2 & 0x7F) / 127.0f); break;
                 case 64:   if (d2 >= 64) s.sustainOn(); else s.sustainOff(); break;
                 case 120:  s.allSoundOff();  break;
                 case 123:  s.allNotesOff();  break;
@@ -1007,7 +1228,7 @@ void obxd_midi_in(int instance_id, uint8_t status, uint8_t d1, uint8_t d2) {
             break;
         case 0xE0: {  // Pitch wheel — 14-bit little-endian, center 8192
             int v = ((d2 & 0x7F) << 7) | (d1 & 0x7F);
-            s.procPitchWheel((v - 8192) / 8192.0f);
+            s.processPitchWheel((v - 8192) / 8192.0f);
             break;
         }
         default:
@@ -1039,7 +1260,7 @@ void obxd_panic_all(void) {
 }
 
 // Hook for the per-instance knob UI; clamps and dispatches via
-// apply_param_instance() so it accepts the same indices as ParamsEnum.h.
+// apply_param_instance() so it accepts the legacy indices 0..79.
 EMSCRIPTEN_KEEPALIVE
 void obxd_set_param(int instance_id, int idx, double value) {
     if (value < 0.0) value = 0.0;
@@ -1047,9 +1268,9 @@ void obxd_set_param(int instance_id, int idx, double value) {
     apply_param_instance(instance_id, idx, (float)value);
 }
 
-// Returns the last-applied value for instance `instance_id`'s parameter
-// `idx`, or -1 if out of range / not initialized. The UI calls this to
-// render knob positions after a default-patch or .fxp load.
+// Returns the last-applied LEGACY value for instance `instance_id`'s
+// parameter `idx`, or -1 if out of range / not initialized. The UI calls
+// this to render knob positions after a default-patch or .fxp load.
 EMSCRIPTEN_KEEPALIVE
 float obxd_get_param(int instance_id, int idx) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return -1.0f;
@@ -1061,8 +1282,22 @@ EMSCRIPTEN_KEEPALIVE
 int obxd_load_fxp(int instance_id, uint8_t* ptr, int len) {
     return load_fxp_data(instance_id, ptr, len);
 }
+// Return codes from obxd_load_fxp / load_fxp_data:
+//    0  success
+//   -2  instance_id out of range
+//   -3  engine not initialized
+//   -4  ptr null or len < header (56)
+//   -5  chunkMagic != "CcnK"
+//   -6  fxMagic not FxCk/FPCh/FBCh
+//   -7  data offset negative (impossible)
+//   -8  regular (FxCk) but no float params applied
+//   -9  chunk too short for chunkSize field
+//  -10  chunkSize out of bounds
+//  -11  VC2! wrapper xmlLen out of bounds
+//  -12  xml_len non-positive
+//  -13  parsed no params (neither named nor legacy schema matched)
 
-// Per-instance reset to the engine defaults. Clears the loaded patch
+// Per-instance reset to the OB-Xf init patch. Clears the loaded patch
 // name. The UI then re-applies its overrides on top if it wants.
 EMSCRIPTEN_KEEPALIVE
 void obxd_reset_patch(int instance_id) {
@@ -1079,13 +1314,16 @@ const char* obxd_get_patch_name(int instance_id) {
 }
 
 // Load factory program `patch_id` into instance `instance_id`. When
-// patches.h is present (real .fxp files were supplied at build time)
-// we route through load_fxp_data(); otherwise we apply the programmatic
-// fallback table for that patch_id.
+// patches.h is present (real .fxp files supplied in wasm/obxd/patches/) we
+// route through load_fxp_data(), which parses the native OB-Xf named-attribute
+// XML schema and applies values 1:1 to processX() (no rescale). The shipped
+// factory patches are 10 CC0/Public Domain OB-Xf presets (pad/bass/lead/
+// pluck/strings/keys/drone/stab/hat/kick) sourced from the Surge Synth Team
+// OB-Xf factory library. When patches.h is absent, every instance falls back
+// to the programmatic OB-Xf init patch via apply_defaults_for_instance().
 //
 // In both paths we first reset via apply_defaults_for_instance() so a
-// previous patch's parameters don't bleed through (the programmatic
-// tables and .fxp files only specify the params they care about).
+// previous patch's parameters don't bleed through.
 EMSCRIPTEN_KEEPALIVE
 void obxd_set_factory_patch(int instance_id, int patch_id) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
@@ -1095,11 +1333,14 @@ void obxd_set_factory_patch(int instance_id, int patch_id) {
 #if HAS_FACTORY_FXP
     load_fxp_data(instance_id, g_factory_patches[patch_id], (int)g_factory_patch_sizes[patch_id]);
 #else
-    const FactoryProgram& prog = g_factory_programs[patch_id];
-    for (int i = 0; i < prog.count; ++i) {
-        apply_param_instance(instance_id, prog.params[i].idx, prog.params[i].v);
-    }
-    set_patch_name(instance_id, prog.name);
+    // No real .fxp factory patches shipped yet — every instance gets the
+    // same OB-Xf init patch. The label keeps the legacy per-instance name
+    // so the UI selector stays populated.
+    static const char* const kInitNames[INSTANCE_COUNT] = {
+        "Init Pad", "Init Bass", "Init Lead", "Init Pluck", "Init Strings",
+        "Init Keys", "Init Drone", "Init Stab", "Init Hat", "Init Kick",
+    };
+    set_patch_name(instance_id, kInitNames[patch_id]);
 #endif
 }
 
@@ -1107,6 +1348,40 @@ EMSCRIPTEN_KEEPALIVE
 float obxd_get_instance_rms(int instance_id) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return 0.0f;
     return g_engine_rms[instance_id];
+}
+
+// Per-instance MPE enable flag (T9). The OB-Xf engine is channel-aware;
+// when MPE is enabled the bridge (task T20) will route each MIDI channel
+// to its own note signature. For now obxd_midi_in always passes
+// channel=0 regardless of this flag.
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_mpe(int instance_id, int enabled) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    g_mpe_enabled[instance_id] = (enabled != 0);
+}
+
+// Fix 2: per-instance mod-wheel direct routing. CC 1 (mod wheel) is a
+// reserved CC — the MIDI-learn layer lets it fall through, and previously
+// it only reached the synth IF the Octopus engine echoed it to the SAB
+// ring (unreliable). processModWheel sets a smoother target in [0,1].
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_mod_wheel(int instance_id, float v) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    g_engines[instance_id]->processModWheel(v);
+}
+
+// Fix 2: per-instance sustain-pedal direct routing. CC 64 (sustain) is a
+// reserved CC routed the same way as mod wheel above. sustainOn/Off are
+// idempotent for repeated calls with the same state.
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_sustain(int instance_id, int on) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    if (on) g_engines[instance_id]->sustainOn();
+    else    g_engines[instance_id]->sustainOff();
 }
 
 // Backwards-compat no-op for the Phase 1 worklet's `note` branch

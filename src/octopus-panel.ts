@@ -214,6 +214,9 @@ function wireInputHandlers(module: OctopusWasmModule) {
         const rotNdx = parseInt(htmlEl.dataset.rotary!, 10);
 
         htmlEl.onwheel = (e) => {
+            const canScrollDown = window.scrollY + window.innerHeight < document.documentElement.scrollHeight - 1;
+            const canScrollUp = window.scrollY > 0;
+            if ((e.deltaY > 0 && canScrollDown) || (e.deltaY < 0 && canScrollUp)) return;
             e.preventDefault();
             const dir = e.deltaY > 0 ? 1 : 2;
             module._wasm_rotary(rotNdx, dir);

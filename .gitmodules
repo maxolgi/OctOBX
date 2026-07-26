@@ -7,3 +7,6 @@
 [submodule "third_party/JUCE"]
 	path = third_party/JUCE
 	url = https://github.com/juce-framework/JUCE.git
+[submodule "third_party/OB-Xf"]
+	path = third_party/OB-Xf
+	url = https://github.com/surge-synthesizer/OB-Xf.git

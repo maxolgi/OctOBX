@@ -9,6 +9,10 @@
  */
 
 import type { OctopusWasmModule } from "./octopus-types";
+import {
+    loadMidiLearnBindings,
+    saveMidiLearnBindings,
+} from "./obxf-midi-learn-integration";
 
 const STATE_PATH = "/persistent/octopus_state.bin";
 
@@ -48,12 +52,23 @@ export function downloadStateFile(module: OctopusWasmModule): void {
 }
 
 export function setupStatePersistence(module: OctopusWasmModule) {
+    // Restore OB-Xf MIDI-learn bindings from localStorage. They live
+    // alongside (not inside) the binary sequencer state because they're
+    // a JSON document, not part of the engine's flash image. Auto-save
+    // fires on every learn/unlearn via the manager's onLearnedCallback,
+    // so the SAVE button below doesn't need to also write them.
+    loadMidiLearnBindings();
+
     const saveBtn = document.getElementById("oct-save");
     const loadBtn = document.getElementById("oct-load");
 
     saveBtn?.addEventListener("click", () => {
         ensurePersistentDir(module);
         module._wasm_save_state();
+        // Persist the latest MIDI-learn bindings too — defensive: the
+        // auto-save hook should already have written them, but a SAVE
+        // is a natural "snapshot everything" gesture so we re-flush.
+        saveMidiLearnBindings();
         downloadStateFile(module);
     });
 

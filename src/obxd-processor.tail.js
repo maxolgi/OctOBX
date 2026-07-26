@@ -210,6 +210,21 @@ class ObxdProcessor extends AudioWorkletProcessor {
                 case 'set_polyphony':
                     if (wasmModule) wasmModule._obxd_set_polyphony(id, msg.voice_count | 0);
                     break;
+                case 'set_mpe':
+                    // Per-instance MPE flag (T9). Stored on the C side in
+                    // g_mpe_enabled[id]; the engine is channel-aware but the
+                    // actual per-channel dispatch arrives in T20. For now
+                    // obxd_midi_in still passes channel=0 regardless.
+                    if (wasmModule) wasmModule._obxd_set_mpe(id, msg.enabled ? 1 : 0);
+                    break;
+                case 'set_mod_wheel':
+                    // Fix 2: reserved CC 1 direct routing. value is 0..1.
+                    if (wasmModule) wasmModule._obxd_set_mod_wheel(id, +msg.value);
+                    break;
+                case 'set_sustain':
+                    // Fix 2: reserved CC 64 direct routing. enabled is 0/1.
+                    if (wasmModule) wasmModule._obxd_set_sustain(id, msg.enabled ? 1 : 0);
+                    break;
                 case 'set_param':
                     // idx is a ParamsEnum.h value; value is 0..1. Forwarded
                     // directly to the engine. Useful for runtime patch tweaks.
