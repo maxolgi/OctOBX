@@ -1,0 +1,208 @@
+/* OB-Xf Synth UI - Exact match to Surge Synth Team reference image */
+
+.obxf-editor-panel {
+  background-color: #1a1a1a;
+  border: 2px solid #333;
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+  font-family: 'Jersey20', monospace;
+  color: #ffffff;
+}
+
+.obxf-editor-panel .obxd-knob {
+  background-color: transparent;
+}
+
+.obxd-knob img {
+  filter: brightness(0.9);
+}
+
+.obxd-knob .obxd-knob-body {
+  filter: brightness(0.8);
+}
+
+.obxd-knob .obxd-knob-pointer {
+  filter: brightness(1.2);
+}
+
+.obxd-toggle {
+  background-color: transparent;
+}
+
+.obxd-toggle.obxd-toggle-on {
+  filter: brightness(1.1);
+}
+
+.obxd-tri-state {
+  background-color: transparent;
+}
+
+.obxd-selector {
+  background-color: transparent;
+}
+
+.obxd-button {
+  background-color: transparent;
+}
+
+.obxd-button.obxd-button-pressed {
+  filter: brightness(0.8);
+}
+
+/* Section styling to match the reference */
+.obxf-section-master {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-global {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-oscillators {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-mixer {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-control {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-filter {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-lfo {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-filter-env {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-amp-env {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-voice {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.obxf-section-programmer {
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+/* Digital display styling - red text as in reference */
+.obxf-digital-display {
+  color: #ff0000;
+  font-size: 14px;
+  font-weight: bold;
+  text-align: center;
+  background-color: #000;
+  border: 1px solid #333;
+  border-radius: 2px;
+  padding: 2px 4px;
+}
+
+/* Knob styling to match the reference */
+.obxd-knob {
+  filter: brightness(0.9);
+}
+
+.obxd-knob:hover {
+  filter: brightness(1.1);
+}
+
+/* Button styling */
+.obxd-toggle {
+  filter: brightness(0.9);
+}
+
+.obxd-toggle:hover {
+  filter: brightness(1.1);
+}
+
+.obxd-button {
+  filter: brightness(0.9);
+}
+
+.obxd-button:hover {
+  filter: brightness(1.1);
+}
+
+/* Section labels */
+.obxf-section-label {
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+/* Voice LED styling */
+.obxf-voice-led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #ff0000;
+  display: inline-block;
+  margin: 0 2px;
+}
+
+.obxf-voice-led.off {
+  background-color: #333;
+  opacity: 0.3;
+}
+
+/* Programmer row styling */
+.obxf-programmer-row {
+  background-color: #2a2a2a;
+  border-top: 1px solid #444;
+  padding: 4px;
+}
+
+.obxf-patch-name {
+  color: #ff0000;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+/* Add this CSS to the document head in the main.ts or index.html */
+/* 
+<link rel="stylesheet" href="/css/obxf-style.css">
+*/

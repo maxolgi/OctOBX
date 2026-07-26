@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OctOBX — Octopus + OB-XD in your browser</title>
     <style>
+        @font-face {
+            font-family: "Jersey20";
+            src: url("/obxf-assets/Jersey20.ttf") format("truetype");
+        }
+        @font-face {
+            font-family: "Trek";
+            src: url("/obxf-assets/Trek.ttf") format("truetype");
+        }
         :root {
             --bg: #1a1a1a;
             --panel: #2a2a2a;
@@ -400,91 +408,6 @@
         #obxd-panic-btn, #obxd-panic-all-btn { color: #f55; border-color: #533; }
         #obxd-panic-btn:hover, #obxd-panic-all-btn:hover { background: #422; }
 
-        .obxd-knob-grid {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 16px;
-            align-items: flex-start;
-        }
-        .obxd-section {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            background: rgba(0, 0, 0, 0.25);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 6px 8px 8px;
-        }
-        .obxd-section-label {
-            color: var(--text-dim);
-            font-size: 9px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 3px;
-            margin-bottom: 2px;
-        }
-        .obxd-section-grid {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px 10px;
-            max-width: 100%;
-        }
-        .obxd-knob {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            width: 44px;
-            user-select: none;
-            cursor: ns-resize;
-            outline: none;
-        }
-        .obxd-knob:focus-visible {
-            background: rgba(0, 204, 0, 0.08);
-            border-radius: 3px;
-        }
-        .obxd-knob.dragging svg circle:first-of-type,
-        .obxd-knob.dragging svg path:first-of-type {
-            stroke-width: 4;
-        }
-        .obxd-knob-label {
-            font-size: 8px;
-            text-transform: uppercase;
-            color: var(--text-dim);
-            letter-spacing: 0.5px;
-            text-align: center;
-            margin-top: 2px;
-            font-family: monospace;
-            white-space: nowrap;
-        }
-        .obxd-knob-value {
-            font-size: 8px;
-            color: var(--text);
-            text-align: center;
-            font-family: monospace;
-            min-height: 10px;
-        }
-        .obxd-toggle {
-            width: 44px;
-            min-height: 22px;
-            padding: 4px 2px;
-            font-family: monospace;
-            font-size: 9px;
-            text-transform: uppercase;
-            color: var(--text-dim);
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            cursor: pointer;
-            align-self: flex-end;
-        }
-        .obxd-toggle:hover { background: #333; }
-        .obxd-toggle-on {
-            background: #1a3a1a;
-            color: var(--accent);
-            border-color: var(--accent);
-        }
-
         /* ---- OB-Xf MIDI-learn overlay (T23) ---- */
         /* The panel border glows red while learn mode is on. */
         .obxf-editor-panel.obxf-learn-mode {
@@ -493,9 +416,6 @@
         /* The midiLearnButton toggle: bright red when active (matches
            the OB-Xf VectorTheme art: red LED when armed for learn). */
         .obxf-midi-learn-btn.obxd-toggle-on {
-            background: #5a1a1a;
-            color: #f88;
-            border-color: #d33;
             box-shadow: 0 0 6px rgba(220, 60, 60, 0.6);
         }
         /* Per-knob CC badge — small label at the widget's top-right
