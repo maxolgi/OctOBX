@@ -13,6 +13,7 @@ export interface OctopusWasmModule {
     _wasm_midi_input(status: number, d1: number, d2: number): void;
     _wasm_save_state(): void;
     _wasm_load_state(): void;
+    _wasm_consume_state_saved(): number;
     _wasm_shutdown(): void;
     _get_mir_ptr(): number;
     _get_processed_mir_ptr(): number;

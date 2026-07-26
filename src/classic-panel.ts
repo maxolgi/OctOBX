@@ -5,6 +5,7 @@
  */
 
 import type { OctopusWasmModule } from "./octopus-types";
+import { downloadStateFile } from "./state-persistence";
 
 const MIR_SIZE = 170;
 
@@ -66,7 +67,10 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
     style.textContent = CLASSIC_CSS;
     document.head.appendChild(style);
 
-    const skey = (i: number, p: number | boolean) => module._wasm_key_press(i, p ? 1 : 0);
+    const skey = (i: number, p: number | boolean) => {
+        module._wasm_key_press(i, p ? 1 : 0);
+        if (module._wasm_consume_state_saved()) downloadStateFile(module);
+    };
     const rrot = (i: number, d: number) => module._wasm_rotary(i, d);
 
     function setTip(el: HTMLElement, text: string) { el.dataset.tip = text; }

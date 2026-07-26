@@ -31,6 +31,10 @@ static pthread_t sequencer_pthread;
 volatile long g_tick_ns = 0;
 volatile int g_seq_tick_count = 0;
 
+/* Set to 1 when the firmware's internal save (GRID+PGM) writes to MEMFS.
+ * JS polls this after each key press to trigger a browser download. */
+static volatile int g_state_saved = 0;
+
 static void *sequencer_thread_func(void *arg) {
     (void)arg;
 
@@ -207,6 +211,7 @@ static void handle_key_press(int keyNdx, int press) {
         if (keyNdx == 242 && G_zoom_level == OSC_ZOOM_GRID
             && MODE_OBJECT_SELECTION == OSC_BIRDSEYE && G_run_bit == 0) {
             save_state("/persistent/octopus_state.bin");
+            g_state_saved = 1;
         }
     } else {
         G_pressed_keys[keyNdx] = 0;
@@ -278,6 +283,12 @@ int EMSCRIPTEN_KEEPALIVE engine_init(void) {
     G_TIMER_REFILL_update();
 
     fprintf(stderr, "engine_init: ready (tempo=%d BPM)\n", G_master_tempo);
+
+    /* Populate the initial display so LEDs are lit on page load.
+     * The firmware's main.c calls this after init, but main_wasm.c
+     * replaces main.c. Without it the MIR stays empty until the user
+     * interacts (e.g. pressing ESC). */
+    Page_requestRefresh();
 
     /* Start the sequencer thread (G_run_bit stays 0 until the user
      * presses PLAY — don't auto-start playback on page load). */
@@ -436,6 +447,16 @@ void EMSCRIPTEN_KEEPALIVE wasm_save_state(void) {
 
 void EMSCRIPTEN_KEEPALIVE wasm_load_state(void) {
     load_state("/persistent/octopus_state.bin");
+    Page_requestRefresh();
+}
+
+/* Returns 1 if the firmware's internal save (GRID+PGM) wrote to MEMFS
+ * since the last call, then resets the flag. JS uses this to trigger a
+ * browser download of the .bin after Octopus-panel saves. */
+int EMSCRIPTEN_KEEPALIVE wasm_consume_state_saved(void) {
+    int saved = g_state_saved;
+    g_state_saved = 0;
+    return saved;
 }
 
 /* Sequencer running state for JS cleanup */
