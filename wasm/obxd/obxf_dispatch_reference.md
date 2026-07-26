@@ -8,7 +8,7 @@ adding fresh controls for OB-Xf params that have no OB-Xd ancestor.
 
 ## Method-by-method dispatch (Output 3)
 
-Every `processXxx(float val)` (or `processXxx(float val, ...)` for pan) in `/tmp/opencode/ob-xf/src/engine/SynthEngine.h`. Format: `method → ID [was: legacy]`. `NEW FEATURE` = no OB-Xd ancestor. `MIDI` = driven by MIDI, not a parameter knob.
+Every `processXxx(float val)` (or `processXxx(float val, ...)` for pan) in `obxf_imported/engine/SynthEngine.h` (curated copy of `third_party/OB-Xf/src/engine/SynthEngine.h`). Format: `method → ID [was: legacy]`. `NEW FEATURE` = no OB-Xd ancestor. `MIDI` = driven by MIDI, not a parameter knob.
 
 ```text
 processVolume                  → Volume                [was: processVolume (VOLUME=2)]

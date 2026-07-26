@@ -4,7 +4,7 @@
  *
  * Drains the Octopus engine's MIDI ring buffer in batches (up to 128 events
  * per frame) and fans each batch out to whatever consumers are attached
- * via the `onBatchDrained` callback. Today the only consumer is the OB-XD
+ * via the `onBatchDrained` callback. Today the only consumer is the OB-Xf
  * synth bridge (`obxd-bridge.ts`); earlier revisions also routed to an
  * openDAW NoteSignal bridge — openDAW has since been removed.
  */
@@ -12,6 +12,7 @@
 import type { OctopusWasmModule } from "./octopus-types";
 import { openMidiAccess, pollForPorts } from "./midi-access";
 import { isObxdReady, setHwMidiHandler } from "./obxd-audio";
+import { frameMidi } from "./midi-framing";
 
 /*
  * Handler invoked once per frame with the batch of events drained from the
@@ -24,19 +25,6 @@ export type BatchDrainHandler = (
     timestamps: Float64Array,
     count: number,
 ) => void;
-
-/*
- * Frame a MIDI message into the correct number of bytes for a raw output port.
- * Real-time messages are 1 byte; program change / channel pressure are 2 bytes;
- * everything else (note, CC, bender, etc.) is 3 bytes. Sending the wrong length
- * corrupts the stream for hardware synths.
- */
-function frameMidi(status: number, d1: number, d2: number): number[] {
-    if (status >= 0xf8) return [status];                 // system real-time
-    const cmd = status & 0xf0;
-    if (cmd === 0xc0 || cmd === 0xd0) return [status, d1]; // PGM / ch-pressure
-    return [status, d1, d2];                               // channel voice
-}
 
 /*
  * Forward offset added to each event's push-time timestamp before passing

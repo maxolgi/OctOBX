@@ -36,12 +36,13 @@ export interface OctopusWasmModule {
     HEAPF64: Float64Array;
     FS: {
         mkdir(path: string): void;
-        mount(type: unknown, options: unknown, mountpoint: string): void;
+        mount(type: { IDBFS?: unknown } | unknown, options: unknown, mountpoint: string): void;
         syncfs(populate: boolean, callback: (err: Error | null) => void): void;
         writeFile(path: string, data: string | Uint8Array): void;
         readFile(path: string): Uint8Array;
         analyzePath(path: string): { exists: boolean };
     };
+    IDBFS?: unknown;
     onRuntimeInitialized?: () => void;
 }
 
@@ -49,14 +50,17 @@ declare global {
     interface Window {
         OctopusModuleFactory?: (moduleOverrides?: object) => Promise<OctopusWasmModule>;
         ObxdModuleFactory?: (moduleOverrides?: object) => Promise<ObxdWasmModule>;
+        __module?: OctopusWasmModule;
+        __obxd?: { ctx: AudioContext; node: AudioWorkletNode };
+        webkitAudioContext?: typeof AudioContext;
     }
 }
 
 /*
- * Emscripten module type declaration for the OB-XD synth engine.
+ * Emscripten module type declaration for the OB-Xf synth engine.
  * Matches the EMSCRIPTEN_KEEPALIVE exports in wasm/obxd/main_obxd.cpp.
  *
- * NOTE: OB-XD runs as a SEPARATE WASM module (obxd_wasm.wasm) inside the
+ * NOTE: OB-Xf runs as a SEPARATE WASM module (obxd_wasm.wasm) inside the
  * AudioWorklet — not the Octopus engine. The worklet code
  * (obxd-processor.tail.js) is plain JS and looks these up dynamically by
  * name, so this interface primarily serves as typed documentation for any

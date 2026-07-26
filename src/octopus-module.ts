@@ -33,7 +33,7 @@ export async function loadOctopusModule(wasmPath: string): Promise<OctopusWasmMo
 function setupIdbfs(module: OctopusWasmModule) {
     try {
         module.FS.mkdir("/persistent");
-        module.FS.mount((module as unknown as { IDBFS: unknown }).IDBFS, {}, "/persistent");
+        module.FS.mount(module.IDBFS ?? {}, {}, "/persistent");
         module.FS.syncfs(true, (err: Error | null) => {
             if (err) console.error("IDBFS load failed:", err);
             else console.log("[octopus] IDBFS loaded");

@@ -219,6 +219,13 @@ static bool  g_mpe_enabled[INSTANCE_COUNT] = {};   // per-instance MPE flag (T9)
 // [instance_id][legacy_param_idx]; values are in the LEGACY 0..1 space.
 static float g_param_mirror[INSTANCE_COUNT][PARAM_COUNT] = {};
 
+// Per-instance mirror for the 28 NEW OB-Xf params (no legacy ancestor).
+// Indexed [instance_id][new_idx] where new_idx = sentinel - 200 (0..27).
+// obxd_get_param() returns from here for idx >= 200 so the knob UI can
+// sync NEW-param widget positions after a .fxp load.
+static constexpr int NEW_PARAM_COUNT = 28;
+static float g_new_param_mirror[INSTANCE_COUNT][NEW_PARAM_COUNT] = {};
+
 // Per-instance last-loaded program name (empty until a load succeeds).
 static char g_patch_name[INSTANCE_COUNT][64] = {};
 
@@ -344,6 +351,7 @@ static void apply_defaults_for_instance(int instance_id) {
     if (!e) return;
 
     for (int i = 0; i < PARAM_COUNT; ++i) g_param_mirror[instance_id][i] = 0.0f;
+    for (int i = 0; i < NEW_PARAM_COUNT; ++i) g_new_param_mirror[instance_id][i] = 0.0f;
 
     SynthEngine& s = *e;
     // Master / global
@@ -400,9 +408,12 @@ static void apply_param_instance(int instance_id, int idx, float v) {
 
     // Fix 3: sentinel indices >= NEW_PARAM_BASE (200) are OB-Xf params with
     // no legacy ancestor. Dispatch 1:1 to the NEW processX() methods (no
-    // rescale, no g_param_mirror — there is no legacy slot for them).
+    // rescale) and mirror the value so obxd_get_param can report it.
     if (idx >= 200) {
-        apply_new_param_instance(s, idx - 200, v);
+        int new_idx = idx - 200;
+        if (new_idx >= 0 && new_idx < NEW_PARAM_COUNT)
+            g_new_param_mirror[instance_id][new_idx] = v;
+        apply_new_param_instance(s, new_idx, v);
         return;
     }
 
@@ -569,6 +580,53 @@ static int legacy_index_for_streaming_name(const char* name, int nlen) {
     return -1;
 }
 
+// Reverse-lookup an OB-Xf streaming param name → NEW-param sentinel offset
+// (0..27), for the 28 params with no legacy ancestor. Returns -1 for names
+// that DO have a legacy ancestor (or are unknown). The mapping is 1:1 with
+// apply_new_param_instance()'s switch cases. VoiceReassign and Osc2Keytrack
+// (cases 1, 2) have no streaming name in OB-Xf .fxp files and are therefore
+// unreachable here — they can only be set via the UI knob path.
+static const struct { const char* name; int offset; } new_param_names[] = {
+    { "UnisonVoices",        0 },
+    // 1 = VoiceReassign (no streaming name)
+    // 2 = Osc2Keytrack (no streaming name)
+    { "EnvToPitchInvert",    3 },
+    { "EnvToPWInvert",       4 },
+    { "RingModMix",          5 },
+    { "NoiseColor",          6 },
+    { "VibratoWave",         7 },
+    { "Filter4PoleXpander",  8 },
+    { "FilterXpanderMode",   9 },
+    { "LFO1PW",             10 },
+    { "LFO1ToVolume",       11 },
+    { "LFO2TempoSync",      12 },
+    { "LFO2Rate",           13 },
+    { "LFO2ModAmount1",     14 },
+    { "LFO2ModAmount2",     15 },
+    { "LFO2Wave1",          16 },
+    { "LFO2Wave2",          17 },
+    { "LFO2Wave3",          18 },
+    { "LFO2PW",             19 },
+    { "LFO2ToOsc1Pitch",    20 },
+    { "LFO2ToOsc2Pitch",    21 },
+    { "LFO2ToFilterCutoff", 22 },
+    { "LFO2ToOsc1PW",       23 },
+    { "LFO2ToOsc2PW",       24 },
+    { "LFO2ToVolume",       25 },
+    { "FilterEnvAttackCurve",26 },
+    { "AmpEnvAttackCurve",  27 },
+};
+static constexpr int new_param_names_count =
+    sizeof(new_param_names) / sizeof(new_param_names[0]);
+
+static int new_offset_for_streaming_name(const char* name, int nlen) {
+    for (int i = 0; i < new_param_names_count; ++i) {
+        if (nameeq(name, nlen, new_param_names[i].name))
+            return new_param_names[i].offset;
+    }
+    return -1;
+}
+
 static void apply_named_param_instance(int instance_id, const char* name, int nlen, float v) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     SynthEngine* e = g_engines[instance_id];
@@ -578,19 +636,24 @@ static void apply_named_param_instance(int instance_id, const char* name, int nl
     if (v > 1.0f) v = 1.0f;
     SynthEngine& s = *e;
 
-    // Fix 4(a): mirror legacy-indexed params so the knob UI syncs correctly
-    // after a native OB-Xf .fxp load (syncObxdControlsFromEngine reads
-    // g_param_mirror). The value stored is the NATIVE OB-Xf 0..1 value,
-    // which matches the legacy value for the 41 clean 1:1 params. For the
-    // 14 rescaled params (OCTAVE/Transpose, BENDRANGE, LATK/FATK, …) the
-    // stored native value differs from what the legacy knob WOULD produce,
-    // so grabbing such a knob after a patch load may cause a small jump —
-    // a known trade-off of option (a) vs a full main-thread XML re-parse
-    // (option b). The 28 NEW params (no legacy index) are not mirrored;
-    // their knobs still don't sync after a patch load (follow-up).
+    // Mirror legacy-indexed params so the knob UI syncs correctly after a
+    // native OB-Xf .fxp load (syncObxdControlsFromEngine reads g_param_mirror).
+    // The value stored is the NATIVE OB-Xf 0..1 value, which matches the
+    // legacy value for the 41 clean 1:1 params. For the 14 rescaled params
+    // (OCTAVE/Transpose, BENDRANGE, LATK/FATK, …) the stored native value
+    // differs from what the legacy knob WOULD produce, so grabbing such a
+    // knob after a patch load may cause a small jump — a known trade-off.
     int legacy_idx = legacy_index_for_streaming_name(name, nlen);
     if (legacy_idx >= 0 && legacy_idx < PARAM_COUNT) {
         g_param_mirror[instance_id][legacy_idx] = v;
+    }
+
+    // Mirror NEW params (no legacy ancestor) into g_new_param_mirror so the
+    // knob UI can sync their widget positions too. The sentinel offset (0..27)
+    // matches apply_new_param_instance()'s switch.
+    int new_off = new_offset_for_streaming_name(name, nlen);
+    if (new_off >= 0 && new_off < NEW_PARAM_COUNT) {
+        g_new_param_mirror[instance_id][new_off] = v;
     }
 
     // MASTER
@@ -743,6 +806,13 @@ static void apply_named_param_instance(int instance_id, const char* name, int nl
 //
 // Bank chunks (FBCh) carry <programs><program/>...; we use the FIRST program
 // (or the currentProgram-indexed one) only.
+//
+// SECURITY (XXE): the XML chunk is parsed by hand-rolled char-by-char scanners
+// (parse_chunk_xml_instance / parse_chunk_xml_named), NOT by a real XML parser.
+// No DTD processing, no entity expansion, no external entity resolution occurs.
+// This makes XXE (XML External Entity) attacks impossible by construction.
+// (ObxdImporter.cpp's juce::XmlDocument::parse is compiled into the TU for
+// linker-symbol satisfaction but is never called at runtime.)
 // =========================================================================
 
 static inline uint32_t rd_be_u32(const uint8_t* p) {
@@ -1080,6 +1150,7 @@ void obxd_init(int sample_rate) {
         g_engines[i] = new SynthEngine();
         g_engines[i]->setSampleRate(sr);
         for (int p = 0; p < PARAM_COUNT; ++p) g_param_mirror[i][p] = 0.0f;
+        for (int p = 0; p < NEW_PARAM_COUNT; ++p) g_new_param_mirror[i][p] = 0.0f;
         g_patch_name[i][0] = '\0';
         g_mpe_enabled[i] = false;
         apply_defaults_for_instance(i);
@@ -1268,12 +1339,19 @@ void obxd_set_param(int instance_id, int idx, double value) {
     apply_param_instance(instance_id, idx, (float)value);
 }
 
-// Returns the last-applied LEGACY value for instance `instance_id`'s
-// parameter `idx`, or -1 if out of range / not initialized. The UI calls
-// this to render knob positions after a default-patch or .fxp load.
+// Returns the last-applied value for instance `instance_id`'s parameter
+// `idx`, or -1 if out of range / not initialized. The UI calls this to
+// render knob positions after a default-patch or .fxp load. Accepts BOTH
+// legacy indices (0..79, from g_param_mirror) and NEW-param sentinels
+// (>= 200, from g_new_param_mirror).
 EMSCRIPTEN_KEEPALIVE
 float obxd_get_param(int instance_id, int idx) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return -1.0f;
+    if (idx >= 200) {
+        int new_idx = idx - 200;
+        if (new_idx < 0 || new_idx >= NEW_PARAM_COUNT) return -1.0f;
+        return g_new_param_mirror[instance_id][new_idx];
+    }
     if (idx < 0 || idx >= PARAM_COUNT) return -1.0f;
     return g_param_mirror[instance_id][idx];
 }

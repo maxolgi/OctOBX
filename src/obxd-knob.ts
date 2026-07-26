@@ -1,8 +1,8 @@
 /*
- * obxd-knob.ts — vanilla SVG/DOM widget primitives for the OB-XD and OB-Xf
+ * obxd-knob.ts — vanilla SVG/DOM widget primitives for the OB-Xf
  * synth panels.
  *
- * Originally a rotary knob + toggle for the OB-XD panel; extended for the
+ * Originally a rotary knob + toggle for the editor panel; extended for the
  * OB-Xf UI port with four additional widget types: tri-state buttons,
  * selectors (dropdowns), linear sliders (horizontal + vertical), and
  * momentary buttons.
@@ -20,7 +20,9 @@
  *  - Continuous widgets expose a `setValue(v)` hook on the returned
  *    element so the panel can sync after a .fxp load or patch reset
  *    without round-tripping through onChange (which would echo back to
- *    the engine and form a write loop).
+ *    the engine and form a write loop). The return type is `ObxdWidget`
+ *    (= `HTMLElement & { setValue?: (v: number) => void }`) so callers
+ *    get `.setValue` typed automatically.
  *  - Colours use CSS variables (--accent, --panel, --border) with inline
  *    fallbacks so themes can override globally.
  *
@@ -41,6 +43,8 @@ export interface KnobOptions {
     onChange: (idx: number, value: number) => void;
     format?: (value01: number) => string;   // Override the default "% %"
 }
+
+export type ObxdWidget = HTMLElement & { setValue?: (v: number) => void };
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -64,7 +68,7 @@ function arcPath(cx: number, cy: number, r: number, startDeg: number, endDeg: nu
     return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
 }
 
-export function createObxdKnob(opts: KnobOptions): HTMLElement {
+export function createObxdKnob(opts: KnobOptions): ObxdWidget {
     const {
         idx,
         label,
@@ -250,7 +254,7 @@ export interface ToggleOptions {
     onChange: (idx: number, value: number) => void;
 }
 
-export function createObxdToggle(opts: ToggleOptions): HTMLElement {
+export function createObxdToggle(opts: ToggleOptions): ObxdWidget {
     const { idx, label, initial, onChange } = opts;
     let on = initial >= 0.5;
 
@@ -304,7 +308,7 @@ const TRI_BG: Record<string, string> = {
     "1":   "#c80",                  // amber — distinct from accent green
 };
 
-export function createTriStateButton(opts: TriStateOptions): HTMLElement {
+export function createTriStateButton(opts: TriStateOptions): ObxdWidget {
     const { x, y, w, h, labels, onChange } = opts;
     let value = clamp01(opts.initialValue ?? 0);
     // Snap to the nearest valid step (0 / 0.5 / 1) so externally-fed values
@@ -409,7 +413,7 @@ export interface SelectorOptions {
     onChange: (idx: number, value: string) => void;
 }
 
-export function createSelector(opts: SelectorOptions): HTMLElement {
+export function createSelector(opts: SelectorOptions): ObxdWidget {
     const { x, y, w, h, choices, onChange } = opts;
     if (choices.length === 0) {
         throw new Error("createSelector: choices must not be empty");
@@ -483,7 +487,7 @@ export interface SliderOptions {
     onChange: (v: number) => void;
 }
 
-export function createSlider(opts: SliderOptions): HTMLElement {
+export function createSlider(opts: SliderOptions): ObxdWidget {
     const { x, y, w, h, orientation, onChange } = opts;
     const horiz = orientation === "horizontal";
     let value = clamp01(opts.initialValue ?? 0);
@@ -667,7 +671,7 @@ export interface ButtonOptions {
     onClick: () => void;
 }
 
-export function createButton(opts: ButtonOptions): HTMLElement {
+export function createButton(opts: ButtonOptions): ObxdWidget {
     const { x, y, w, h, label, onClick } = opts;
 
     const wrap = document.createElement("button");
@@ -751,7 +755,7 @@ function applyBounds(el: HTMLElement, b: { x: number; y: number; w: number; h: n
  *   });
  *   panel.appendChild(lfo1ToOsc1);
  *   // ...later, after a .fxp load:
- *   (lfo1ToOsc1 as any).setValue?.(0.5);   // sync without re-firing onChange
+ *   (lfo1ToOsc1).setValue?.(0.5);   // sync without re-firing onChange
  *
  *   // --- Selector: Polyphony (1..32). Engine stores idx/(N-1) in 0..1. ---
  *   const poly = createSelector({
@@ -765,7 +769,7 @@ function applyBounds(el: HTMLElement, b: { x: number; y: number; w: number; h: n
  *   });
  *   panel.appendChild(poly);
  *   // .fxp sync — pass the NORMALISED engine value, the widget converts:
- *   (poly as any).setValue?.(8 / 32);      // 8 voices
+ *   (poly).setValue?.(8 / 32);      // 8 voices
  *
  *   // --- Slider: FilterEnvAttackCurve (horizontal, 47x12) ---
  *   const envCurve = createSlider({

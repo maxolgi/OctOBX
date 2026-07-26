@@ -161,7 +161,7 @@ export function setupMidiLearnOverlay(panel: HTMLElement): void {
         saveMidiLearnBindings();
     };
 
-    // --- Learn toggle button (rendered as a slim OB-XD toggle, placed
+    // --- Learn toggle button (rendered as a slim OB-Xf toggle, placed
     //     at the layout's midiLearnButton coordinates). ---
     const btn = createObxdToggle({
         idx: -1,

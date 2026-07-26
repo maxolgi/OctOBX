@@ -2,9 +2,9 @@
  * main.ts — OctOBX entry point.
  *
  * Loads the Octopus WASM engine, starts the grid panel, brings up the
- * OB-XD synth rack, and wires transport + hardware MIDI. The drain loop
+ * OB-Xf synth rack, and wires transport + hardware MIDI. The drain loop
  * is started early so MIDI events reach the hardware output before the
- * panel's DOM updates consume the frame. The OB-XD AudioWorklet reads
+ * panel's DOM updates consume the frame. The OB-Xf AudioWorklet reads
  * MIDI directly from the SharedArrayBuffer, so it is not wired into the
  * drain loop.
  */
@@ -31,7 +31,7 @@ async function main() {
     }
 
     wasmModule = await loadOctopusModule("./octopus_wasm.js");
-    (window as unknown as { __module: OctopusWasmModule }).__module = wasmModule;
+    window.__module = wasmModule;
 
     logStatus("Initializing engine...");
     wasmModule._engine_init();
@@ -69,7 +69,7 @@ async function main() {
         console.log("[octobx] MIDI rescan complete");
     });
 
-    // --- In-browser Obxd synth rack (Phase C: 10 instances, one visible) ---
+    // --- In-browser OB-Xf synth rack (Phase C: 10 instances, one visible) ---
     // The rack builds the knob grid eagerly (defaults baked in), wires all
     // header controls, and lazy-inits the AudioContext on the first PLAY
     // click — Octopus already needs PLAY to make sound, and that click is

@@ -1,6 +1,6 @@
 /*
  * obxd-bridge.ts — Channel-routed MIDI fan-out for the multi-instance
- * OB-XD synth.
+ * OB-Xf synth.
  *
  * Same plumbing pattern as a hypothetical external-synth bridge: the
  * single drain loop in midi-output.ts (drainMidiToHardware) owns
@@ -10,7 +10,7 @@
  *
  * Routing:
  *   - Non-MPE (default): each Octopus MIDI channel (1..16) maps to at most
- *     one OB-XD instance (0..9). Default mapping is channels 1..10 →
+ *     one OB-Xf instance (0..9). Default mapping is channels 1..10 →
  *     instances 0..9. The user can reassign per-instance via
  *     setObxdInstanceChannel() from the rack UI's channel selector.
  *   - MPE: when an instance has MPE enabled (setObxdInstanceMpe), it owns
@@ -33,7 +33,7 @@
  * clicks PLAY to bring up the audio engine.
  *
  * NOTE: the bridge handler returned by createObxdBridgeHandler() is the
- * SECONDARY path. The PRIMARY (and currently only active) OB-XD path is
+ * SECONDARY path. The PRIMARY (and currently only active) OB-Xf path is
  * the SharedArrayBuffer ring read directly inside the AudioWorklet's
  * process() — see obxd-processor.tail.js. That path uses the SAME
  * channel→instance routing table we push via sendObxdMidiRouting(), so
@@ -52,6 +52,8 @@
  */
 
 import { isObxdReady, sendObxdMidiRouting, sendObxdInstanceMidi, setObxdInstanceMpe as setObxdInstanceMpeEngine } from "./obxd-audio";
+import { buildChannelToInstance as buildRouting, MAX_MPE_VOICE_CHANNELS } from "./channel-routing";
+import type { InstanceRoute } from "./channel-routing";
 
 // Re-exported so main.ts can import both the handler factory and the
 // BatchDrainHandler type from one place.
@@ -78,7 +80,7 @@ const INSTANCE_COUNT = 10;
 
 // Max voice channels an MPE instance can claim beyond its master.
 // MPE zones cap at 15 voice channels (16 channels total − the master).
-const MAX_MPE_VOICE_CHANNELS = 15;
+// (Re-exported from channel-routing.ts for the MAX_MPE_VOICE_CHANNELS constant.)
 // Default voice-channel count when MPE is enabled on an instance.
 const DEFAULT_MPE_VOICE_CHANNELS = 8;
 
@@ -169,35 +171,20 @@ export function getObxdMpeChannels(id: number): number[] {
 }
 
 /*
- * Build the channel→instance routing map used by BOTH the drain-loop
- * handler (this file) and the worklet SAB path (via syncRoutingToAudioWorklet).
- *
- * Precedence: MPE instances claim their full zone first (master + voice
- * channels), so enabling MPE on an instance can shadow another instance's
- * single channel — that is intentional and matches how a hardware MPE zone
- * would monopolise channels. Non-MPE instances then fill any channel not
- * already claimed. If two non-MPE instances share a channel, the last one
- * registered wins (Map.set overwrites), matching the prior 1:1 behaviour.
+ * Build the channel→instance routing map from the current module-level state.
+ * Delegates to the pure buildRouting() from channel-routing.ts, which is the
+ * testable extraction of the MPE-aware routing algorithm.
  */
 function buildChannelToInstance(): Map<number, number> {
-    const map = new Map<number, number>();
-
-    // Pass 1: MPE zones.
+    const routes: InstanceRoute[] = [];
     for (let id = 0; id < INSTANCE_COUNT; id++) {
-        if (!instanceMpe[id]) continue;
-        for (const ch of getObxdMpeChannels(id)) {
-            map.set(ch, id);
-        }
+        routes.push({
+            channel: instanceChannels.get(id) ?? (id + 1),
+            mpe: instanceMpe[id],
+            mpeVoiceCount: instanceMpeVoiceCount[id],
+        });
     }
-
-    // Pass 2: non-MPE single channels (only fill unclaimed channels).
-    for (let id = 0; id < INSTANCE_COUNT; id++) {
-        if (instanceMpe[id]) continue;
-        const ch = instanceChannels.get(id) ?? (id + 1);
-        if (!map.has(ch)) map.set(ch, id);
-    }
-
-    return map;
+    return buildRouting(routes);
 }
 
 function syncRoutingToAudioWorklet(): void {

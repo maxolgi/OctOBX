@@ -1,6 +1,6 @@
 /*
  * obxd-audio.ts — Main-thread bootstrap + per-instance API for the
- * multi-instance OB-XD synth.
+ * multi-instance OB-Xf synth.
  *
  * The AudioWorklet + WASM loading strategy is unchanged from Phase 1:
  * AudioWorkletGlobalScope forbids importScripts() AND dynamic import(),
@@ -121,7 +121,7 @@ export async function setupObxdAudio(): Promise<void> {
 
     if (!audioContext) {
         const Ctor: typeof AudioContext =
-            window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+            window.AudioContext || window.webkitAudioContext!;
         audioContext = new Ctor();
     }
     try { await audioContext.resume(); } catch { /* autoplay policy — non-fatal */ }
@@ -162,7 +162,7 @@ export async function setupObxdAudio(): Promise<void> {
     workletNode.connect(audioContext.destination);
 
     // Expose for debugging (analyser taps, state inspection). Remove before shipping.
-    (window as unknown as { __obxd?: { ctx: AudioContext; node: AudioWorkletNode } }).__obxd = {
+    window.__obxd = {
         ctx: audioContext,
         node: workletNode,
     };

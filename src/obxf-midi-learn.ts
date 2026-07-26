@@ -521,7 +521,7 @@ export class ObxfMidiLearnManager {
  * function onHardwareCC(channel: number, cc: number, value: number) {
  *     const hit = learn.processCC(channel, cc, value);
  *     if (hit) {
- *         // Route the scaled 0..1 value to the OB-XD/OB-Xf instance param.
+ *         // Route the scaled 0..1 value to the OB-Xf instance param.
  *         setObxdInstanceParam(getObxdSelectedInstance(), hit.paramId, hit.value);
  *         return; // consumed by MIDI learn — do not also send raw to the engine
  *     }

@@ -1,5 +1,5 @@
 /*
- * obxd-rack.ts — Phase C UI for the multi-instance OB-XD synth.
+ * obxd-rack.ts — Phase C UI for the multi-instance OB-Xf synth.
  *
  * Replaces obxd-panel.ts. The panel is always visible in document flow
  * (knob grid shows baked defaults until the engine comes up). The audio
@@ -478,7 +478,7 @@ function wireLazyAudioInit(): void {
     // Catches Octopus-panel PLAY (#ck-229), modern-grid PLAY, MIDI START,
     // and any other path that doesn't go through #oct-play. Cheap: one
     // WASM call every 200ms, stops itself once audio is up.
-    const octopus = (window as unknown as { __module?: { _get_run_bit?: () => number } }).__module;
+    const octopus = window.__module;
     if (!octopus?._get_run_bit) return;
     let prevRun = octopus._get_run_bit() || 0;
     const poll = setInterval(() => {

@@ -5,19 +5,20 @@ header closure it pulls in) from
 <https://github.com/surge-synthesizer/OB-Xf> into
 `wasm/obxd/obxf_imported/`.
 
-Source clone: `/tmp/opencode/ob-xf` (shallow `--depth 1` clone, commit as of the
-copy date).
+Source: `third_party/OB-Xf/` (surge-synthesizer/OB-Xf submodule, shallow
+`--depth 1` checkout as of the copy date).
 
-All files are **byte-identical** to the OB-Xf source (verified via `md5sum` —
-no edits, no APVTS stripping). APVTS dependency stripping is a **separate
-follow-up task (T6b)**.
+All OB-Xf sources are **byte-identical** to the upstream files (verified via
+`md5sum`). Two deliberate stubs (`Utils.h`, `libMTSClient.h`) were added to
+resolve otherwise-unresolvable includes — see §4.
 
 ---
 
 ## 1. Files copied
 
-28 files total (27 unique OB-Xf sources + 1 deliberate duplicate of
-`Constants.h` at the root so the verbatim angle-bracket includes resolve).
+30 files total (27 unique OB-Xf sources + 1 deliberate duplicate of
+`Constants.h` at the root so the verbatim angle-bracket includes resolve,
+plus 2 compile-time stubs — `Utils.h` and `libMTSClient.h`; see §4).
 
 ### Initial list (from the plan)
 
@@ -184,11 +185,11 @@ build; nothing to fix here.
 
 ---
 
-## 4. Unresolved includes (deliberately not copied)
+## 4. Originally-unresolved includes (now stubbed)
 
 ### 4a. `<Utils.h>` — referenced by `engine/AudioUtils.h`
 - `Utils.h` physically lives at **`src/Utils.h`** in OB-Xf, but was **NOT
-  copied**.
+  copied verbatim**.
 - Reasons:
   1. `Utils.h` is a large host/file-system/GUI utility class (factory/user
      patch-folder scanning, theme folders, MIDI-program folders, clipboard
@@ -205,16 +206,22 @@ build; nothing to fix here.
   3. `AudioUtils.h` includes `<Utils.h>` but **does not use anything from it**:
      `AudioUtils.h` only references `pi` and `mult`, both provided by
      `core/Constants.h` (arrived via `engine/SynthEngine.h`).
-- **Resolution (follow-up T6b):** either drop the unused `#include <Utils.h>`
-  from `AudioUtils.h`, or provide a minimal compile-time stub for `Utils.h`.
+- **Resolution (DONE):** a minimal compile-time stub `Utils.h` is provided at
+  `obxf_imported/Utils.h` that defines only the three engine-math
+  free-functions (`getPitch`, `linsc`, `logsc`) verbatim from
+  `third_party/OB-Xf/src/Utils.h` lines 30–40. The host-glue `Utils` class is
+  intentionally NOT declared.
 
 ### 4b. `"libMTSClient.h"` — referenced by `engine/Tuning.h`
 - External **ODDSound MTS-ESP** client library header. Not present in the
   OB-Xf clone (it would come from `libs/MTS-ESP`, an intentionally
   **un-initialized** nested submodule per `AGENTS.md`).
-- **Resolution (compile time):** point `-I` at an MTS-ESP checkout, or provide
-  a stub `libMTSClient.h` that no-ops the MTS-ESP API surface `Tuning.h`
-  references.
+- **Resolution (DONE):** a minimal compile/link stub `libMTSClient.h` is
+  provided at `obxf_imported/libMTSClient.h` that no-ops the MTS-ESP API
+  surface `Tuning.h` references (`MTS_RegisterClient`, `MTS_HasMaster`, etc.).
+  The WASM OB-Xf build has no use for MTS-ESP (no host in an
+  AudioWorkletGlobalScope), so the no-op behaviour is also functionally
+  correct: the engine falls back to its TWELVE_TET branch.
 
 ### 4c. Cross-directory relative includes (NOT missing — resolved via `-I`)
 These are verbatim includes that reference a file which **is** copied, but in a
@@ -272,17 +279,22 @@ by normalizing every `<Constants.h>` → `<core/Constants.h>` (or by a single
 
 ## 6. Verbatim-copy verification
 
-Every copied file was checksum-compared (`md5sum`) against its OB-Xf source —
-all 27 unique sources match exactly (the 28th is the intentional duplicate of
-`Constants.h`, also verified identical). **No file was modified.**
+Every copied OB-Xf source file was checksum-compared (`md5sum`) against its
+OB-Xf upstream — all 27 unique sources match exactly (the 28th is the
+intentional duplicate of `Constants.h`, also verified identical). The 2 stubs
+(`Utils.h`, `libMTSClient.h`) are NOT verbatim OB-Xf files — they are
+minimal substitutes written for this build (see §4).
 
 ---
 
 ## 7. Follow-up tasks
 
-- **T6b (separate task):** strip APVTS / host dependencies from this subtree —
-  in particular the unused `<Utils.h>` include in `AudioUtils.h`, the JUCE
-  `AudioProcessor`/`APVTS` references in `ObxdImporter.{h,cpp}`, and the
-  `<Constants.h>` vs `<core/Constants.h>` duplication. Not done here.
-- **Compile-time (separate task):** supply `libMTSClient.h` (stub or real) and
-  the JUCE/SST `-I` paths.
+All originally-open follow-ups are **resolved**:
+- ~~**T6b:** strip APVTS / host dependencies~~ — DONE. The unused `<Utils.h>`
+  include in `AudioUtils.h` is satisfied by the stub at `obxf_imported/Utils.h`.
+  The JUCE `AudioProcessor`/`APVTS` references in `ObxdImporter.{h,cpp}` are
+  satisfied by the `juce_audio_processors_headless` module in the amalgamated
+  JUCE TU. The `<Constants.h>` vs `<core/Constants.h>` duplication remains
+  (harmless — both resolve to the same file content via different `-I` paths).
+- ~~**Compile-time:** supply `libMTSClient.h`~~ — DONE. Stub provided at
+  `obxf_imported/libMTSClient.h` (see §4b).

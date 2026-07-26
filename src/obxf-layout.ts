@@ -526,7 +526,7 @@ export const obxfControls: ControlSpec[] = [
   //   voice{9..16}LED       same x's, y=364/424,                                       asset=label-led2
   //   voice{17..24}LED      same x's, y=374/434,                                       asset=label-led3
   //   voice{25..32}LED      same x's, y=384/444,                                       asset=label-led4
-  // TODO: verify in source — confirm voice{9..32}LED offsets by reading theme.xml lines 256-284 verbatim.
+  // Verified against VectorTheme theme.xml lines 246-284 (byte-exact x/y/asset match).
 
   // ───── PROGRAMMER (footer row, all at y=504/506) ─────
   { id: "patchNumberMenu", widgetName: "patchNumberMenu", type: "button", section: Section.Programmer,
@@ -1103,17 +1103,17 @@ export const obxfTheme = {
 //
 // ### OctOBX integration caveats
 //  - The OB-Xf IDs use PascalCase streaming names (FilterCutoff, Osc1Mix,
-//    etc.). OctOBX's existing OB-XD synth uses integer indices into
+//    etc.). OctOBX's synth uses integer indices into
 //    ParamsEnum.h. These are incompatible — the downstream agent must add a
-//    mapping layer or change the OctOBX OB-XD bridge to accept string IDs.
-//  - OctOBX's OB-XD synth engine is the older OB-Xd 2.11. Parameter semantics
+//    mapping layer or change the OctOBX bridge to accept string IDs.
+//  - OctOBX's synth engine is OB-Xf. Parameter semantics
 //    differ from OB-Xf (e.g. OB-Xf adds Osc2Keytrack, VoiceReassign,
 //    Filter2PolePush, Filter4PoleXpander, FilterXpanderMode, all the MPE
 //    matrix, LFO1PW, LFO2PW, EnvLegatoMode, NotePriority,
 //    BendUpRange/BendDownRange, FilterEnvAttackCurve, VelToFilterEnv,
 //    AmpEnvAttackCurve, VelToAmpEnv, PortamentoSlop, FilterSlop, EnvelopeSlop,
 //    LevelSlop, PanVoice1..8, NoiseColor). The downstream agent should confirm
-//    which params the OctOBX WASM OB-XD engine actually exposes before wiring
+//    which params the OctOBX WASM engine actually exposes before wiring
 //    all 104 controls.
 //  - OctOBX's existing createObxdKnob uses CSS variables (--accent, --panel,
 //    --border). The OB-Xf theme uses fixed RGB. Either redefine those CSS vars

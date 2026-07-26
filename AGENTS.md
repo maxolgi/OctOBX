@@ -236,8 +236,9 @@ engine is NOT compiled unchanged — it is **curated** into the browser build:
   per-voice pan, xpander mode, ~28 in total) are rendered by the data-driven
   OB-Xf editor UI (`src/obxf-layout.ts`) and assigned a sentinel index
   `NEW_PARAM_BASE ≥ 200` in `src/obxd-synth-ui.ts`. The C engine dispatches
-  these via `apply_new_param_instance()` (a separate switch for idx ≥ 200);
-  knob sync after `.fxp` load is the remaining gap (see Known issues).
+  these via `apply_new_param_instance()` (a separate switch for idx ≥ 200)
+  and mirrors their values in `g_new_param_mirror` so the knob UI syncs
+  correctly after `.fxp` load / instance switch.
 
 ## eCos compatibility shim
 
@@ -359,7 +360,7 @@ sequentially after setting the running status byte.
 | `obxd-audio.ts` | Main-thread bootstrap + per-instance API for the OB-XD AudioWorklet (10 SynthEngine instances). Pre-fetches WASM bytes, passes via `processorOptions.wasmBinary`; one-shot reply router for async worklet RPCs. Adds `setObxdInstanceMpe` for per-instance MPE flag mirroring to `g_mpe_enabled[id]`. |
 | `obxd-bridge.ts` | Drain-loop consumer → OB-XD AudioWorklet. Channel→instance routing (default 1–10 → 0–9, reassignable), now MPE-aware via `buildChannelToInstance()` — an instance with MPE enabled claims a lower zone (master + N voice channels) before non-MPE instances fill the remaining channels. Re-exports `BatchDrainHandler`. |
 | `obxd-rack.ts` | OB-XD panel UI: instance selector, power/polyphony/channel, meter (30Hz ping/pong), `.fxp` loader, Reset/Panic/Panic-All. Adds per-instance MPE toggle + bend-range UI. Lazy AudioContext init on first PLAY. |
-| `obxd-synth-ui.ts` | Data-driven OB-Xf editor panel (104 parameter-bound controls) rendered from `obxf-layout.ts`; absolute-positioned inside a 1150×576 canvas. Legacy-indexed controls dispatch via `setObxdInstanceParam(idx, v)`; OB-Xf-only controls get a sentinel `NEW_PARAM_BASE ≥ 200` index dispatched via `apply_new_param_instance()`. `syncObxdControlsFromEngine(instanceId)` re-seeds widget positions from `g_param_mirror` on instance switch / patch load (legacy-indexed params only; NEW params do not visually sync after `.fxp` load — see Known issues). |
+| `obxd-synth-ui.ts` | Data-driven OB-Xf editor panel (104 parameter-bound controls) rendered from `obxf-layout.ts`; absolute-positioned inside a 1150×576 canvas. Legacy-indexed controls dispatch via `setObxdInstanceParam(idx, v)`; OB-Xf-only controls get a sentinel `NEW_PARAM_BASE ≥ 200` index dispatched via `apply_new_param_instance()`. `syncObxdControlsFromEngine(instanceId)` re-seeds widget positions from `g_param_mirror` (legacy) and `g_new_param_mirror` (NEW params) on instance switch / patch load. |
 | `obxd-knob.ts` | Vanilla SVG widget factories (no deps): `createObxdKnob`, `createObxdToggle`, `createTriStateButton`, `createSelector`, `createSlider`, `createButton`. Drag/wheel/double-click (reset) on knobs; bipolar knobs supported. |
 | `obxf-layout.ts` | OB-Xf editor UI layout spec — read-only data module auto-extracted from the OB-Xf source tree (theme.xml + `ObxfEditorLayout.cpp` + `SynthParam.h` + `ParameterList.h`). 173 `ControlSpec` entries (104 parameter-bound + 69 special widgets) across 13 sections, plus `obxfTheme` color tokens and the 1150×576 canvas geometry. See the file header for the explorer provenance + "do not edit by hand" warning. |
 | `obxf-param-mappings.ts` | OB-Xd legacy `ParamsEnum.h` index → OB-Xf `SynthParam::ID` translation table (82 rows; `BENDRANGE` split into `PitchBendUp` + `PitchBendDown` counts twice). Auto-generated from `obxf_imported/state/ObxdImporter.cpp` (the canonical translator) + both `SynthEngine.h` headers. Each row carries the rescale rule and notes any semantic shift / type change / removal. |
@@ -458,8 +459,12 @@ via the `__linux__` / `__EMSCRIPTEN__` defines.
 
 ## Testing
 
-No automated test suite. Testing is manual: build the WASM modules, run the
-dev server, and verify in the browser console:
+**Automated:** `npm test` runs vitest over the pure-logic modules
+(`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
+`obxf-param-mappings.ts`) — 67 tests, no browser required.
+
+**Manual:** build the WASM modules, run the dev server, and verify in the
+browser console:
 - Transport play/stop produces ticks (`wasm_get_tick_count()` increments).
 - Step toggles light MIR LEDs at 60 Hz.
 - MIDI events appear in the ring buffer
@@ -488,28 +493,23 @@ dev server, and verify in the browser console:
    wrapper and legacy OB-Xd integer schema as a fallback. To swap patches,
    replace the `.fxp` files in `patches/` (keep the `NN_name.fxp` naming so
    the `g_factory_patches` symbol table matches) and rebuild.
-3. **Knob mirror sync after patch load (OB-Xf-only params)** — when loading an
-   OB-Xf native `.fxp`, the engine state updates correctly but UI knobs may not
-   visually move for OB-Xf-only params (the ~28 NEW params with no legacy
-   index — second LFO, MPE matrix, slop, per-voice pan, xpander mode).
-   These params ARE dispatched to the engine via `apply_new_param_instance()`
-   (idx ≥ 200); the gap is that `g_param_mirror` only covers legacy indices
-   0..79, so `syncObxdControlsFromEngine()` cannot re-seed the NEW-param
-   widget positions. Legacy-indexed params sync correctly.
-4. **MPE per-channel pitch bend** — the OB-Xf engine exposes
+3. **MPE per-channel pitch bend** — the OB-Xf engine exposes
    `SynthEngine::processMPEPitch(channel, val)` (per-channel), but
    `obxd_midi_in()` routes pitch-wheel messages through the global
    `processPitchWheel(val)`. Note-on/note-off channel routing IS MPE-aware
    (the channel is read from the status byte when `g_mpe_enabled[id]` is set);
    per-channel pitch *expression* is the remaining engine follow-up.
-5. **`third_party/Obxd/` still present** — the legacy 2DaT/Obxd submodule is
+4. **`third_party/Obxd/` still present** — the legacy 2DaT/Obxd submodule is
    kept as a fallback until the OB-Xf migration is verified in production. It
    is no longer on the OB-Xf build's include path and is not compiled into
    `obxd_wasm.wasm`; it will be removed in a follow-up commit.
-6. **AudioWorklet reply correlation** is correct but untyped — `obxd-audio.ts`
+5. **AudioWorklet reply correlation** is correct but untyped — `obxd-audio.ts`
    uses an `unknown`-typed predicate router to avoid racing `port.onmessage`
    reassignments.
-7. **No automated tests** — verification is manual (see Testing above).
+5. **Limited automated tests** — vitest covers the pure-logic modules
+   (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
+   `obxf-param-mappings.ts`); run with `npm test`. The WASM engine and
+   browser-integration paths still require manual verification (see Testing).
 
 ## License
 

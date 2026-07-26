@@ -2,7 +2,7 @@
  * obxf-midi-learn-integration.ts — glue between the OB-Xf MIDI-learn logic
  * layer (obxf-midi-learn.ts), the OB-Xf panel UI (obxd-synth-ui.ts /
  * obxf-midi-learn-ui.ts), the hardware MIDI input path (midi-input.ts),
- * and the OB-XD AudioWorklet engine (obxd-audio.ts).
+ * and the OB-Xf AudioWorklet engine (obxd-audio.ts).
  *
  * Responsibilities (task T24):
  *
@@ -15,7 +15,7 @@
  *      midi-input.ts calls BEFORE forwarding a CC to the Octopus engine.
  *      Returns true when the CC was consumed by MIDI-learn (so the engine
  *      should NOT also see it). On a learn-hit it dispatches the scaled
- *      0..1 value to the currently-selected OB-XD instance via
+ *      0..1 value to the currently-selected OB-Xf instance via
  *      setObxdInstanceParam().
  *
  *   3. Persistence: load/save the manager's serialized bindings to
@@ -62,7 +62,7 @@ import type { ControlSpec } from "./obxf-layout";
 /*
  * One manager for the whole panel. OB-Xf itself uses one MidiMap per
  * editor instance; OctOBX has a single editor (one panel, one selected
- * OB-XD instance at a time) so a single manager is the right shape.
+ * OB-Xf instance at a time) so a single manager is the right shape.
  */
 export const midiLearnManager = new ObxfMidiLearnManager();
 
@@ -109,7 +109,7 @@ export function getHintsForParam(paramId: string): ParamTransformHints | undefin
  * Process one incoming hardware MIDI CC.
  *
  * Returns true if the CC was consumed by MIDI-learn (bound + dispatched
- * to the OB-XD engine); false to let midi-input.ts fall through to its
+ * to the OB-Xf engine); false to let midi-input.ts fall through to its
  * normal wasm_midi_input path (reserved CCs, unbound CCs, etc.).
  *
  * Side effects on a hit:
@@ -118,7 +118,7 @@ export function getHintsForParam(paramId: string): ParamTransformHints | undefin
  *     onLearnedCallback fires (set up by the UI layer to refresh badges
  *     and persist).
  *   - The binding's scaled 0..1 value is dispatched to the currently-
- *     selected OB-XD instance via setObxdInstanceParam. Multi-instance
+ *     selected OB-Xf instance via setObxdInstanceParam. Multi-instance
  *     per-channel dispatch is a future extension; today the user is
  *     editing one instance at a time and that's the instance that gets
  *     the learned value.

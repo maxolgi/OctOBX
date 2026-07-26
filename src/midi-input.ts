@@ -133,7 +133,7 @@ export class HardwareMidiInput {
         // MIDI-learn CC interception (T24). CC status bytes 0xB0..0xBF
         // (channel 1-16). If the OB-Xf learn manager has a binding for
         // this CC (or learn mode is on with a target set), processCC
-        // dispatches the scaled value to the OB-XD engine directly and
+        // dispatches the scaled value to the OB-Xf engine directly and
         // we DON'T forward the raw CC to the Octopus engine — the synth
         // gets the right value through the learn path, and the sequencer
         // doesn't need to react to it.

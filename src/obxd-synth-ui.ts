@@ -69,6 +69,7 @@ import {
     createSelector,
     createSlider,
 } from "./obxd-knob";
+import type { ObxdWidget } from "./obxd-knob";
 import {
     setObxdInstanceParam,
     getObxdInstanceParam,
@@ -121,13 +122,14 @@ const ID_ALIASES: Record<string, string> = {
 };
 
 // Sentinel range for OB-Xf params with no OB-Xd ancestor. The engine's
-// apply_param_instance switch only handles 0..79, so any index >= 80 is a
-// no-op; we use 200+ to keep it well clear of future legacy extensions.
+// apply_param_instance() handles legacy indices 0..79; indices >= 200 are
+// dispatched via apply_new_param_instance() (a separate switch). We use
+// 200+ to keep it well clear of future legacy extensions.
 const NEW_PARAM_BASE = 200;
 
-// OB-Xf params that are rendered + editable here but currently no-op'd in
-// the engine dispatch (no legacy case). Documented for the follow-up
-// engine task. Populated at build time as controls are resolved.
+// OB-Xf params that are rendered + editable here and dispatched via
+// apply_new_param_instance() in the engine (idx >= NEW_PARAM_BASE).
+// Populated at build time as controls are resolved.
 const NEW_PARAM_IDS: string[] = [];
 
 function resolveLegacyIndex(c: ControlSpec): number {
@@ -165,15 +167,15 @@ const SECTION_LABELS: { section: Section; title: string }[] = [
 
 interface ControlHandle {
     legacyIdx: number;
-    isNew: boolean;        // true → engine has no dispatch case; skip on sync
-    valueEl: HTMLElement & { setValue?: (v: number) => void };
+    isNew: boolean;        // true → OB-Xf-only param (sentinel >= NEW_PARAM_BASE)
+    valueEl: ObxdWidget;
 }
 
 let cachedControls: ControlHandle[] = [];
 
 // --- Filter-visibility dynamic refs (reset per build) ---
-let filter4PoleModeValueEl: HTMLElement | null = null;   // read on-state
-let filter4PoleXpanderValueEl: HTMLElement | null = null;// read on-state
+let filter4PoleModeValueEl: ObxdWidget | null = null;   // read on-state
+let filter4PoleXpanderValueEl: ObxdWidget | null = null;// read on-state
 let filter2PoleBPBlendDom: HTMLElement | null = null;    // toggle display
 let filter2PolePushDom: HTMLElement | null = null;       // toggle display
 let filter4PoleXpanderDom: HTMLElement | null = null;    // toggle display
@@ -183,8 +185,8 @@ let filterXpanderModeDom: HTMLElement | null = null;     // toggle display
 // --- LFO panel dynamic refs (reset per build) ---
 let lfo1Doms: HTMLElement[] = [];
 let lfo2Doms: HTMLElement[] = [];
-let lfo1SelectBtn: HTMLElement & { setValue?: (v: number) => void } | null = null;
-let lfo2SelectBtn: HTMLElement & { setValue?: (v: number) => void } | null = null;
+let lfo1SelectBtn: ObxdWidget | null = null;
+let lfo2SelectBtn: ObxdWidget | null = null;
 let lfo1Visible = true;
 
 function resetDynamicRefs(): void {
@@ -264,7 +266,7 @@ function setDisplay(el: HTMLElement | null, value: string): void {
 
 interface BuiltWidget {
     dom: HTMLElement;        // element to appendChild into the panel
-    valueEl: HTMLElement & { setValue?: (v: number) => void }; // element exposing setValue
+    valueEl: ObxdWidget;     // element exposing setValue
 }
 
 /*
@@ -275,7 +277,8 @@ interface BuiltWidget {
  */
 function buildWidget(c: ControlSpec, legacyIdx: number, isNew: boolean): BuiltWidget {
     // Common dispatch: forward (selectedInstance, legacyIdx, value01) to the
-    // engine. New params are posted too but silently no-op'd in the C switch.
+    // engine. Legacy params (idx 0..79) and NEW params (idx >= 200) are both
+    // routed by apply_param_instance() in the C engine.
     const dispatch = (v: number): void => {
         setObxdInstanceParam(getObxdSelectedInstance(), legacyIdx, v);
     };
@@ -606,8 +609,9 @@ export function buildObxdSynthUi(container: HTMLElement): void {
  * freshly loaded patch isn't written straight back to the engine). Call
  * after a .fxp load, a Reset, or an instance-selector switch.
  *
- * NEW params (no legacy index) are skipped — the engine has nothing to
- * report for them, so the widget keeps its layout-spec default.
+ * Handles BOTH legacy-indexed controls (0..79, from g_param_mirror) and
+ * NEW-param controls (sentinel >= 200, from g_new_param_mirror). The C
+ * obxd_get_param() function routes both transparently.
  *
  * After the values land, the filter visibility rules are re-evaluated
  * (setValue on Filter4PoleMode / Filter4PoleXpander doesn't fire onChange,
@@ -620,7 +624,6 @@ export async function syncObxdControlsFromEngine(instanceId: number): Promise<vo
     if (!isObxdReady()) return;
 
     await Promise.all(cachedControls.map(async (c) => {
-        if (c.isNew) return;   // no engine state to read
         const v = await getObxdInstanceParam(instanceId, c.legacyIdx);
         if (v >= 0 && c.valueEl.setValue) c.valueEl.setValue(v);
     }));
