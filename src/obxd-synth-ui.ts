@@ -16,6 +16,9 @@
  * Visibility rules:
  *   - FILTER: Filter4PoleMode toggles 2-pole↔4-pole control set.
  *   - LFO 1 / LFO 2: share the same screen footprint; radio toggle switches.
+ *   - GLOBAL / MPE: mpeSettingsButton toggles global knobs ↔ MPE panel.
+ *   - Multi-frame labels update from param state (osc/filter/LFO) or UI state (BG/dimension).
+ *   - MTS-ESP widgets hidden (browser can't reach MTS-ESP master).
  */
 
 import {
@@ -25,6 +28,7 @@ import {
     createSelector,
     createSlider,
     createButton,
+    setPanOpHandler,
 } from "./obxd-knob";
 import type { ObxdWidget } from "./obxd-knob";
 import {
@@ -34,6 +38,11 @@ import {
     isObxdReady,
     setObxdInstanceMpe,
     applyObxdFactoryPatch,
+    obxdInstanceResetPatch,
+    setObxdInstanceMpeGlideRange,
+    setObxdInstanceMatrixRow,
+    clearObxdInstanceMatrixRow,
+    getObxdInstanceVoiceActivity,
 } from "./obxd-audio";
 import {
     obxfControls,
@@ -51,6 +60,8 @@ import {
     setupMidiLearnOverlay,
     resetMidiLearnOverlay,
 } from "./obxf-midi-learn-ui";
+import { openObxfPopup } from "./obxf-popup";
+import type { PopupItem } from "./obxf-popup";
 
 // ===========================================================================
 // 1. OB-Xf SynthParam::ID  →  legacy ParamsEnum.h index
@@ -87,9 +98,11 @@ function resolveLegacyIndex(c: ControlSpec): number {
 // ===========================================================================
 
 interface ControlHandle {
+    id: string;
     legacyIdx: number;
     isNew: boolean;
     valueEl: ObxdWidget;
+    lastValue: number;
 }
 
 let cachedControls: ControlHandle[] = [];
@@ -108,6 +121,57 @@ let lfo1SelectBtn: ObxdWidget | null = null;
 let lfo2SelectBtn: ObxdWidget | null = null;
 let lfo1Visible = true;
 
+let labelEls = new Map<string, HTMLElement>();
+let globalPanelDoms: HTMLElement[] = [];
+let mpeDoms: HTMLElement[] = [];
+let mpePanelVisible = false;
+let mpeDimBtns: ObxdWidget[] = [];
+let selectedMpeDimension = 0;
+
+let undoStack: number[][] = [];
+let lockedParams = new Map<string, number>();
+let groupSelectMode = false;
+let unisonVoicesDom: HTMLElement | null = null;
+let voiceLeds: HTMLElement[] = [];
+let ledRafId: number | null = null;
+
+const VOICE_LED_DEFS: { x: number; y: number; asset: string }[] = [
+    { x: 895, y: 354, asset: "label-led1" }, { x: 964, y: 354, asset: "label-led1" },
+    { x: 1033, y: 354, asset: "label-led1" }, { x: 1102, y: 354, asset: "label-led1" },
+    { x: 895, y: 414, asset: "label-led1" }, { x: 964, y: 414, asset: "label-led1" },
+    { x: 1033, y: 414, asset: "label-led1" }, { x: 1102, y: 414, asset: "label-led1" },
+    { x: 895, y: 364, asset: "label-led2" }, { x: 964, y: 364, asset: "label-led2" },
+    { x: 1033, y: 364, asset: "label-led2" }, { x: 1102, y: 364, asset: "label-led2" },
+    { x: 895, y: 424, asset: "label-led2" }, { x: 964, y: 424, asset: "label-led2" },
+    { x: 1033, y: 424, asset: "label-led2" }, { x: 1102, y: 424, asset: "label-led2" },
+    { x: 895, y: 374, asset: "label-led3" }, { x: 964, y: 374, asset: "label-led3" },
+    { x: 1033, y: 374, asset: "label-led3" }, { x: 1102, y: 374, asset: "label-led3" },
+    { x: 895, y: 434, asset: "label-led3" }, { x: 964, y: 434, asset: "label-led3" },
+    { x: 1033, y: 434, asset: "label-led3" }, { x: 1102, y: 434, asset: "label-led3" },
+    { x: 895, y: 384, asset: "label-led4" }, { x: 964, y: 384, asset: "label-led4" },
+    { x: 1033, y: 384, asset: "label-led4" }, { x: 1102, y: 384, asset: "label-led4" },
+    { x: 895, y: 444, asset: "label-led4" }, { x: 964, y: 444, asset: "label-led4" },
+    { x: 1033, y: 444, asset: "label-led4" }, { x: 1102, y: 444, asset: "label-led4" },
+];
+
+const SVG_HEIGHTS: Record<string, number> = {
+    "label-bg-master": 168, "label-bg-global": 536, "label-mpe-lines": 456,
+    "label-filter-mode": 224, "label-filter-options": 108,
+    "label-osc-triangle": 22, "label-osc-pulse": 400, "label-lfo-wave2": 192,
+};
+
+const LABEL_DRIVER_IDS = new Set([
+    "Osc1SawWave", "Osc1PulseWave", "Osc2SawWave", "Osc2PulseWave",
+    "OscPW", "Osc2PWOffset",
+    "Filter4PoleMode", "Filter4PoleXpander", "Filter2PoleBPBlend",
+    "LFO1PW", "LFO2PW",
+]);
+
+const GLOBAL_PANEL_IDS = new Set([
+    "Polyphony", "HQMode", "UnisonVoices", "Portamento",
+    "Unison", "UnisonDetune", "EnvLegatoMode", "NotePriority", "VoiceReassign",
+]);
+
 function resetDynamicRefs(): void {
     filter4PoleModeValueEl = null;
     filter4PoleXpanderValueEl = null;
@@ -121,6 +185,18 @@ function resetDynamicRefs(): void {
     lfo1SelectBtn = null;
     lfo2SelectBtn = null;
     lfo1Visible = true;
+    labelEls = new Map();
+    globalPanelDoms = [];
+    mpeDoms = [];
+    mpePanelVisible = false;
+    mpeDimBtns = [];
+    selectedMpeDimension = 0;
+    undoStack = [];
+    lockedParams = new Map();
+    groupSelectMode = false;
+    unisonVoicesDom = null;
+    voiceLeds = [];
+    if (ledRafId !== null) { cancelAnimationFrame(ledRafId); ledRafId = null; }
 }
 
 function isToggleOn(el: HTMLElement | null): boolean {
@@ -157,6 +233,192 @@ function setDisplay(el: HTMLElement | null, value: string): void {
     if (el) el.style.display = value;
 }
 
+function getCachedValue(id: string): number | undefined {
+    const h = cachedControls.find(c => c.id === id);
+    return h ? h.lastValue : undefined;
+}
+
+function setLabelFrame(id: string, frame: number): void {
+    const el = labelEls.get(id);
+    const spec = obxfControls.find(c => c.id === id);
+    if (!el || !spec || !spec.asset) return;
+    const svgH = SVG_HEIGHTS[spec.asset] ?? spec.h;
+    const totalFrames = Math.floor(svgH / spec.h);
+    const clamped = Math.max(0, Math.min(frame, totalFrames - 1));
+    el.style.backgroundPosition = `0 -${clamped * spec.h}px`;
+}
+
+function updateParamDerivedLabels(): void {
+    const osc1Saw = getCachedValue("Osc1SawWave") ?? 1;
+    const osc1Pulse = getCachedValue("Osc1PulseWave") ?? 0;
+    setLabelFrame("Osc1TriangleLabel", (osc1Saw < 0.5 && osc1Pulse < 0.5) ? 1 : 0);
+
+    const oscPW = getCachedValue("OscPW") ?? 0;
+    setLabelFrame("Osc1PulseLabel", Math.round(oscPW * 46));
+
+    const osc2Saw = getCachedValue("Osc2SawWave") ?? 1;
+    const osc2Pulse = getCachedValue("Osc2PulseWave") ?? 0;
+    setLabelFrame("Osc2TriangleLabel", (osc2Saw < 0.5 && osc2Pulse < 0.5) ? 1 : 0);
+
+    const osc2PWOffset = getCachedValue("Osc2PWOffset") ?? 0;
+    setLabelFrame("Osc2PulseLabel", Math.min(Math.round(oscPW * 46) + Math.round(osc2PWOffset * 46), 49));
+
+    const fourPole = (getCachedValue("Filter4PoleMode") ?? 0) >= 0.5;
+    const xpander = (getCachedValue("Filter4PoleXpander") ?? 0) >= 0.5;
+    const bpBlend = (getCachedValue("Filter2PoleBPBlend") ?? 0) >= 0.5;
+    setLabelFrame("filterModeLabel", fourPole ? (xpander ? 3 : 2) : (bpBlend ? 1 : 0));
+    setLabelFrame("filterOptionsLabel", fourPole ? 1 : 0);
+
+    const lfo1PW = getCachedValue("LFO1PW") ?? 0;
+    setLabelFrame("lfo1Wave2Label", Math.min(Math.round(lfo1PW * 24), 23));
+
+    const lfo2PW = getCachedValue("LFO2PW") ?? 0;
+    setLabelFrame("lfo2Wave2Label", Math.min(Math.round(lfo2PW * 24), 23));
+}
+
+function updateGlobalMpePanel(): void {
+    for (const el of globalPanelDoms) el.style.display = mpePanelVisible ? "none" : "";
+    for (const el of mpeDoms) el.style.display = mpePanelVisible ? "" : "none";
+    setLabelFrame("globalBGLabel", mpePanelVisible ? 1 : 0);
+}
+
+function selectMpeDimension(dim: number): void {
+    selectedMpeDimension = dim;
+    for (let i = 0; i < mpeDimBtns.length; i++) {
+        mpeDimBtns[i]?.setValue?.(i === dim ? 1 : 0);
+    }
+    setLabelFrame("mpeLinesLabel", dim);
+}
+
+const UNDO_MAX = 20;
+
+function captureUndoSnapshot(): void {
+    const snapshot = cachedControls.map(c => c.lastValue);
+    undoStack.push(snapshot);
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
+}
+
+function restoreUndoSnapshot(): void {
+    const snapshot = undoStack.pop();
+    if (!snapshot) return;
+    const inst = getObxdSelectedInstance();
+    cachedControls.forEach((c, i) => {
+        const v = snapshot[i];
+        if (v !== undefined) {
+            c.lastValue = v;
+            if (c.valueEl.setValue) c.valueEl.setValue(v);
+            setObxdInstanceParam(inst, c.legacyIdx, v);
+        }
+    });
+    updateFilterVisibility();
+    updateLfoPanel();
+    updateParamDerivedLabels();
+    updateUnisonDimming();
+}
+
+function randomizePatch(): void {
+    captureUndoSnapshot();
+    const inst = getObxdSelectedInstance();
+    const specs = obxfControls.filter(c => c.paramBound !== false);
+    cachedControls.forEach((c, i) => {
+        const spec = specs[i];
+        if (!spec) return;
+        const jitter = 0.3;
+        let v: number;
+        if (spec.type === "toggle" || spec.type === "triState") {
+            v = Math.random() < 0.5 ? spec.default : (spec.type === "triState" ? (Math.random() < 0.5 ? 0.5 : 1) : 1);
+        } else {
+            v = spec.default + (Math.random() - 0.5) * 2 * jitter;
+            v = Math.max(0, Math.min(1, v));
+        }
+        c.lastValue = v;
+        if (c.valueEl.setValue) c.valueEl.setValue(v);
+        setObxdInstanceParam(inst, c.legacyIdx, v);
+    });
+    updateFilterVisibility();
+    updateLfoPanel();
+    updateParamDerivedLabels();
+    updateUnisonDimming();
+}
+
+function applyLocks(): void {
+    if (lockedParams.size === 0) return;
+    const inst = getObxdSelectedInstance();
+    for (const [id, v] of lockedParams) {
+        const c = cachedControls.find(c => c.id === id);
+        if (c) {
+            c.lastValue = v;
+            if (c.valueEl.setValue) c.valueEl.setValue(v);
+            setObxdInstanceParam(inst, c.legacyIdx, v);
+        }
+    }
+}
+
+function updateUnisonDimming(): void {
+    if (!unisonVoicesDom) return;
+    const unison = getCachedValue("Unison") ?? 0;
+    unisonVoicesDom.style.opacity = unison >= 0.5 ? "1" : "0.25";
+}
+
+const PAN_IDS = ["PanVoice1","PanVoice2","PanVoice3","PanVoice4","PanVoice5","PanVoice6","PanVoice7","PanVoice8"];
+
+interface MpeTarget { name: string; id: string; }
+const MPE_COMMON_TARGETS: MpeTarget[] = [
+    { name: "Osc Pitch", id: "OscPitch" },
+    { name: "Osc 1 Pitch", id: "Osc1Pitch" },
+    { name: "Osc 2 Pitch", id: "Osc2Pitch" },
+    { name: "Osc 2 Detune", id: "Osc2Detune" },
+    { name: "Unison Detune", id: "UnisonDetune" },
+    { name: "Osc Pulsewidth", id: "OscPW" },
+    { name: "Osc 2 Pulsewidth Offset", id: "Osc2PWOffset" },
+    { name: "Cross Modulation", id: "OscCrossmod" },
+    { name: "Osc 1 Volume", id: "Osc1Mix" },
+    { name: "Osc 2 Volume", id: "Osc2Mix" },
+    { name: "Ring Mod Volume", id: "RingModMix" },
+    { name: "Noise Volume", id: "NoiseMix" },
+    { name: "Filter Cutoff", id: "FilterCutoff" },
+    { name: "Filter Resonance", id: "FilterResonance" },
+    { name: "LFO 1 Mod 1 Amount", id: "LFO1ModAmount1" },
+    { name: "LFO 1 Mod 2 Amount", id: "LFO1ModAmount2" },
+    { name: "LFO 2 Rate", id: "LFO2Rate" },
+    { name: "LFO 2 Mod 1 Amount", id: "LFO2ModAmount1" },
+    { name: "LFO 2 Mod 2 Amount", id: "LFO2ModAmount2" },
+];
+const MPE_EXTRA_TARGETS: Record<string, MpeTarget[]> = {
+    Strike: [
+        { name: "Filter Env Attack", id: "FilterEnvAttack" },
+        { name: "Amp Env Attack", id: "AmpEnvAttack" },
+    ],
+    Lift: [
+        { name: "Filter Env Release", id: "FilterEnvRelease" },
+        { name: "Amp Env Release", id: "AmpEnvRelease" },
+    ],
+    Press: [],
+    Slide: [],
+};
+function mpeMatrixTargets(dim: string): MpeTarget[] {
+    return [...MPE_COMMON_TARGETS, ...(MPE_EXTRA_TARGETS[dim] ?? [])];
+}
+function mpeMatrixChoices(dim: string): string[] {
+    return ["None", ...mpeMatrixTargets(dim).map(t => t.name)];
+}
+
+function applyPanOp(alg: string): void {
+    const inst = getObxdSelectedInstance();
+    const handles = PAN_IDS.map(id => cachedControls.find(c => c.id === id)).filter(Boolean) as ControlHandle[];
+    handles.forEach((c, i) => {
+        let v01 = 0.5;
+        const spread = alg.endsWith("_25") ? 0.25 : alg.endsWith("_50") ? 0.5 : 1.0;
+        if (alg === "RESET_ALL") v01 = 0.5;
+        else if (alg === "RANDOMIZE") v01 = (Math.pow(Math.random() * 2 - 1, 3) + 1) / 2;
+        else if (alg.startsWith("SPREAD")) v01 = 0.5 - spread / 2 + (spread / 7) * i;
+        else if (alg.startsWith("ALTERNATE")) v01 = 0.5 - spread / 2 + spread * (i % 2);
+        c.lastValue = v01;
+        if (c.valueEl.setValue) c.valueEl.setValue(v01);
+        setObxdInstanceParam(inst, c.legacyIdx, v01);
+    });
+}
+
 // ===========================================================================
 // 4. Widget construction
 // ===========================================================================
@@ -169,10 +431,15 @@ interface BuiltWidget {
 function buildWidget(c: ControlSpec, legacyIdx: number): BuiltWidget {
     const dispatch = (v: number): void => {
         setObxdInstanceParam(getObxdSelectedInstance(), legacyIdx, v);
+        const handle = cachedControls.find(ch => ch.legacyIdx === legacyIdx && ch.id === c.id);
+        if (handle) handle.lastValue = v;
+        if (LABEL_DRIVER_IDS.has(c.id)) updateParamDerivedLabels();
+        if (c.id === "Unison") updateUnisonDimming();
     };
     const maybeRefreshFilter = (): void => {
         if (c.id === "Filter4PoleMode" || c.id === "Filter4PoleXpander") {
             updateFilterVisibility();
+            updateParamDerivedLabels();
         }
     };
 
@@ -180,7 +447,7 @@ function buildWidget(c: ControlSpec, legacyIdx: number): BuiltWidget {
         case "knob": {
             const knob = createObxdKnob({
                 idx: legacyIdx, label: c.label, initial: c.default,
-                defaultValue: c.default,
+                defaultValue: c.default, paramId: c.id,
                 onChange: (_i, v) => { dispatch(v); maybeRefreshFilter(); },
                 asset: c.asset, size: c.w || 40,
             });
@@ -213,6 +480,7 @@ function buildWidget(c: ControlSpec, legacyIdx: number): BuiltWidget {
                 ? clampInt(Math.round(c.default * (choices.length - 1)), 0, choices.length - 1) : 0;
             const el = createSelector({
                 x: c.x, y: c.y, w: c.w, h: c.h, choices: safeChoices, initialIndex: initIdx,
+                label: c.label,
                 onChange: (selIdx) => {
                     const norm = safeChoices.length > 1 ? selIdx / (safeChoices.length - 1) : 0;
                     dispatch(norm); maybeRefreshFilter();
@@ -240,6 +508,25 @@ function buildWidget(c: ControlSpec, legacyIdx: number): BuiltWidget {
 
 function buildSpecialWidget(c: ControlSpec): HTMLElement | null {
     switch (c.type) {
+        case "knob": {
+            const knob = createObxdKnob({
+                idx: -1, label: c.label, initial: c.default,
+                defaultValue: c.default,
+                onChange: (_i, _v) => { onSpecialKnob(c.id, _v); },
+                asset: c.asset, size: c.w || 40,
+            });
+            knob.style.left = c.x + "px";
+            knob.style.top = c.y + "px";
+            return knob;
+        }
+        case "slider":
+            return createSlider({
+                x: c.x, y: c.y, w: c.w, h: c.h,
+                orientation: c.w >= c.h ? "horizontal" : "vertical",
+                initialValue: c.default,
+                onChange: (_v) => { onSpecialKnob(c.id, _v); },
+                asset: c.asset,
+            });
         case "toggle":
             return createObxdToggle({
                 idx: -1, label: c.label, initial: c.default,
@@ -248,14 +535,16 @@ function buildSpecialWidget(c: ControlSpec): HTMLElement | null {
             });
         case "button":
             return createButton({
-                x: c.x, y: c.y, w: c.w, h: c.h, asset: c.asset,
+                x: c.x, y: c.y, w: c.w, h: c.h, asset: c.asset, label: c.label,
                 onClick: () => { onSpecialButton(c.id); },
             });
         case "selector": {
-            const choices = c.choices && c.choices.length > 0 ? c.choices : ["—"];
+            let choices = c.choices && c.choices.length > 0 ? c.choices : ["—"];
+            const mpeDestMatch = c.id.match(/^mpe(Strike|Lift|Press|Slide)Destination\d$/);
+            if (mpeDestMatch) choices = mpeMatrixChoices(mpeDestMatch[1]);
             return createSelector({
                 x: c.x, y: c.y, w: c.w, h: c.h, choices, initialIndex: 0,
-                asset: c.asset, onChange: (idx) => { onSpecialSelect(c.id, idx); },
+                asset: c.asset, label: c.label, onChange: (idx) => { onSpecialSelect(c.id, idx); },
             });
         }
         default:
@@ -263,11 +552,51 @@ function buildSpecialWidget(c: ControlSpec): HTMLElement | null {
     }
 }
 
+function onSpecialKnob(_id: string, _v: number): void {
+    const mpeMatch = _id.match(/^mpe(Strike|Lift|Press|Slide)Amount(\d)$/);
+    if (mpeMatch) {
+        const dim = mpeMatch[1];
+        const slot = parseInt(mpeMatch[2], 10);
+        const dimIdx = ["Strike", "Lift", "Press", "Slide"].indexOf(dim);
+        const row = dimIdx * 2 + (slot - 1);
+        const inst = getObxdSelectedInstance();
+        const depth = _v * 2 - 1;
+        const tgt = mpeMatrixTargetState.get(row);
+        if (tgt) setObxdInstanceMatrixRow(inst, row, dim, tgt, depth);
+    }
+}
+
+const mpeMatrixTargetState = new Map<number, string>();
+
 let g_specialPatchId = 0;
 
 function onSpecialToggle(id: string, on: boolean): void {
     switch (id) {
         case "mpeButton": setObxdInstanceMpe(getObxdSelectedInstance(), on); break;
+        case "mpeSettingsButton":
+            mpePanelVisible = on;
+            updateGlobalMpePanel();
+            break;
+        case "mpeStrikeSelectButton": if (on) selectMpeDimension(0); break;
+        case "mpeLiftSelectButton":   if (on) selectMpeDimension(1); break;
+        case "mpePressSelectButton":  if (on) selectMpeDimension(2); break;
+        case "mpeSlideSelectButton":  if (on) selectMpeDimension(3); break;
+        case "groupSelectButton":
+            groupSelectMode = on;
+            break;
+        case "lockHQButton":
+            if (on) lockedParams.set("HQMode", getCachedValue("HQMode") ?? 0);
+            else lockedParams.delete("HQMode");
+            break;
+        case "lockBendRangeButton":
+            if (on) {
+                lockedParams.set("BendUpRange", getCachedValue("BendUpRange") ?? 0);
+                lockedParams.set("BendDownRange", getCachedValue("BendDownRange") ?? 0);
+            } else {
+                lockedParams.delete("BendUpRange");
+                lockedParams.delete("BendDownRange");
+            }
+            break;
     }
 }
 
@@ -275,19 +604,91 @@ function onSpecialButton(id: string): void {
     const inst = getObxdSelectedInstance();
     switch (id) {
         case "prevPatchButton":
+            captureUndoSnapshot();
             g_specialPatchId = Math.max(0, g_specialPatchId - 1);
             applyObxdFactoryPatch(inst, g_specialPatchId);
             syncObxdControlsFromEngine(inst);
             break;
         case "nextPatchButton":
+            captureUndoSnapshot();
             g_specialPatchId = Math.min(9, g_specialPatchId + 1);
             applyObxdFactoryPatch(inst, g_specialPatchId);
             syncObxdControlsFromEngine(inst);
             break;
+        case "initPatchButton":
+            captureUndoSnapshot();
+            obxdInstanceResetPatch(inst);
+            syncObxdControlsFromEngine(inst);
+            break;
+        case "undoPatchButton":
+            restoreUndoSnapshot();
+            break;
+        case "randomizePatchButton":
+            randomizePatch();
+            break;
+        case "savePatchButton":
+            console.info("[obxf] Save patch — requires _obxd_save_fxp (Wave 4 engine export)");
+            break;
+        case "mainMenu": {
+            const menuEl = document.querySelector('[title="Main Menu"]') as HTMLElement;
+            const anchor = menuEl ? menuEl.getBoundingClientRect() : new DOMRect(60, 415, 23, 35);
+            const items: (PopupItem | "separator")[] = [
+                { text: "Initialize Patch", onClick: () => onSpecialButton("initPatchButton") },
+                { text: "Undo", onClick: () => onSpecialButton("undoPatchButton") },
+                { text: "Randomize Patch", onClick: () => onSpecialButton("randomizePatchButton") },
+                "separator",
+                {
+                    text: "About OB-Xf",
+                    onClick: () => console.info("[obxf] OB-Xf — Surge Synth Team, GPL-3.0-or-later"),
+                },
+            ];
+            openObxfPopup({ anchor, header: "Main Menu", items });
+            break;
+        }
+        default:
+            if (/^select\d+Button$/.test(id)) {
+                const n = parseInt(id.replace("select", "").replace("Button", ""), 10);
+                if (groupSelectMode) {
+                    console.info(`[obxf] Group select ${n} — single group in browser build`);
+                } else if (n >= 1 && n <= 10) {
+                    captureUndoSnapshot();
+                    g_specialPatchId = n - 1;
+                    applyObxdFactoryPatch(inst, g_specialPatchId);
+                    syncObxdControlsFromEngine(inst);
+                }
+            }
+            break;
     }
 }
 
-function onSpecialSelect(_id: string, _idx: number): void {}
+function onSpecialSelect(id: string, idx: number): void {
+    const inst = getObxdSelectedInstance();
+    if (id === "mpeGlideRangeMenu") {
+        setObxdInstanceMpeGlideRange(inst, idx);
+        return;
+    }
+    const mpeMatch = id.match(/^mpe(Strike|Lift|Press|Slide)Destination(\d)$/);
+    if (mpeMatch) {
+        const dim = mpeMatch[1];
+        const slot = parseInt(mpeMatch[2], 10);
+        const dimIdx = ["Strike", "Lift", "Press", "Slide"].indexOf(dim);
+        const row = dimIdx * 2 + (slot - 1);
+        if (idx === 0) {
+            mpeMatrixTargetState.delete(row);
+            clearObxdInstanceMatrixRow(inst, row);
+        } else {
+            const targets = mpeMatrixTargets(dim);
+            const tgt = targets[idx - 1];
+            if (tgt) {
+                mpeMatrixTargetState.set(row, tgt.id);
+                const amountId = `mpe${dim}Amount${slot}Knob`;
+                const amountHandle = cachedControls.find(c => c.id === amountId);
+                const depth = amountHandle ? (amountHandle.lastValue * 2 - 1) : 0;
+                setObxdInstanceMatrixRow(inst, row, dim, tgt.id, depth);
+            }
+        }
+    }
+}
 
 // --- LFO selector ---
 
@@ -356,7 +757,33 @@ export function buildObxdSynthUi(container: HTMLElement): void {
         el.style.backgroundPosition = "0 0";
         el.style.backgroundSize = "100% auto";
         panel.appendChild(el);
+        labelEls.set(c.id, el);
+        if (c.section === Section.MPE) {
+            mpeDoms.push(el);
+            el.style.display = "none";
+        }
     }
+
+    // Voice LEDs (32 per instance, bottom-right of panel).
+    for (const def of VOICE_LED_DEFS) {
+        const led = document.createElement("div");
+        led.style.cssText = `position: absolute; left: ${def.x}px; top: ${def.y}px; width: 9px; height: 9px; overflow: hidden; pointer-events: none; background-image: url(/obxf-assets/${def.asset}.svg); background-repeat: no-repeat; background-size: 100% auto; opacity: 0.2;`;
+        panel.appendChild(led);
+        voiceLeds.push(led);
+    }
+
+    function updateVoiceLeds(): void {
+        const inst = getObxdSelectedInstance();
+        const mask = getObxdInstanceVoiceActivity()[inst] >>> 0;
+        const poly = Math.round((getCachedValue("Polyphony") ?? 0.25) * 31) + 1;
+        for (let i = 0; i < 32; i++) {
+            if (!voiceLeds[i]) continue;
+            const active = (mask & (1 << i)) !== 0;
+            voiceLeds[i].style.opacity = i < poly ? (active ? "1" : "0.2") : "0";
+        }
+        ledRafId = requestAnimationFrame(updateVoiceLeds);
+    }
+    if (voiceLeds.length > 0) updateVoiceLeds();
 
     // Parameter-bound controls (the 104) — ALL directly on the panel.
     const paramBound = obxfControls.filter(c => c.paramBound !== false);
@@ -371,10 +798,11 @@ export function buildObxdSynthUi(container: HTMLElement): void {
         registerLearnableControl(c.id, legacyIdx, deriveHintsForControl(c));
         attachMidiLearnToWidget(dom, c, panel);
 
-        cachedControls.push({ legacyIdx, isNew, valueEl });
+        cachedControls.push({ id: c.id, legacyIdx, isNew, valueEl, lastValue: c.default });
 
         if (c.section === Section.LFO1) lfo1Doms.push(dom);
         if (c.section === Section.LFO2) lfo2Doms.push(dom);
+        if (c.section === Section.Global && GLOBAL_PANEL_IDS.has(c.id)) globalPanelDoms.push(dom);
         switch (c.id) {
             case "Filter4PoleMode":   filter4PoleModeValueEl = valueEl; break;
             case "Filter4PoleXpander":
@@ -385,22 +813,38 @@ export function buildObxdSynthUi(container: HTMLElement): void {
             case "Filter2PolePush":    filter2PolePushDom = dom; break;
             case "FilterMode":         filterModeDom = dom; break;
             case "FilterXpanderMode":  filterXpanderModeDom = dom; break;
+            case "UnisonVoices":       unisonVoicesDom = dom; break;
         }
     }
 
     // Interactive special widgets (programmer buttons, MPE, etc.).
     const skipIds = new Set(["midiLearnButton", "patchNameLabel", "patchNumberMenu",
-        "aboutButton", "mtsSettingsButton", "settingsButton"]);
+        "aboutButton", "mtsSettingsButton", "settingsButton", "mtsDynamicButton", "mtsStatusLabel"]);
     const specials = obxfControls.filter(c =>
         c.paramBound === false && c.asset && !c.asset.startsWith("label-") && !skipIds.has(c.id));
     for (const c of specials) {
         const dom = buildSpecialWidget(c);
-        if (dom) panel.appendChild(dom);
+        if (dom) {
+            panel.appendChild(dom);
+            if (c.id === "lockHQButton") globalPanelDoms.push(dom);
+            if (c.section === Section.MPE && c.id !== "mpeSettingsButton") {
+                mpeDoms.push(dom);
+                if (c.id === "mpeStrikeSelectButton") mpeDimBtns[0] = dom as ObxdWidget;
+                else if (c.id === "mpeLiftSelectButton") mpeDimBtns[1] = dom as ObxdWidget;
+                else if (c.id === "mpePressSelectButton") mpeDimBtns[2] = dom as ObxdWidget;
+                else if (c.id === "mpeSlideSelectButton") mpeDimBtns[3] = dom as ObxdWidget;
+            }
+        }
     }
 
     buildLfoSelector(panel);
+    setPanOpHandler(applyPanOp);
     updateFilterVisibility();
     updateLfoPanel();
+    updateGlobalMpePanel();
+    selectMpeDimension(0);
+    updateParamDerivedLabels();
+    updateUnisonDimming();
     setupMidiLearnOverlay(panel);
 
     container.appendChild(panel);
@@ -421,11 +865,17 @@ export async function syncObxdControlsFromEngine(instanceId: number): Promise<vo
 
     await Promise.all(cachedControls.map(async (c) => {
         const v = await getObxdInstanceParam(instanceId, c.legacyIdx);
-        if (v >= 0 && c.valueEl.setValue) c.valueEl.setValue(v);
+        if (v >= 0) {
+            c.lastValue = v;
+            if (c.valueEl.setValue) c.valueEl.setValue(v);
+        }
     }));
 
     updateFilterVisibility();
     updateLfoPanel();
+    updateParamDerivedLabels();
+    applyLocks();
+    updateUnisonDimming();
 }
 
 // ===========================================================================

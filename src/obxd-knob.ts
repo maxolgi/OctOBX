@@ -26,6 +26,10 @@ export type ObxdWidget = HTMLElement & { setValue?: (v: number) => void };
 
 const ASSET_BASE = "/obxf-assets";
 
+import { paramFormat, paramParse } from "./obxf-param-format";
+import { openObxfPopup, closeObxfPopup } from "./obxf-popup";
+import type { PopupItem, PopupCustomRow } from "./obxf-popup";
+
 // ===========================================================================
 // Knob — two-layer SVG: static body + rotating pointer
 // ===========================================================================
@@ -38,6 +42,7 @@ export interface KnobOptions {
     onChange: (idx: number, value: number) => void;
     asset?: string;         // default "knob" → knob-layer1.svg + knob-layer2.svg
     size?: number;          // default 40 (matches SVG)
+    paramId?: string;       // SynthParam::ID for value formatting (bubble/typein)
 }
 
 export function createObxdKnob(opts: KnobOptions): ObxdWidget {
@@ -104,7 +109,7 @@ export function createObxdKnob(opts: KnobOptions): ObxdWidget {
         if (fire) onChange(idx, value);
     }
 
-    setupKnobInteraction(wrap, () => value, setValue, defaultValue);
+    setupKnobInteraction(wrap, () => value, setValue, defaultValue, opts.paramId, opts.label);
 
     (wrap as ObxdWidget).setValue = (v: number) => setValue(v, false);
     return wrap;
@@ -214,7 +219,7 @@ export function createTriStateButton(opts: TriStateOptions): ObxdWidget {
     let pressed = false;
     function paint(): void {
         const stepIdx = TRI_STEPS.indexOf(value as 0 | 0.5 | 1);
-        const frame = stepIdx + (pressed ? 1 : 0);
+        const frame = stepIdx * 2 + (pressed ? 1 : 0);
         showFrame(wrap, frame);
     }
     paint();
@@ -266,19 +271,20 @@ export function createTriStateButton(opts: TriStateOptions): ObxdWidget {
 }
 
 // ===========================================================================
-// Selector — OB-Xf menu SVG background + native <select> overlay
+// Selector — OB-Xf menu SVG background + themed popup
 // ===========================================================================
 
 export interface SelectorOptions {
     x: number; y: number; w: number; h: number;
     choices: string[];
+    label?: string;
     initialIndex?: number;
     onChange: (idx: number, value: string) => void;
     asset?: string;
 }
 
 export function createSelector(opts: SelectorOptions): ObxdWidget {
-    const { x, y, w, h, choices, onChange, asset } = opts;
+    const { x, y, w, h, choices, onChange, asset, label } = opts;
     if (choices.length === 0) throw new Error("createSelector: choices must not be empty");
     let idx = clampInt(opts.initialIndex ?? 0, 0, choices.length - 1);
 
@@ -290,65 +296,71 @@ export function createSelector(opts: SelectorOptions): ObxdWidget {
     wrap.style.width = w + "px";
     wrap.style.height = h + "px";
     wrap.style.overflow = "hidden";
+    wrap.style.cursor = "pointer";
     wrap.title = choices[idx];
+    if (label) wrap.setAttribute("aria-label", label);
+    wrap.setAttribute("role", "listbox");
+    wrap.setAttribute("tabindex", "0");
 
     if (asset) {
-        const bg = document.createElement("img");
-        bg.src = `${ASSET_BASE}/${asset}.svg`;
-        bg.style.position = "absolute";
-        bg.style.width = "100%";
-        bg.style.height = "100%";
-        bg.style.pointerEvents = "none";
-        bg.draggable = false;
-        wrap.appendChild(bg);
+        wrap.style.backgroundImage = `url(${ASSET_BASE}/${asset}.svg)`;
+        wrap.style.backgroundRepeat = "no-repeat";
+        wrap.style.backgroundSize = `100% ${h * choices.length}px`;
+        updateSelectorFrame();
     }
 
-    const sel = document.createElement("select");
-    sel.style.position = "absolute";
-    sel.style.left = "0";
-    sel.style.top = "0";
-    sel.style.width = "100%";
-    sel.style.height = "100%";
-    sel.style.background = "transparent";
-    sel.style.border = "none";
-    sel.style.outline = "none";
-    sel.style.color = "#ff0000";
-    sel.style.cursor = "pointer";
-    sel.style.fontSize = "10px";
-    sel.style.textAlign = "center";
-    sel.style.appearance = "none";
-    sel.style.fontFamily = '"Jersey20", monospace';
-    sel.setAttribute("aria-label", "selector");
-
-    for (let i = 0; i < choices.length; i++) {
-        const opt = document.createElement("option");
-        opt.value = String(i);
-        opt.textContent = choices[i];
-        sel.appendChild(opt);
+    function updateSelectorFrame(): void {
+        wrap.style.backgroundPositionY = `${-idx * h}px`;
     }
-    sel.value = String(idx);
 
-    sel.addEventListener("change", () => {
-        idx = clampInt(Number(sel.value) | 0, 0, choices.length - 1);
+    function selectIndex(newIdx: number): void {
+        idx = clampInt(newIdx, 0, choices.length - 1);
         wrap.title = choices[idx];
+        updateSelectorFrame();
         onChange(idx, choices[idx]);
+    }
+
+    wrap.addEventListener("pointerdown", (ev: PointerEvent) => {
+        if (ev.button !== 0) return;
+        ev.preventDefault();
+        const items: (PopupItem | "separator")[] = [];
+        if (label) {
+            items.push({ text: label, enabled: false });
+            items.push("separator");
+        }
+        for (let i = 0; i < choices.length; i++) {
+            items.push({
+                text: choices[i],
+                checked: i === idx,
+                onClick: () => selectIndex(i),
+            });
+        }
+        openObxfPopup({ anchor: wrap.getBoundingClientRect(), items });
     });
-    sel.addEventListener("wheel", (ev) => {
+
+    wrap.addEventListener("wheel", (ev: WheelEvent) => {
         ev.preventDefault();
         const dir = ev.deltaY < 0 ? -1 : 1;
-        idx = clampInt(idx + dir, 0, choices.length - 1);
-        sel.value = String(idx);
-        wrap.title = choices[idx];
-        onChange(idx, choices[idx]);
+        selectIndex(idx + dir);
     }, { passive: false });
 
-    wrap.appendChild(sel);
+    wrap.addEventListener("keydown", (ev: KeyboardEvent) => {
+        let handled = true;
+        switch (ev.key) {
+            case "ArrowUp":
+            case "ArrowLeft": selectIndex(idx - 1); break;
+            case "ArrowDown":
+            case "ArrowRight": selectIndex(idx + 1); break;
+            default: handled = false;
+        }
+        if (handled) ev.preventDefault();
+    });
 
     (wrap as ObxdWidget).setValue = (v: number) => {
         const norm = clamp01(v);
         idx = choices.length === 1 ? 0 : Math.round(norm * (choices.length - 1));
-        sel.value = String(idx);
         wrap.title = choices[idx];
+        updateSelectorFrame();
     };
     return wrap;
 }
@@ -561,64 +573,228 @@ function applyBounds(el: HTMLElement, b: { x: number; y: number; w: number; h: n
     el.style.height = `${b.h}px`;
 }
 
+const PITCH_SNAP_IDS = new Set(["Transpose", "Osc1Pitch", "Osc2Pitch", "EnvToPitchAmount"]);
+
 // --- Knob interaction (shared by createObxdKnob) ---
 function setupKnobInteraction(
     wrap: HTMLElement,
     getValue: () => number,
     setValue: (v: number, fire: boolean) => void,
     defaultValue: number,
+    paramId?: string,
+    label?: string,
 ): void {
     let dragging = false;
     let lastY = 0;
+    let lastX = 0;
+    let wheelTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const showBubble = (): void => {
+        if (paramId) showValueBubble(wrap, paramId, getValue());
+    };
 
     wrap.addEventListener("pointerdown", (ev: PointerEvent) => {
         if (ev.button !== 0) return;
         ev.preventDefault();
         dragging = true;
         lastY = ev.clientY;
+        lastX = ev.clientX;
         (ev.target as Element).setPointerCapture?.(ev.pointerId);
         wrap.classList.add("dragging");
+        showBubble();
     });
     wrap.addEventListener("pointermove", (ev: PointerEvent) => {
         if (!dragging) return;
         const dy = ev.clientY - lastY;
+        const dx = ev.clientX - lastX;
         lastY = ev.clientY;
+        lastX = ev.clientX;
         const scale = ev.shiftKey ? 0.0005 : 0.005;
-        setValue(getValue() - dy * scale, true);
+        let newVal = getValue() - (dy + dx) * scale;
+        if (ev.altKey && paramId && PITCH_SNAP_IDS.has(paramId)) {
+            const st = Math.round(newVal * 48 - 24);
+            newVal = (st + 24) / 48;
+        }
+        setValue(newVal, true);
+        showBubble();
     });
     wrap.addEventListener("pointerup", (ev: PointerEvent) => {
         if (!dragging) return;
         dragging = false;
         wrap.classList.remove("dragging");
         (ev.target as Element).releasePointerCapture?.(ev.pointerId);
+        hideValueBubble();
     });
-    wrap.addEventListener("pointercancel", () => { dragging = false; wrap.classList.remove("dragging"); });
+    wrap.addEventListener("pointercancel", () => { dragging = false; wrap.classList.remove("dragging"); hideValueBubble(); });
 
     wrap.addEventListener("wheel", (ev: WheelEvent) => {
         ev.preventDefault();
         const dir = ev.deltaY < 0 ? 1 : -1;
         const fine = ev.shiftKey || ev.ctrlKey ? 0.01 : 0.03;
         setValue(getValue() + dir * fine, true);
+        if (paramId) {
+            showValueBubble(wrap, paramId, getValue());
+            if (wheelTimer) clearTimeout(wheelTimer);
+            wheelTimer = setTimeout(() => hideValueBubble(), 800);
+        }
     }, { passive: false });
 
     wrap.addEventListener("dblclick", () => setValue(defaultValue, true));
 
+    wrap.addEventListener("contextmenu", (ev: MouseEvent) => {
+        if (!paramId) return;
+        ev.preventDefault();
+        showKnobContextMenu(wrap, getValue, setValue, defaultValue, paramId, label);
+    });
+
     wrap.addEventListener("keydown", (ev: KeyboardEvent) => {
+        if (ev.shiftKey && ev.key === "F10" && paramId) {
+            ev.preventDefault();
+            showKnobContextMenu(wrap, getValue, setValue, defaultValue, paramId, label);
+            return;
+        }
         let handled = true;
         const fine = ev.shiftKey ? 0.005 : 0.02;
+        let changed = false;
         switch (ev.key) {
             case "ArrowUp":
-            case "ArrowRight": setValue(getValue() + fine, true); break;
+            case "ArrowRight": setValue(getValue() + fine, true); changed = true; break;
             case "ArrowDown":
-            case "ArrowLeft":  setValue(getValue() - fine, true); break;
-            case "PageUp":     setValue(getValue() + 0.1, true); break;
-            case "PageDown":   setValue(getValue() - 0.1, true); break;
-            case "Home":       setValue(0, true); break;
-            case "End":        setValue(1, true); break;
+            case "ArrowLeft":  setValue(getValue() - fine, true); changed = true; break;
+            case "PageUp":     setValue(getValue() + 0.1, true); changed = true; break;
+            case "PageDown":   setValue(getValue() - 0.1, true); changed = true; break;
+            case "Home":       setValue(1, true); changed = true; break;
+            case "End":        setValue(0, true); changed = true; break;
+            case "Delete":
+            case "Backspace":  setValue(defaultValue, true); changed = true; break;
             default: handled = false;
         }
-        if (handled) ev.preventDefault();
+        if (handled) {
+            ev.preventDefault();
+            if (changed && paramId) {
+                showValueBubble(wrap, paramId, getValue());
+                if (wheelTimer) clearTimeout(wheelTimer);
+                wheelTimer = setTimeout(() => hideValueBubble(), 800);
+            }
+        }
     });
+}
+
+// --- Knob context menu ---
+
+function showKnobContextMenu(
+    wrap: HTMLElement,
+    getValue: () => number,
+    setValue: (v: number, fire: boolean) => void,
+    defaultValue: number,
+    paramId: string,
+    label?: string,
+): void {
+    const items: (PopupItem | PopupCustomRow | "separator")[] = [];
+
+    items.push({ text: label ?? paramId, enabled: false });
+    items.push("separator");
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = paramFormat(paramId, getValue());
+    input.style.cssText = "width: 80px; font-size: 14px; text-align: center; color: #ff0000; background: transparent; border: 1px solid rgba(255,255,255,0.3); outline: none; padding: 2px 4px;";
+    input.addEventListener("keydown", (ev: KeyboardEvent) => {
+        if (ev.key === "Enter") {
+            const parsed = paramParse(paramId, input.value);
+            if (parsed !== null) setValue(parsed, true);
+            closeObxfPopup();
+        } else if (ev.key === "Escape") {
+            closeObxfPopup();
+        }
+        ev.stopPropagation();
+    });
+    items.push({ type: "custom", label: "Set Value:", element: input });
+    items.push("separator");
+
+    items.push({
+        text: "Reset to Default",
+        onClick: () => setValue(defaultValue, true),
+    });
+
+    const isPan = paramId.startsWith("PanVoice");
+    if (isPan) {
+        items.push("separator");
+        items.push({ text: "Reset All Pans", onClick: () => panOp("RESET_ALL") });
+        items.push("separator");
+        items.push({ text: "Stereo Spread Narrow", onClick: () => panOp("SPREAD_25") });
+        items.push({ text: "Stereo Spread Medium", onClick: () => panOp("SPREAD_50") });
+        items.push({ text: "Stereo Spread Wide", onClick: () => panOp("SPREAD_100") });
+        items.push("separator");
+        items.push({ text: "Alternate Pans Narrow", onClick: () => panOp("ALTERNATE_25") });
+        items.push({ text: "Alternate Pans Medium", onClick: () => panOp("ALTERNATE_50") });
+        items.push({ text: "Alternate Pans Wide", onClick: () => panOp("ALTERNATE_100") });
+        items.push("separator");
+        items.push({ text: "Randomize Pans", onClick: () => panOp("RANDOMIZE") });
+    }
+
+    openObxfPopup({ anchor: wrap.getBoundingClientRect(), items });
+
+    setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+
+type PanAlg = "RESET_ALL" | "RANDOMIZE" | "SPREAD_25" | "SPREAD_50" | "SPREAD_100"
+    | "ALTERNATE_25" | "ALTERNATE_50" | "ALTERNATE_100";
+
+let panOpHandler: ((alg: PanAlg) => void) | null = null;
+
+export function setPanOpHandler(handler: ((alg: PanAlg) => void) | null): void {
+    panOpHandler = handler;
+}
+
+function panOp(alg: PanAlg): void {
+    panOpHandler?.(alg);
+}
+
+// --- Value hover bubble (singleton) ---
+
+let bubbleEl: HTMLDivElement | null = null;
+
+function ensureBubble(): HTMLDivElement {
+    if (bubbleEl) return bubbleEl;
+    bubbleEl = document.createElement("div");
+    bubbleEl.style.cssText = [
+        "position: fixed",
+        "z-index: 100001",
+        "background: rgba(48,48,48,0.8)",
+        "border: 1px solid rgba(64,64,64,0.6)",
+        "border-radius: 6px",
+        "padding: 3px 8px",
+        "color: #ffffff",
+        "font: 12px system-ui, -apple-system, 'Segoe UI', sans-serif",
+        "pointer-events: none",
+        "white-space: nowrap",
+        "transform: translateX(-50%)",
+        "display: none",
+    ].join("; ");
+    document.body.appendChild(bubbleEl);
+    return bubbleEl;
+}
+
+function showValueBubble(wrap: HTMLElement, paramId: string, value01: number): void {
+    const bubble = ensureBubble();
+    bubble.textContent = paramFormat(paramId, value01);
+    bubble.style.display = "block";
+    const r = wrap.getBoundingClientRect();
+    const bw = bubble.offsetWidth;
+    const bh = bubble.offsetHeight;
+    const gap = 6;
+    let x = r.left + r.width / 2;
+    let y = r.top - bh - gap;
+    if (y < 0) y = r.bottom + gap;
+    if (x - bw / 2 < 0) x = bw / 2;
+    if (x + bw / 2 > window.innerWidth) x = window.innerWidth - bw / 2;
+    bubble.style.left = x + "px";
+    bubble.style.top = y + "px";
+}
+
+function hideValueBubble(): void {
+    if (bubbleEl) bubbleEl.style.display = "none";
 }
 
 // --- SVG frame-strip helpers (for toggles, tri-state, buttons) ---

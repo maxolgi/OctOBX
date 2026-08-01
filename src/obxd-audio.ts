@@ -33,6 +33,7 @@ let selectedInstance = 0;
 // Last per-instance RMS values (length 10). Updated by the pong handler
 // installed in ensureRouter(). Stays zero until the first pong arrives.
 let lastMeters = new Float32Array(10);
+let lastVoiceActivity = new Uint32Array(10);
 
 /*
  * One-shot reply router for worklet messages that need an async response
@@ -74,6 +75,12 @@ function ensureRouter(): void {
             if (Array.isArray(meters)) {
                 for (let i = 0; i < 10 && i < meters.length; i++) {
                     lastMeters[i] = Number(meters[i]) || 0;
+                }
+            }
+            const voices = (msg as { voiceActivity?: number[] }).voiceActivity;
+            if (Array.isArray(voices)) {
+                for (let i = 0; i < 10 && i < voices.length; i++) {
+                    lastVoiceActivity[i] = (Number(voices[i]) || 0) >>> 0;
                 }
             }
         }
@@ -402,6 +409,41 @@ export function pingObxd(): void {
 /* Last received per-instance RMS values (length 10, zeros before first pong). */
 export function getObxdInstanceMeters(): Float32Array {
     return lastMeters;
+}
+
+/* Last received per-instance voice-activity bitmasks (length 10, bit i = voice i sounding). */
+export function getObxdInstanceVoiceActivity(): Uint32Array {
+    return lastVoiceActivity;
+}
+
+/* Query the program name currently loaded on a specific instance. */
+export async function getObxdInstancePatchName(id: number): Promise<string> {
+    if (!workletNode) return "";
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "patch_name"
+            && (m as { instance_id?: number }).instance_id === id,
+        2000,
+    );
+    workletNode.port.postMessage({ type: "get_patch_name", instance_id: id });
+    const raw = await replyPromise;
+    if (!raw) return "";
+    return String((raw as { name?: string }).name || "");
+}
+
+/* Per-instance MPE pitch-bend (glide) range in semitones [0..48]. */
+export function setObxdInstanceMpeGlideRange(id: number, semitones: number): void {
+    workletNode?.port.postMessage({ type: "set_mpe_glide_range", instance_id: id, semitones });
+}
+
+/* Set one row of an instance's 8-row VoiceMatrix. row in [0,8). src/tgt are OB-Xf string names. depth in [-1,1]. */
+export function setObxdInstanceMatrixRow(id: number, row: number, src: string, tgt: string, depth: number): void {
+    workletNode?.port.postMessage({ type: "set_matrix_row", instance_id: id, row, src, tgt, depth });
+}
+
+/* Clear (zero) one VoiceMatrix row on a specific instance. */
+export function clearObxdInstanceMatrixRow(id: number, row: number): void {
+    workletNode?.port.postMessage({ type: "clear_matrix_row", instance_id: id, row });
 }
 
 // ---------------------------------------------------------------------------

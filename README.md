@@ -827,12 +827,13 @@ the dev server, and verify in the browser console:
    persist across reloads yet. (OB-Xf MIDI-learn bindings persist separately
    via localStorage, so they survive reloads even though Octopus state does
    not.)
-2. **MPE per-channel pitch bend** — the OB-Xf engine exposes
-   `SynthEngine::processMPEPitch(channel, val)` (per-channel), but
-   `obxd_midi_in()` routes pitch-wheel messages through the global
-   `processPitchWheel(val)`. Note-on/note-off channel routing IS MPE-aware
-   (the channel is read from the status byte when `g_mpe_enabled[id]` is set);
-   per-channel pitch *expression* is the remaining engine follow-up.
+2. **MPE timbre & channel pressure not wired** — `obxd_midi_in()` routes
+   per-channel pitch bend through `processMPEPitch(channel, val)` and note
+   on/off through channel-aware `processNoteOn/Off` when `g_mpe_enabled[id]`
+   is set. The remaining gap is that `SynthEngine::processMPETimbre(channel, val)`
+   and `processMPEChannelPressure(channel, val)` exist but aren't dispatched
+   from `obxd_midi_in()` — MIDI CC 74 (timbre) and channel-pressure (`0xD0`)
+   messages have no handler there yet.
 3. **`third_party/Obxd/` still present** — the legacy 2DaT/Obxd submodule is
    kept as a fallback until the OB-Xf migration is verified in production.
    It is no longer on the OB-Xf build's include path and is not compiled

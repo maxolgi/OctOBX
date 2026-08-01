@@ -420,9 +420,10 @@ pre-screens CC 0/6/38/74/100/101 (bank select, RPN/NRPN data entry, MPE timbre).
 (`setObxdInstanceMpe(id, enabled)`), which mirrors `g_mpe_enabled[id]` to the
 engine and rebuilds the channel→instance routing so the instance claims a lower
 zone. The OB-Xf engine's note handlers are channel-aware (`obxd_midi_in` reads
-the channel from the MIDI status byte when `g_mpe_enabled[id]` is set).
-Per-channel pitch bend *expression* (`processMPEPitch`) is an engine
-follow-up (see Known issues).
+the channel from the MIDI status byte when `g_mpe_enabled[id]` is set), and
+per-channel pitch bend *expression* (`processMPEPitch`) is routed in
+`obxd_midi_in()` when MPE is enabled. The remaining follow-up is MPE timbre
+(CC 74) and channel-pressure — see Known issues.
 
 **Chrome-on-Linux late enumeration** — after the MIDI permission is granted, the
 *first* `requestMIDIAccess()` delivers ports via `statechange` events. On
@@ -493,12 +494,14 @@ browser console:
    wrapper and legacy OB-Xd integer schema as a fallback. To swap patches,
    replace the `.fxp` files in `patches/` (keep the `NN_name.fxp` naming so
    the `g_factory_patches` symbol table matches) and rebuild.
-3. **MPE per-channel pitch bend** — the OB-Xf engine exposes
-   `SynthEngine::processMPEPitch(channel, val)` (per-channel), but
-   `obxd_midi_in()` routes pitch-wheel messages through the global
-   `processPitchWheel(val)`. Note-on/note-off channel routing IS MPE-aware
-   (the channel is read from the status byte when `g_mpe_enabled[id]` is set);
-   per-channel pitch *expression* is the remaining engine follow-up.
+3. **MPE timbre & channel pressure not wired** — `obxd_midi_in()` already
+   routes per-channel pitch bend through `processMPEPitch(channel, val)` and
+   note on/off through the channel-aware `processNoteOn/Off` when
+   `g_mpe_enabled[id]` is set. The remaining gap is that
+   `SynthEngine::processMPETimbre(channel, val)` and
+   `processMPEChannelPressure(channel, val)` exist but aren't dispatched from
+   `obxd_midi_in()` — MIDI CC 74 (timbre) and channel-pressure (0xD0) messages
+   have no handler there yet.
 4. **`third_party/Obxd/` still present** — the legacy 2DaT/Obxd submodule is
    kept as a fallback until the OB-Xf migration is verified in production. It
    is no longer on the OB-Xf build's include path and is not compiled into

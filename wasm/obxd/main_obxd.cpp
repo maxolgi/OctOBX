@@ -212,6 +212,7 @@ static bool  g_engine_active[INSTANCE_COUNT] = {};
 static int   g_engine_polyphony[INSTANCE_COUNT] = {};
 static float g_engine_rms[INSTANCE_COUNT] = {};
 static bool  g_mpe_enabled[INSTANCE_COUNT] = {};   // per-instance MPE flag (T9)
+static float g_sample_rate = 44100.0f;              // saved for engine recreation
 
 // Per-instance param mirror — SynthEngine has no getter API, so we maintain
 // our own copy alongside the engine state. obxd_get_param() reads from here;
@@ -293,6 +294,14 @@ inline float lfoBoolToTriState(float v) { return v >= 0.5f ? 0.5f : 0.f; }
 
 static void apply_param_instance(int instance_id, int idx, float v);
 
+static void recreate_engine(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    delete g_engines[instance_id];
+    g_engines[instance_id] = new SynthEngine();
+    g_engines[instance_id]->setSampleRate(g_sample_rate);
+}
+
 // Fix 3: dispatch for the 28 NEW OB-Xf params (no OB-Xd legacy ancestor).
 //
 // The UI (obxd-synth-ui.ts) assigns these a sentinel legacy index
@@ -366,6 +375,7 @@ static void apply_defaults_for_instance(int instance_id) {
     s.processOsc1Saw(1.0f);
     s.processOsc2Saw(1.0f);
     s.processOsc2Detune(0.4f);
+    s.processOsc2Keytrack(1.0f);   // ParameterList default = ON
     // Filter (open, no resonance)
     s.processFilterCutoff(1.0f);
     s.processFilterResonance(0.0f);
@@ -374,11 +384,17 @@ static void apply_defaults_for_instance(int instance_id) {
     s.processAmpEnvDecay(0.3f);
     s.processAmpEnvSustain(1.0f);
     s.processAmpEnvRelease(0.3f);
+    // Pan — center all 8 voice slots
+    for (int i = 1; i <= MAX_PANNINGS; ++i)
+        s.processPan(0.5f, i);
 
     // Reflect those settings back into the legacy mirror so the knob UI
     // renders consistent positions after init / reset.
     g_param_mirror[instance_id][VOLUME]     = 0.5f;
     g_param_mirror[instance_id][VOICE_COUNT]= 1.0f;   // 8 voices (old max)
+    for (int i = PAN1; i <= PAN8; ++i)
+        g_param_mirror[instance_id][i] = 0.5f;   // center (constructor default)
+    g_engine_polyphony[instance_id] = 8;
     g_param_mirror[instance_id][TUNE]       = 0.5f;
     g_param_mirror[instance_id][OCTAVE]     = 0.5f;
     g_param_mirror[instance_id][UNISON]     = 0.0f;
@@ -425,7 +441,7 @@ static void apply_param_instance(int instance_id, int idx, float v) {
         case VOLUME:           s.processVolume(v); break;              // 2  1:1
         case VOICE_COUNT: {                                            // 3  RESCALE old 1..8 → new
             int xdVoices = juce::jlimit(1, 8, (int)std::round(v * 7.f) + 1);
-            s.processPolyphony(((float)(xdVoices - 1) + 0.5f) / 32.f);
+            s.processPolyphony(((float)(xdVoices - 1) + 0.5f) / (float)MAX_VOICES);
         } break;
         case TUNE:             s.processTune(v); break;                // 4  1:1
         case OCTAVE: {                                                 // 5  → Transpose (semantic shift)
@@ -434,7 +450,7 @@ static void apply_param_instance(int instance_id, int idx, float v) {
         } break;
         case BENDRANGE: {                                              // 6  SPLIT → Up + Down
             int range = (v > 0.5f) ? 12 : 2;
-            float n = (float)range / 48.f;                             // MAX_BEND_RANGE
+            float n = (float)range / (float)MAX_BEND_RANGE;
             s.processBendUpRange(n);
             s.processBendDownRange(n);
         } break;
@@ -526,7 +542,13 @@ static void apply_param_instance(int instance_id, int idx, float v) {
         case PAN8:            s.processPan(v, 8); break;               // 69
         case UNLEARN:         break;                                   // 70 REMOVED
         case ECONOMY_MODE:    break;                                   // 71 REMOVED
-        case LFO_SYNC:        s.processLFO1Sync(v); break;             // 72 1:1
+        case LFO_SYNC:
+            s.processLFO1Sync(v);
+            // Legacy .fxp loads dispatch params sequentially 0..79, so LFOFREQ
+            // (17) was processed before LFO_SYNC (72) and used a stale sync
+            // state. Re-dispatch LFOFREQ now that sync is known.
+            apply_param_instance(instance_id, LFOFREQ, g_param_mirror[instance_id][LFOFREQ]);
+            break;
         case PW_ENV:          s.processEnvToPWAmount(v * (0.85f / 1.0555555555f)); break; // 73 RESCALE
         case PW_ENV_BOTH:     s.processEnvToPWBothOscs(v); break;      // 74 1:1
         case ENV_PITCH_BOTH:  s.processPitchBothOscs(v); break;        // 75 1:1 (method has no "EnvTo")
@@ -583,13 +605,11 @@ static int legacy_index_for_streaming_name(const char* name, int nlen) {
 // Reverse-lookup an OB-Xf streaming param name → NEW-param sentinel offset
 // (0..27), for the 28 params with no legacy ancestor. Returns -1 for names
 // that DO have a legacy ancestor (or are unknown). The mapping is 1:1 with
-// apply_new_param_instance()'s switch cases. VoiceReassign and Osc2Keytrack
-// (cases 1, 2) have no streaming name in OB-Xf .fxp files and are therefore
-// unreachable here — they can only be set via the UI knob path.
+// apply_new_param_instance()'s switch cases.
 static const struct { const char* name; int offset; } new_param_names[] = {
     { "UnisonVoices",        0 },
-    // 1 = VoiceReassign (no streaming name)
-    // 2 = Osc2Keytrack (no streaming name)
+    { "VoiceReassign",       1 },
+    { "Osc2Keytrack",        2 },
     { "EnvToPitchInvert",    3 },
     { "EnvToPWInvert",       4 },
     { "RingModMix",          5 },
@@ -669,10 +689,12 @@ static void apply_named_param_instance(int instance_id, const char* name, int nl
     else if (nameeq(name,nlen,"UnisonDetune"))       s.processUnisonDetune(v);
     else if (nameeq(name,nlen,"EnvLegatoMode"))      s.processEnvLegatoMode(v);
     else if (nameeq(name,nlen,"NotePriority"))       s.processNotePriority(v);
+    else if (nameeq(name,nlen,"VoiceReassign"))      s.processVoiceReassign(v);
     // OSCILLATORS
     else if (nameeq(name,nlen,"Osc1Pitch"))          s.processOsc1Pitch(v);
     else if (nameeq(name,nlen,"Osc2Detune"))         s.processOsc2Detune(v);
     else if (nameeq(name,nlen,"Osc2Pitch"))          s.processOsc2Pitch(v);
+    else if (nameeq(name,nlen,"Osc2Keytrack"))       s.processOsc2Keytrack(v);
     else if (nameeq(name,nlen,"Osc1SawWave"))        s.processOsc1Saw(v);
     else if (nameeq(name,nlen,"Osc1PulseWave"))      s.processOsc1Pulse(v);
     else if (nameeq(name,nlen,"Osc2SawWave"))        s.processOsc2Saw(v);
@@ -1145,6 +1167,7 @@ EMSCRIPTEN_KEEPALIVE void obxd_set_polyphony(int instance_id, int voice_count);
 EMSCRIPTEN_KEEPALIVE
 void obxd_init(int sample_rate) {
     float sr = sample_rate ? (float)sample_rate : 44100.0f;
+    g_sample_rate = sr;
     for (int i = 0; i < INSTANCE_COUNT; ++i) {
         if (g_engines[i]) { delete g_engines[i]; g_engines[i] = nullptr; }
         g_engines[i] = new SynthEngine();
@@ -1228,10 +1251,10 @@ EMSCRIPTEN_KEEPALIVE
 void obxd_set_polyphony(int instance_id, int voice_count) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     if (voice_count < 1) voice_count = 1;
-    if (voice_count > 32) voice_count = 32;   // OB-Xf MAX_VOICES
+    if (voice_count > MAX_VOICES) voice_count = MAX_VOICES;
     g_engine_polyphony[instance_id] = voice_count;
     if (g_engines[instance_id]) {
-        float v_new = ((float)(voice_count - 1) + 0.5f) / 32.0f;
+        float v_new = ((float)(voice_count - 1) + 0.5f) / (float)MAX_VOICES;
         g_engines[instance_id]->processPolyphony(v_new);
     }
     // Legacy mirror (old 1..8 scale, clamped) for UI consistency.
@@ -1299,7 +1322,11 @@ void obxd_midi_in(int instance_id, uint8_t status, uint8_t d1, uint8_t d2) {
             break;
         case 0xE0: {  // Pitch wheel — 14-bit little-endian, center 8192
             int v = ((d2 & 0x7F) << 7) | (d1 & 0x7F);
-            s.processPitchWheel((v - 8192) / 8192.0f);
+            float pv = (v - 8192) / 8192.0f;
+            if (g_mpe_enabled[instance_id])
+                s.processMPEPitch(channel, pv);
+            else
+                s.processPitchWheel(pv);
             break;
         }
         default:
@@ -1406,6 +1433,7 @@ EMSCRIPTEN_KEEPALIVE
 void obxd_set_factory_patch(int instance_id, int patch_id) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     if (patch_id < 0 || patch_id >= INSTANCE_COUNT) return;
+    recreate_engine(instance_id);
     apply_defaults_for_instance(instance_id);
 
 #if HAS_FACTORY_FXP
@@ -1428,10 +1456,9 @@ float obxd_get_instance_rms(int instance_id) {
     return g_engine_rms[instance_id];
 }
 
-// Per-instance MPE enable flag (T9). The OB-Xf engine is channel-aware;
-// when MPE is enabled the bridge (task T20) will route each MIDI channel
-// to its own note signature. For now obxd_midi_in always passes
-// channel=0 regardless of this flag.
+// Per-instance MPE enable flag. When enabled, obxd_midi_in forwards the
+// MIDI status byte's channel nibble to the OB-Xf engine's channel-aware
+// note/pitch handlers (processNoteOn/Off, processMPEPitch).
 EMSCRIPTEN_KEEPALIVE
 void obxd_set_mpe(int instance_id, int enabled) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
@@ -1467,5 +1494,58 @@ void obxd_set_sustain(int instance_id, int on) {
 // we silently drop it instead of breaking the export list.
 EMSCRIPTEN_KEEPALIVE
 void obxd_set_freq(double freq) { (void)freq; /* no-op */ }
+
+// Returns a 32-bit bitmask of Voice::isSounding() for instance `instance_id`.
+// Bit i is set iff voices[i] is sounding. Voices beyond totalVoiceCount are 0.
+EMSCRIPTEN_KEEPALIVE
+uint32_t obxd_get_voice_activity(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return 0;
+    if (!g_engines[instance_id]) return 0;
+    Motherboard* mb = g_engines[instance_id]->getMotherboard();
+    if (!mb) return 0;
+    uint32_t mask = 0u;
+    for (int i = 0; i < MAX_VOICES; ++i) {
+        if (mb->voices[i].isSounding()) mask |= (uint32_t)1u << i;
+    }
+    return mask;
+}
+
+// Per-instance MPE pitch-bend (glide) range in semitones [0..48].
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_mpe_glide_range(int instance_id, int semitones) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    if (semitones < 0) semitones = 0;
+    if (semitones > MAX_BEND_RANGE) semitones = MAX_BEND_RANGE;
+    Motherboard* mb = g_engines[instance_id]->getMotherboard();
+    if (mb) mb->mpePitchBendRange = semitones;
+}
+
+// Per-instance VoiceMatrix row set. row in [0, NUM_MATRIX_ROWS).
+// src/tgt are OB-Xf source/target STRING names. depth in [-1,1].
+EMSCRIPTEN_KEEPALIVE
+int obxd_set_matrix_row(int instance_id, int row, const char* src, const char* tgt, float depth) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return 0;
+    if (!g_engines[instance_id]) return 0;
+    if (row < 0 || row >= NUM_MATRIX_ROWS) return 0;
+    if (!src || !tgt) return 0;
+    Motherboard* mb = g_engines[instance_id]->getMotherboard();
+    if (!mb) return 0;
+    if (depth < -1.0f) depth = -1.0f;
+    if (depth >  1.0f) depth =  1.0f;
+    return mb->voiceMatrix.setModulation(std::string(src), std::string(tgt), depth, row) ? 1 : 0;
+}
+
+// Per-instance VoiceMatrix row clear.
+EMSCRIPTEN_KEEPALIVE
+int obxd_clear_matrix_row(int instance_id, int row) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return 0;
+    if (!g_engines[instance_id]) return 0;
+    if (row < 0 || row >= NUM_MATRIX_ROWS) return 0;
+    Motherboard* mb = g_engines[instance_id]->getMotherboard();
+    if (!mb) return 0;
+    mb->voiceMatrix.clearRow(row);
+    return 1;
+}
 
 }  // extern "C"

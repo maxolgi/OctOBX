@@ -164,11 +164,11 @@ These `SynthParam::ID` strings have no source in the legacy `ParamsEnum.h`. The 
 
 **Global / voice:**
 - `UnisonVoices` — separate unison voice count (OB-Xd only had total `VOICE_COUNT`)
-- `VoiceReassign` (v1.1) — voice reassignment toggle
+- `VoiceReassign` (v1.1) — voice reassignment toggle. Has streaming name 'VoiceReassign'; handled in named-attribute dispatch.
 - `NotePriority` "High" state — the third tri-state value (old bool could only reach Last/Low)
 
 **Oscillators:**
-- `Osc2Keytrack` (v1.1) — osc2 keytrack toggle (importer force-defaults to 1.0)
+- `Osc2Keytrack` (v1.1) — osc2 keytrack toggle (importer force-defaults to 1.0). Has streaming name 'Osc2Keytrack'; handled in named-attribute dispatch.
 - `EnvToPitchInvert` — invert filter-env-to-pitch
 - `EnvToPWInvert` — invert filter-env-to-pulsewidth
 

@@ -225,6 +225,21 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     // Fix 2: reserved CC 64 direct routing. enabled is 0/1.
                     if (wasmModule) wasmModule._obxd_set_sustain(id, msg.enabled ? 1 : 0);
                     break;
+                case 'set_mpe_glide_range':
+                    if (wasmModule) wasmModule._obxd_set_mpe_glide_range(id, msg.semitones | 0);
+                    break;
+                case 'set_matrix_row':
+                    if (wasmModule && typeof msg.row === 'number'
+                            && typeof msg.src === 'string' && typeof msg.tgt === 'string'
+                            && typeof msg.depth === 'number') {
+                        wasmModule._obxd_set_matrix_row(id, msg.row | 0, msg.src, msg.tgt, +msg.depth);
+                    }
+                    break;
+                case 'clear_matrix_row':
+                    if (wasmModule && typeof msg.row === 'number') {
+                        wasmModule._obxd_clear_matrix_row(id, msg.row | 0);
+                    }
+                    break;
                 case 'set_param':
                     // idx is a ParamsEnum.h value; value is 0..1. Forwarded
                     // directly to the engine. Useful for runtime patch tweaks.
@@ -285,31 +300,37 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     if (wasmModule) wasmModule._obxd_reset_patch(id);
                     break;
                 case 'get_param':
-                    // Query the current engine value for a single param on
-                    // the given instance (used by the knob UI to read
-                    // defaults after a patch load). Reply goes back as
-                    // `param_value` so the requester can correlate by idx.
                     if (wasmModule && typeof msg.idx === 'number') {
                         const v = wasmModule._obxd_get_param(id, msg.idx | 0);
                         this.port.postMessage({ type: 'param_value', instance_id: msg.instance_id, idx: msg.idx | 0, value: v });
                     }
                     break;
+                case 'get_patch_name': {
+                    let name = '';
+                    if (wasmModule) {
+                        try { name = wasmModule.UTF8ToString(wasmModule._obxd_get_patch_name(id)) || ''; }
+                        catch (e) { name = ''; }
+                    }
+                    this.port.postMessage({ type: 'patch_name', instance_id: msg.instance_id, name });
+                    break;
+                }
                 case 'ping': {
-                    // Reply with a 10-float meter array — one RMS per
-                    // instance. The UI refreshes this at ~30 Hz.
                     const meters = new Array(INSTANCE_COUNT);
+                    const voices = new Array(INSTANCE_COUNT);
                     if (wasmModule) {
                         for (let i = 0; i < INSTANCE_COUNT; i++) {
                             meters[i] = wasmModule._obxd_get_instance_rms(i);
+                            voices[i] = wasmModule._obxd_get_voice_activity(i) >>> 0;
                         }
                     } else {
-                        for (let i = 0; i < INSTANCE_COUNT; i++) meters[i] = 0.0;
+                        for (let i = 0; i < INSTANCE_COUNT; i++) { meters[i] = 0.0; voices[i] = 0; }
                     }
                     this.port.postMessage({
                         type: 'pong',
                         alive: this.alive,
                         ready: wasmModule !== null,
                         meters,
+                        voiceActivity: voices,
                         bufLPtr,
                         bufRPtr,
                     });
