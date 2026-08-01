@@ -240,7 +240,13 @@ async function loadDrumKitImpl(kit: DrumKit): Promise<void> {
             sendLayerParams(p, loadedIdx, lyr);
             // Seed the per-layer param store the editor reads from so the
             // kit's filter/amp values appear on knob load / instance switch.
-            seedLayerMirror(p, loadedIdx, lyr);
+            // Only seed once per layer — subsequent reloads (triggered by
+            // layer toggles or sample swaps) must NOT overwrite user edits
+            // stored in g_drum_layer_params.
+            if (!lyr._seeded) {
+                seedLayerMirror(p, loadedIdx, lyr);
+                lyr._seeded = true;
+            }
             loadedIdx++;
         }
 

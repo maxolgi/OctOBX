@@ -15,6 +15,7 @@ export interface DrumLayer {
     ampRelease: number;     // 0..1
     pan: number;            // 0..1 (0.5 = center)
     muted: boolean;
+    _seeded?: boolean;      // internal: tracks whether layer params have been seeded into g_drum_layer_params
 }
 
 export interface DrumPad {
