@@ -28,11 +28,12 @@
 class SynthEngine
 {
   private:
+// OctOBX PCM: when synth.pcmVoiceOverride is set, stamp ONLY that voice (for per-layer param application)
 #define ForEachVoice(expr)                                                                         \
-    for (int i = 0; i < MAX_VOICES; i++)                                                           \
-    {                                                                                              \
-        synth.voices[i].expr;                                                                      \
-    }
+    do {                                                                                           \
+        if (synth.pcmVoiceOverride) { synth.pcmVoiceOverride->expr; }                              \
+        else { for (int i = 0; i < MAX_VOICES; i++) { synth.voices[i].expr; } }                    \
+    } while (0)
 
     Motherboard synth;
     Smoother cutoffSmoother;

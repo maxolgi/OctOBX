@@ -32,18 +32,17 @@ const LEGACY_VOICE_COUNT = 3;     // VOICE_COUNT  -> Polyphony
 const LEGACY_OSC1_MIX = 40;       // OSC1MIX      -> Osc1Mix
 const LEGACY_OSC2_MIX = 41;       // OSC2MIX      -> Osc2Mix
 const LEGACY_NOISE_MIX = 42;      // NOISEMIX     -> NoiseMix
+const LEGACY_CUTOFF = 44;         // CUTOFF       -> FilterCutoff
+const LEGACY_RESONANCE = 45;      // RESONANCE    -> FilterResonance
+const LEGACY_MULTIMODE = 46;      // MULTIMODE    -> FilterMode
 const LEGACY_AMP_ATTACK = 51;     // LATK         -> AmpEnvAttack
+const LEGACY_AMP_DECAY = 52;      // LDEC         -> AmpEnvDecay
+const LEGACY_AMP_SUSTAIN = 53;    // LSUS         -> AmpEnvSustain
 const LEGACY_AMP_RELEASE = 54;    // LREL         -> AmpEnvRelease
 
-// Module-level caches.
-//   padLayerCount: padIndex -> current enabled-layer count, so previewLayer
-//     can save/restore the count when soloing a single layer.
-//   noteToPad:     midiNote -> padIndex, so previewLayer can find the pad
-//     from the trigger note.
-//   sampleCache:   full sample URL -> decoded mono PCM, so the same sample
-//     shared by several pads/layers is decoded only once.
-const padLayerCount = new Map<number, number>();
-const noteToPad = new Map<number, number>();
+// Module-level cache.
+//   sampleCache: full sample URL -> decoded mono PCM, so the same sample
+//   shared by several pads/layers is decoded only once.
 const sampleCache = new Map<string, Float32Array>();
 
 let audioContext: AudioContext | null = null;
@@ -119,6 +118,26 @@ function sendLayerParams(pad: number, layer: number, lyr: DrumLayer): void {
 }
 
 /*
+ * Seed the per-layer drum param store (the one setDrumLayerParam writes
+ * to on instance 9) from a kit layer's filter/amp fields, so the editor
+ * UI reflects the loaded kit's values rather than whatever the C-side
+ * mirror defaulted to. sendLayerParams already pushes the same fields
+ * to the set_pcm_layer message (which configures the live voice), but
+ * the param store the editor reads from is a separate mirror — both
+ * must be seeded together on load. Called from loadDrumKit right after
+ * each set_pcm_layer message.
+ */
+function seedLayerMirror(pad: number, layer: number, lyr: DrumLayer): void {
+    setDrumLayerParam(pad, layer, LEGACY_CUTOFF, lyr.filterCutoff);
+    setDrumLayerParam(pad, layer, LEGACY_RESONANCE, lyr.filterResonance);
+    setDrumLayerParam(pad, layer, LEGACY_MULTIMODE, lyr.filterMode);
+    setDrumLayerParam(pad, layer, LEGACY_AMP_ATTACK, lyr.ampAttack);
+    setDrumLayerParam(pad, layer, LEGACY_AMP_DECAY, lyr.ampDecay);
+    setDrumLayerParam(pad, layer, LEGACY_AMP_SUSTAIN, lyr.ampSustain);
+    setDrumLayerParam(pad, layer, LEGACY_AMP_RELEASE, lyr.ampRelease);
+}
+
+/*
  * Configure instance 9 for drum (sample-playback) mode: silence the
  * oscillator/noise paths and open the amp envelope. Unison stays OFF
  * (its default) — drum layers come from the engine's separate
@@ -152,8 +171,6 @@ export async function initDrumMode(): Promise<void> {
  */
 export async function loadDrumKit(kit: DrumKit): Promise<void> {
     clearPcm();
-    padLayerCount.clear();
-    noteToPad.clear();
 
     const ctx = getOrCreateAudioContext();
 
@@ -209,14 +226,15 @@ export async function loadDrumKit(kit: DrumKit): Promise<void> {
             // The C side stores all layer params together, so the full
             // set_pcm_layer is sent alongside the PCM it configures.
             sendLayerParams(p, l, lyr);
+            // Seed the per-layer param store the editor reads from so the
+            // kit's filter/amp values appear on knob load / instance switch.
+            seedLayerMirror(p, l, lyr);
             enabledLayers++;
         }
 
         postDrum({ type: "set_pcm_note_map", instance_id: DRUM_INSTANCE, note: pad.midiNote, pad: p });
-        noteToPad.set(pad.midiNote, p);
 
         postDrum({ type: "set_pcm_layer_count", instance_id: DRUM_INSTANCE, pad: p, count: enabledLayers });
-        padLayerCount.set(p, enabledLayers);
 
         postDrum({ type: "set_pcm_choke", instance_id: DRUM_INSTANCE, pad: p, group: pad.chokeGroup });
     }
@@ -232,8 +250,77 @@ export function setLayerParam(pad: number, layer: number, lyr: DrumLayer): void 
     sendLayerParams(pad, layer, lyr);
 }
 
+/*
+ * Push a single legacy ParamsEnum.h index + 0..1 value into a drum
+ * pad/layer's param store on instance 9 (DRUM_INSTANCE). The worklet
+ * routes this to the per-layer mirror the drum voice reads from —
+ * separate from the synth-wide set_param path used by initDrumMode.
+ * Posts through the same getObxdNode().port path every other message
+ * in this file uses (postDrum); no-ops when the worklet isn't up yet.
+ */
+export function setDrumLayerParam(pad: number, layer: number, idx: number, value: number): void {
+    postDrum({
+        type: "set_drum_layer_param",
+        instance_id: DRUM_INSTANCE,
+        pad,
+        layer,
+        idx,
+        value,
+    });
+}
+
+/*
+ * Read back a single legacy ParamsEnum.h value from a drum pad/layer's
+ * param store on instance 9 (DRUM_INSTANCE). Resolves to the 0..1
+ * value, or -1 on timeout / no worklet / out-of-range index. Mirrors
+ * getObxdInstanceParam's one-shot-predicate + 2s-timeout pattern
+ * (correlating by pad+layer+idx so concurrent queries for different
+ * layers don't cross-reply). obxd-audio.ts's awaitReply router is not
+ * exported, so we install our own one-shot addEventListener listener
+ * on the worklet port and remove it as soon as it claims the matching
+ * reply (or on timeout). The permanent ensureRouter() listener in
+ * obxd-audio.ts has no predicate for "drum_layer_param_value", so it
+ * ignores these replies and the two listeners coexist cleanly.
+ */
+export async function getDrumLayerParam(pad: number, layer: number, idx: number): Promise<number> {
+    const node = getObxdNode();
+    if (!node) return -1;
+    const port = node.port;
+    return new Promise<number>((resolve) => {
+        let timer: ReturnType<typeof setTimeout>;
+        const onMsg = (ev: MessageEvent): void => {
+            const msg = ev.data;
+            if (!msg || typeof msg !== "object") return;
+            const m = msg as { type?: string; pad?: number; layer?: number; idx?: number; value?: number };
+            if (m.type === "drum_layer_param_value"
+                && m.pad === pad
+                && m.layer === layer
+                && m.idx === idx) {
+                port.removeEventListener("message", onMsg);
+                clearTimeout(timer);
+                resolve(Number(m.value ?? -1));
+            }
+        };
+        timer = setTimeout(() => {
+            port.removeEventListener("message", onMsg);
+            resolve(-1);
+        }, 2000);
+        // Install the predicate BEFORE posting so a fast reply can't be missed.
+        port.addEventListener("message", onMsg);
+        // ensureRouter() in obxd-audio.ts already calls port.start() once the
+        // worklet is up; the defensive try/catch mirrors its style for safety.
+        try { port.start(); } catch { /* some impls throw if already started */ }
+        port.postMessage({
+            type: "get_drum_layer_param",
+            instance_id: DRUM_INSTANCE,
+            pad,
+            layer,
+            idx,
+        });
+    });
+}
+
 export function setPadLayerCount(pad: number, count: number): void {
-    padLayerCount.set(pad, count);
     postDrum({ type: "set_pcm_layer_count", instance_id: DRUM_INSTANCE, pad, count });
 }
 
@@ -247,26 +334,5 @@ export function previewPad(note: number, velocity = 1.0): void {
     sendObxdInstanceMidi(DRUM_INSTANCE, 0x99, note, vel);
     setTimeout(() => {
         sendObxdInstanceMidi(DRUM_INSTANCE, 0x89, note, 0);
-    }, 300);
-}
-
-/*
- * Preview a single layer of the pad that the given note maps to:
- * temporarily force that pad's layer count to 1 (so only layer 0 plays),
- * trigger the note, then restore the original count on note-off.
- */
-export function previewLayer(note: number, _layerIndex: number, velocity = 1.0): void {
-    const pad = noteToPad.get(note);
-    if (pad === undefined) {
-        previewPad(note, velocity);
-        return;
-    }
-    const saved = padLayerCount.get(pad) ?? 1;
-    setPadLayerCount(pad, 1);
-    const vel = Math.max(0, Math.min(127, Math.round(velocity * 127)));
-    sendObxdInstanceMidi(DRUM_INSTANCE, 0x99, note, vel);
-    setTimeout(() => {
-        sendObxdInstanceMidi(DRUM_INSTANCE, 0x89, note, 0);
-        setPadLayerCount(pad, saved);
     }, 300);
 }

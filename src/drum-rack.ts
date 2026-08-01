@@ -1,7 +1,8 @@
-/* drum-rack.ts — OB-Xf drum module UI (kit selector, 8 pads, 4 layers, per-layer knob editor). */
+/* drum-rack.ts — OB-Xf drum module UI (kit selector, 8 pads, 4 layers, with
+ * the full OB-Xf editor embedded per selected layer + drum-specific sample
+ * selector / mute). */
 
-import { createObxdKnob, createObxdToggle } from "./obxd-knob";
-import type { ObxdWidget } from "./obxd-knob";
+import { createObxdToggle } from "./obxd-knob";
 import type { DrumKit, DrumLayer } from "./drum-state";
 import { DRUM_KITS } from "./drum-kits";
 import {
@@ -10,8 +11,11 @@ import {
     setLayerParam,
     setPadLayerCount,
     previewPad,
-    previewLayer,
+    setDrumLayerParam,
+    getDrumLayerParam,
 } from "./drum-audio";
+import { buildObxdSynthUi } from "./obxd-synth-ui";
+import type { ObxdParamTarget, ObxdEditorHandle } from "./obxd-synth-ui";
 
 // --- Module state ---------------------------------------------------------
 
@@ -27,27 +31,45 @@ let statusEl: HTMLSpanElement;
 let kitSelectEl: HTMLSelectElement;
 let layerBtnsEl: HTMLDivElement;
 let editorEl: HTMLDivElement;
+let drumControlsEl: HTMLDivElement;
+let obxfEditorHost: HTMLDivElement;
+let editorHandle: ObxdEditorHandle | null = null;
 const padBtns: HTMLButtonElement[] = [];
 const padDots: HTMLSpanElement[][] = [];
 
-// Numeric (0..1) layer fields that get a knob in the editor.
-type NumericLayerKey =
-    | "gain" | "pan" | "filterCutoff" | "filterResonance" | "filterMode"
-    | "ampAttack" | "ampDecay" | "ampSustain" | "ampRelease";
-
-const KNOB_SPECS: { key: NumericLayerKey; label: string }[] = [
-    { key: "gain", label: "Gain" },
-    { key: "pan", label: "Pan" },
-    { key: "filterCutoff", label: "Cutoff" },
-    { key: "filterResonance", label: "Reso" },
-    { key: "filterMode", label: "F.Mode" },
-    { key: "ampAttack", label: "Attack" },
-    { key: "ampDecay", label: "Decay" },
-    { key: "ampSustain", label: "Sustain" },
-    { key: "ampRelease", label: "Release" },
-];
+// OB-Xf editor target: closes over selectedPad/selectedLayer (module-level
+// lets) so every get/set addresses the currently-selected drum layer at call
+// time. Built once; the editor is re-seeded via editorHandle.sync() whenever
+// the pad/layer selection changes.
+const drumTarget: ObxdParamTarget = {
+    get: (idx) => getDrumLayerParam(selectedPad, selectedLayer, idx),
+    set: (idx, v) => setDrumLayerParam(selectedPad, selectedLayer, idx, v),
+};
 
 // --- Public API (fixed contract consumed by main.ts) ----------------------
+
+// Race-safe singleton promise: concurrent callers (startup preload +
+// first mountDrumModule) share one load. Idempotent once ready.
+let preloadPromise: Promise<void> | null = null;
+
+export function preloadDrumKit(): Promise<void> {
+    if (ready) return Promise.resolve();
+    if (preloadPromise) return preloadPromise;
+    preloadPromise = (async () => {
+        try {
+            await initDrumMode();
+        } catch (e) {
+            console.warn("[drum] initDrumMode failed (OB-Xf worklet not booted?):", e);
+            return;
+        }
+        try {
+            await loadKitByIndex(0);
+        } catch (e) {
+            console.warn("[drum] initial kit load failed:", e);
+        }
+    })();
+    return preloadPromise;
+}
 
 export async function mountDrumModule(container: HTMLElement): Promise<void> {
     if (mountedContainer === container) return;
@@ -60,16 +82,8 @@ export async function mountDrumModule(container: HTMLElement): Promise<void> {
     renderLayerButtons();
     renderLayerEditor();
 
-    try {
-        await initDrumMode();
-    } catch (e) {
-        console.warn("[drum] initDrumMode failed (OB-Xf worklet not booted?):", e);
-    }
-    try {
-        await loadKitByIndex(0);
-    } catch (e) {
-        console.warn("[drum] initial kit load failed:", e);
-    }
+    await preloadDrumKit();
+    syncEditor();
 }
 
 export function isDrumReady(): boolean {
@@ -123,18 +137,25 @@ async function loadKitByIndex(idx: number): Promise<void> {
     currentKit = cloneKit(DRUM_KITS[idx]);
     selectedPad = 0;
     selectedLayer = 0;
-    kitSelectEl.value = String(idx);
-    statusEl.textContent = "Loading " + currentKit.name + "...";
-    refreshPadBank();
-    renderLayerButtons();
-    renderLayerEditor();
+    // DOM elements only exist after mountDrumModule → buildUI; guard for
+    // the startup preload path which runs before the UI is mounted.
+    if (kitSelectEl) kitSelectEl.value = String(idx);
+    if (statusEl) statusEl.textContent = "Loading " + currentKit.name + "...";
+    if (mountedContainer) {
+        refreshPadBank();
+        renderLayerButtons();
+        renderLayerEditor();
+    }
     try {
         await loadDrumKit(currentKit);
         ready = true;
-        statusEl.textContent = "Ready - " + currentKit.name;
+        if (statusEl) statusEl.textContent = "Ready - " + currentKit.name;
+        // Kit load resets selection to pad 0 / layer 0 and pushes the new
+        // layers' params to the engine — re-seed the editor to match.
+        syncEditor();
     } catch (e) {
         console.warn("[drum] loadDrumKit failed:", e);
-        statusEl.textContent = "Kit load failed (audio not ready) - " + currentKit.name;
+        if (statusEl) statusEl.textContent = "Kit load failed (audio not ready) - " + currentKit.name;
     }
 }
 
@@ -218,6 +239,7 @@ function buildUI(container: HTMLElement): void {
             refreshPadBank();
             renderLayerButtons();
             renderLayerEditor();
+            syncEditor();
             try {
                 previewPad(currentKit.pads[padIndex].midiNote);
             } catch (e) {
@@ -235,10 +257,22 @@ function buildUI(container: HTMLElement): void {
     layerBtnsEl = document.createElement("div");
     layerBtnsEl.className = "drum-layer-row";
 
-    // 4. Layer editor — rebuilt contents live in editorEl.
+    // 4. Layer editor — drum-specific controls (sample selector + mute) are
+    //    rebuilt on selection change into drumControlsEl; the full OB-Xf
+    //    editor below it (obxfEditorHost) is built ONCE in buildUI and is
+    //    re-seeded via editorHandle.sync() when the selection changes.
     const editorLabel = sectionLabel("Layer editor");
     editorEl = document.createElement("div");
     editorEl.className = "drum-editor";
+
+    drumControlsEl = document.createElement("div");
+    drumControlsEl.className = "drum-sample-row";
+
+    obxfEditorHost = document.createElement("div");
+    obxfEditorHost.className = "drum-obxf-host";
+
+    editorEl.appendChild(drumControlsEl);
+    editorEl.appendChild(obxfEditorHost);
 
     root.appendChild(header);
     root.appendChild(padsLabel);
@@ -249,6 +283,12 @@ function buildUI(container: HTMLElement): void {
     root.appendChild(editorEl);
 
     container.appendChild(root);
+
+    // Build the full OB-Xf editor exactly once, bound to the drum target.
+    // drumTarget reads selectedPad/selectedLayer at call time, so a single
+    // editor instance serves every pad/layer combination — we never rebuild
+    // it, only re-seed via editorHandle.sync() on selection change.
+    editorHandle = buildObxdSynthUi(obxfEditorHost, drumTarget);
 }
 
 function sectionLabel(text: string): HTMLDivElement {
@@ -305,11 +345,7 @@ function renderLayerButtons(): void {
             }
             renderLayerButtons();
             renderLayerEditor();
-            try {
-                previewLayer(pad.midiNote, layerIndex);
-            } catch (e) {
-                console.warn("[drum] previewLayer failed:", e);
-            }
+            syncEditor();
         });
         btn.addEventListener("contextmenu", (ev) => {
             ev.preventDefault();
@@ -325,13 +361,13 @@ function renderLayerButtons(): void {
 }
 
 function renderLayerEditor(): void {
-    editorEl.replaceChildren();
+    // Drum-specific controls only (sample selector + mute). The full OB-Xf
+    // editor lives in obxfEditorHost (built once in buildUI) and is re-seeded
+    // via editorHandle.sync() on selection change — NOT rebuilt here.
+    drumControlsEl.replaceChildren();
     const lyr = currentKit.pads[selectedPad].layers[selectedLayer];
 
     // Sample selector (reassign among samples already present in the kit).
-    const sampleRow = document.createElement("div");
-    sampleRow.className = "drum-sample-row";
-
     const sampleLabel = document.createElement("span");
     sampleLabel.textContent = "Sample:";
 
@@ -362,22 +398,8 @@ function renderLayerEditor(): void {
         })();
     });
 
-    sampleRow.appendChild(sampleLabel);
-    sampleRow.appendChild(sampleSelect);
-    editorEl.appendChild(sampleRow);
-
-    // Knob grid: 9 numeric params + a mute toggle.
-    const grid = document.createElement("div");
-    grid.className = "drum-knob-grid";
-
-    for (const spec of KNOB_SPECS) {
-        const k = buildKnob(spec.label, lyr[spec.key], (v) => {
-            lyr[spec.key] = v;
-            pushLayer(lyr);
-        });
-        grid.appendChild(makeKnobCell(k, spec.label));
-    }
-
+    // Mute toggle (drum-specific; routes through the sample-layer gain path,
+    // not the OB-Xf param target).
     const muteTog = createObxdToggle({
         idx: 0,
         label: "Mute",
@@ -389,41 +411,27 @@ function renderLayerEditor(): void {
             pushLayer(lyr);
         },
     });
-    // Toggle factory only sizes itself when x/y are given; we keep it in flow
+    // Toggle factory only sizes itself when x/y are given; keep it in flow
     // and set the box manually so the SVG frame-strip is visible.
     muteTog.style.width = "44px";
     muteTog.style.height = "22px";
     muteTog.style.position = "static";
-    grid.appendChild(makeKnobCell(muteTog, "Mute"));
 
-    editorEl.appendChild(grid);
+    const muteLabel = document.createElement("span");
+    muteLabel.className = "drum-mute-label";
+    muteLabel.textContent = "Mute";
+
+    drumControlsEl.appendChild(sampleLabel);
+    drumControlsEl.appendChild(sampleSelect);
+    drumControlsEl.appendChild(muteTog);
+    drumControlsEl.appendChild(muteLabel);
 }
 
-// --- Widget helpers -------------------------------------------------------
-
-function buildKnob(label: string, initial: number, onChange: (v: number) => void): ObxdWidget {
-    const k = createObxdKnob({
-        idx: 0,
-        label,
-        initial,
-        defaultValue: initial,
-        onChange: (_i, v) => onChange(v),
-        size: 38,
-    });
-    // Factory forces position:absolute; override so it participates in flow.
-    k.style.position = "relative";
-    return k;
-}
-
-function makeKnobCell(widget: HTMLElement, label: string): HTMLElement {
-    const cell = document.createElement("div");
-    cell.className = "drum-knob-cell";
-    const lab = document.createElement("div");
-    lab.className = "drum-knob-label";
-    lab.textContent = label;
-    cell.appendChild(widget);
-    cell.appendChild(lab);
-    return cell;
+// Re-seed the OB-Xf editor from the currently-selected drum layer's param
+// store. No-op until buildUI has instantiated the editor.
+function syncEditor(): void {
+    if (!editorHandle) return;
+    editorHandle.sync().catch((e) => console.warn("[drum] editor sync failed", e));
 }
 
 // --- Stylesheet (injected once) -------------------------------------------
@@ -498,9 +506,17 @@ function ensureStyle(): void {
 .drum-editor { display: flex; flex-direction: column; gap: 10px; }
 .drum-sample-row { display: flex; align-items: center; gap: 8px; }
 .drum-sample-row select { min-width: 200px; }
-.drum-knob-grid { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
-.drum-knob-cell { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 56px; }
-.drum-knob-label { font-size: 10px; color: var(--text-dim); text-align: center; }
+.drum-mute-label { font-size: 11px; color: var(--text-dim); }
+/* Host for the embedded OB-Xf editor (1150x576). buildObxdSynthUi sets
+   overflowX:auto on this element so the wide panel scrolls horizontally;
+   the border just frames it inside the drum rack. */
+.drum-obxf-host {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: #000;
+    flex: 0 0 auto;
+    max-width: 100%;
+}
 `;
     const style = document.createElement("style");
     style.textContent = css;

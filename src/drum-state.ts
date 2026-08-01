@@ -31,7 +31,7 @@ export interface DrumKit {
 }
 
 export const DRUM_PAD_NAMES = ["Kick", "Snare", "Closed HH", "Open HH", "Tom Lo", "Clap", "Cowbell", "Ride"] as const;
-export const DRUM_DEFAULT_NOTES = [36, 38, 42, 46, 41, 39, 56, 51] as const;
+export const DRUM_DEFAULT_NOTES = [36, 38, 40, 43, 45, 60, 62, 64] as const;
 
 export function createDefaultLayer(): DrumLayer {
     return {

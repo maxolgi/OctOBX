@@ -174,6 +174,8 @@ class Voice
     float  pcmPan{0.5f};          // per-voice pan (overrides pannings[])
     int    pcmChokeGroup{-1};     // -1 = none, 0..7 = group
     int    pcmPadId{-1};          // which pad triggered this voice (for choke)
+    int    pcmLayerId{-1};          // OctOBX PCM: which layer (0..3) triggered this voice
+    bool   pcmNeedsParams{false};   // OctOBX PCM: true until the layer's full param set is applied to this voice
     // ─────────────────────────────────────────────────────────────
 
     Voice()
@@ -516,7 +518,8 @@ class Voice
         }
 
         midiNote = note;
-        // ── OctOBX PCM: reset playback position on trigger ──
+        // ── OctOBX PCM: reset PCM state on trigger ──
+        pcmActive = false;
         pcmPos = 0.f;
         // ────────────────────────────────────────────────────
         channel = chan;

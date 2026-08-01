@@ -96,7 +96,10 @@ class Motherboard
     int   pcmNoteToPad[128];             // MIDI note → pad index (-1 = none)
     int   pcmLayerCount[8]{};            // active layers per pad (0 = pad is PCM-off)
     int   pcmChokeGroup[8]{};            // -1 = none, 0..7 = choke group
-    // ──────────────────────────────────────────────────────────────
+    // ── OctOBX PCM: single-voice override — when set, ForEachVoice stamps only this voice ──
+    Voice* pcmVoiceOverride{nullptr};
+    // ───────────────────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
 
     Motherboard() : left(), right()
     {
@@ -472,6 +475,8 @@ class Motherboard
         v->pcmPan = L.pan;
         v->pcmChokeGroup = pcmChokeGroup[pad];
         v->pcmPadId = pad;
+        v->pcmLayerId = layer;       // OctOBX PCM: remember layer for full-param application
+        v->pcmNeedsParams = true;    // OctOBX PCM: main_obxd applies the layer's params next
 
         // OctOBX PCM: independent filter params (NOT overwritten by SynthEngine — see pcmActive guard)
         v->par.filter.cutoff = L.cutoff * 120.f;  // linsc(cutoff, 0, 120)

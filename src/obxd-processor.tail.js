@@ -305,6 +305,18 @@ class ObxdProcessor extends AudioWorkletProcessor {
                         this.port.postMessage({ type: 'param_value', instance_id: msg.instance_id, idx: msg.idx | 0, value: v });
                     }
                     break;
+                // OctOBX PCM — per-drum-layer full-param get/set (mirrors get_param / set_param).
+                case 'set_drum_layer_param':
+                    if (wasmModule && typeof msg.idx === 'number' && typeof msg.value === 'number') {
+                        wasmModule._obxd_set_drum_layer_param(msg.pad | 0, msg.layer | 0, msg.idx | 0, +msg.value);
+                    }
+                    break;
+                case 'get_drum_layer_param':
+                    if (wasmModule && typeof msg.idx === 'number') {
+                        const val = wasmModule._obxd_get_drum_layer_param(msg.pad | 0, msg.layer | 0, msg.idx | 0);
+                        this.port.postMessage({ type: 'drum_layer_param_value', instance_id: msg.instance_id, pad: msg.pad | 0, layer: msg.layer | 0, idx: msg.idx | 0, value: val });
+                    }
+                    break;
                 case 'get_patch_name': {
                     let name = '';
                     if (wasmModule) {

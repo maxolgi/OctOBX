@@ -53,6 +53,7 @@ import {
     getObxdMpeChannels,
 } from "./obxd-bridge";
 import { buildObxdSynthUi, syncObxdControlsFromEngine } from "./obxd-synth-ui";
+import { preloadDrumKit } from "./drum-rack";
 
 const INSTANCE_COUNT = 10;
 
@@ -453,6 +454,10 @@ function startAudioInit(): void {
         // whatever the user is currently looking at.
         await syncObxdControlsFromEngine(getObxdSelectedInstance());
         console.log("[obxd] audio engine up — all 10 instances initialized");
+        // Preload the default drum kit on instance 9 so it's configured
+        // as a drum sampler from the start — not lazily on first
+        // Drums-view open (which would change the sound mid-playback).
+        void preloadDrumKit();
     }).catch((e) => {
         console.error("[obxd] audio init failed:", e);
     }).finally(() => {

@@ -64,6 +64,31 @@ import { openObxfPopup } from "./obxf-popup";
 import type { PopupItem } from "./obxf-popup";
 
 // ===========================================================================
+// 0. Editor target abstraction (instance vs. drum layer)
+// ===========================================================================
+
+/**
+ * Abstracts where the OB-Xf editor reads/writes a normalized (0..1) parameter
+ * value keyed by the legacy ParamsEnum.h index. The default (no-target) path
+ * routes through the OB-Xf instance API (getObxdInstanceParam /
+ * setObxdInstanceParam). A drum layer supplies its own store here so the same
+ * editor panel can target it instead of a synth instance.
+ */
+export interface ObxdParamTarget {
+    get(idx: number): Promise<number>;
+    set(idx: number, v: number): void;
+}
+
+/**
+ * Handle returned by buildObxdSynthUi. sync() re-seeds widget positions from
+ * either a fresh ObxdParamTarget, a numeric instance id, or (when neither is
+ * supplied) whatever target the editor was built against / the live instance.
+ */
+export interface ObxdEditorHandle {
+    sync(target?: ObxdParamTarget | number): Promise<void>;
+}
+
+// ===========================================================================
 // 1. OB-Xf SynthParam::ID  →  legacy ParamsEnum.h index
 // ===========================================================================
 
@@ -428,10 +453,19 @@ interface BuiltWidget {
     valueEl: ObxdWidget;
 }
 
-function buildWidget(c: ControlSpec, legacyIdx: number): BuiltWidget {
+function buildWidget(
+    c: ControlSpec,
+    legacyIdx: number,
+    target: ObxdParamTarget | undefined,
+    controls: ControlHandle[],
+): BuiltWidget {
     const dispatch = (v: number): void => {
-        setObxdInstanceParam(getObxdSelectedInstance(), legacyIdx, v);
-        const handle = cachedControls.find(ch => ch.legacyIdx === legacyIdx && ch.id === c.id);
+        if (target) {
+            target.set(legacyIdx, v);
+        } else {
+            setObxdInstanceParam(getObxdSelectedInstance(), legacyIdx, v);
+        }
+        const handle = controls.find(ch => ch.legacyIdx === legacyIdx && ch.id === c.id);
         if (handle) handle.lastValue = v;
         if (LABEL_DRIVER_IDS.has(c.id)) updateParamDerivedLabels();
         if (c.id === "Unison") updateUnisonDimming();
@@ -715,9 +749,20 @@ function buildLfoSelector(panel: HTMLElement): void {
 // 5. Public API
 // ===========================================================================
 
-export function buildObxdSynthUi(container: HTMLElement): void {
+export function buildObxdSynthUi(
+    container: HTMLElement,
+    target?: ObxdParamTarget,
+): ObxdEditorHandle {
     container.textContent = "";
-    cachedControls = [];
+    // LOCAL control cache for this editor instance. The no-target (Synth view)
+    // build also aliases the module-level cachedControls to this same array so
+    // the existing syncObxdControlsFromEngine(instanceId) and the label/lock
+    // helpers keep working unchanged. A targeted (drum) build keeps its cache
+    // strictly local so it never pollutes the Synth view's module-level state.
+    const controls: ControlHandle[] = [];
+    if (!target) {
+        cachedControls = controls;
+    }
     NEW_PARAM_IDS.length = 0;
     resetDynamicRefs();
     resetMidiLearnOverlay();
@@ -792,13 +837,13 @@ export function buildObxdSynthUi(container: HTMLElement): void {
         const isNew = legacyIdx >= NEW_PARAM_BASE;
         if (isNew) NEW_PARAM_IDS.push(c.id);
 
-        const { dom, valueEl } = buildWidget(c, legacyIdx);
+        const { dom, valueEl } = buildWidget(c, legacyIdx, target, controls);
         panel.appendChild(dom);
 
         registerLearnableControl(c.id, legacyIdx, deriveHintsForControl(c));
         attachMidiLearnToWidget(dom, c, panel);
 
-        cachedControls.push({ id: c.id, legacyIdx, isNew, valueEl, lastValue: c.default });
+        controls.push({ id: c.id, legacyIdx, isNew, valueEl, lastValue: c.default });
 
         if (c.section === Section.LFO1) lfo1Doms.push(dom);
         if (c.section === Section.LFO2) lfo2Doms.push(dom);
@@ -857,6 +902,50 @@ export function buildObxdSynthUi(container: HTMLElement): void {
     } else {
         console.info(`[obxf] ${paramBound.length} controls built`);
     }
+
+    const sync = async (targetArg?: ObxdParamTarget | number): Promise<void> => {
+        // Resolve the effective read source. A per-call target wins, then the
+        // build-time target, then the default instance path via the live
+        // selected instance. A numeric arg is treated as an explicit instance id.
+        let getter: (idx: number) => Promise<number>;
+        if (typeof targetArg === "number") {
+            const inst = targetArg;
+            getter = (idx: number) => getObxdInstanceParam(inst, idx);
+        } else if (targetArg) {
+            getter = (idx: number) => targetArg.get(idx);
+        } else if (target) {
+            getter = (idx: number) => target.get(idx);
+        } else {
+            const inst = getObxdSelectedInstance();
+            getter = (idx: number) => getObxdInstanceParam(inst, idx);
+        }
+
+        await Promise.all(controls.map(async (c) => {
+            const v = await getter(c.legacyIdx);
+            if (v >= 0) {
+                c.lastValue = v;
+                if (c.valueEl.setValue) c.valueEl.setValue(v);
+            }
+        }));
+
+        refreshEditorChrome();
+    };
+
+    return { sync };
+}
+
+/**
+ * Post-sync refresh of editor chrome (filter visibility, LFO panel,
+ * param-derived labels, param locks, unison dimming). Shared by both the
+ * instance-based syncObxdControlsFromEngine and the handle.sync path so the
+ * two never drift out of step.
+ */
+function refreshEditorChrome(): void {
+    updateFilterVisibility();
+    updateLfoPanel();
+    updateParamDerivedLabels();
+    applyLocks();
+    updateUnisonDimming();
 }
 
 export async function syncObxdControlsFromEngine(instanceId: number): Promise<void> {
@@ -871,11 +960,7 @@ export async function syncObxdControlsFromEngine(instanceId: number): Promise<vo
         }
     }));
 
-    updateFilterVisibility();
-    updateLfoPanel();
-    updateParamDerivedLabels();
-    applyLocks();
-    updateUnisonDimming();
+    refreshEditorChrome();
 }
 
 // ===========================================================================

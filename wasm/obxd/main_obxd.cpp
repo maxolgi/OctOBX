@@ -227,6 +227,19 @@ static float g_param_mirror[INSTANCE_COUNT][PARAM_COUNT] = {};
 static constexpr int NEW_PARAM_COUNT = 28;
 static float g_new_param_mirror[INSTANCE_COUNT][NEW_PARAM_COUNT] = {};
 
+// OctOBX PCM: per-layer full param store (8 pads x 4 layers). Voice-level params
+// are applied to each triggered voice (via dispatch_legacy_param with the engine's
+// pcmVoiceOverride scoping ForEachVoice to that voice); global/structural params
+// route to the live drum instance 9 via apply_param_instance. Indexed
+// [pad][layer][legacy_param_idx]; values are in the LEGACY 0..1 space.
+static float g_drum_layer_params[8][4][PARAM_COUNT] = {};
+
+// OctOBX PCM: per-layer mirror for the 28 NEW OB-Xf params (no legacy ancestor).
+// Indexed [pad][layer][new_idx] where new_idx = sentinel - 200 (0..27). Applied
+// per triggered voice via apply_new_param_instance (assumed voice-level — see the
+// note in apply_drum_layer_params_for_instance).
+static float g_drum_layer_new[8][4][NEW_PARAM_COUNT] = {};
+
 // Per-instance last-loaded program name (empty until a load succeeds).
 static char g_patch_name[INSTANCE_COUNT][64] = {};
 
@@ -411,30 +424,59 @@ static void apply_defaults_for_instance(int instance_id) {
     g_param_mirror[instance_id][LREL]       = 0.3f;
 }
 
-// Dispatch one legacy (idx, v) pair to the NEW engine. `v` is clamped to
-// [0,1] and stored in the legacy mirror BEFORE the (possibly rescaled)
-// call. See the file header for the full rescale rule list.
-static void apply_param_instance(int instance_id, int idx, float v) {
-    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
-    SynthEngine* e = g_engines[instance_id];
-    if (!e) return;
+// OctOBX PCM: classify a legacy idx as GLOBAL/STRUCTURAL — i.e. it should NOT be
+// applied per triggered voice. Such params either set a synth-wide field directly
+// (processVolume→synth.volume, processLFO1Rate→synth.globalLFO, processPan→
+// synth.pannings, processHQMode→synth.SetHQMode + allSoundOff) or are structural
+// choices routed to the whole drum instance 9 (tuning, octave, bend, polyphony,
+// unison, portamento, …). Everything else is voice-level and applied per layer
+// via dispatch_legacy_param (with the engine's pcmVoiceOverride scoping
+// ForEachVoice to the one triggered voice).
+//
+// The list below combines:
+//  (a) params the plan designates structural (tuning/octave/bend/portamento/…)
+//  (b) params whose processX sets a synth-global field rather than ForEachVoice,
+//      found by reading SynthEngine.h: the shared global LFO1 (rate/waves/sync),
+//      the synth.pannings array (PAN1..8), and HQMode (destructive allSoundOff).
+static bool is_global_drum_param(int idx) {
+    switch (idx) {
+        case UNDEFINED: case MIDILEARN:           // sentinels / REMOVED no-ops
+        case VOLUME: case VOICE_COUNT: case TUNE: case OCTAVE:
+        case BENDRANGE: case BENDOSC2: case LEGATOMODE: case BENDLFORATE:
+        case ASPLAYEDALLOCATION: case PORTAMENTO: case UNISON: case UDET:
+        // OctOBX PCM additions — shared global LFO1 (single LFO for the whole synth):
+        case LFOFREQ: case LFOSINWAVE: case LFOSQUAREWAVE: case LFOSHWAVE: case LFO_SYNC:
+        // OctOBX PCM additions — processPan writes synth.pannings (no ForEachVoice);
+        // PCM voice panning comes from Voice::pcmPan (set by assignPcmLayer) instead:
+        case PAN1: case PAN2: case PAN3: case PAN4:
+        case PAN5: case PAN6: case PAN7: case PAN8:
+        // OctOBX PCM addition — processHQMode toggles synth.oversample AND calls
+        // allSoundOff() on change; per-voice application would cut voices mid-trigger:
+        case FILTER_WARM:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// OctOBX PCM: the legacy idx -> SynthEngine processX dispatch, factored out so it
+// can be reused for single-voice application (with synth.pcmVoiceOverride set, which
+// scopes ForEachVoice to just that one voice) WITHOUT duplicating the ~80-case
+// switch. Does NOT touch g_param_mirror (the caller decides that).
+//
+// BEHAVIOR NOTE: every case body below is a verbatim copy of the original
+// apply_param_instance switch (a pure move refactor). The ONLY two cases NOT moved
+// here are LFOFREQ (17) and LFO_SYNC (72): their bodies read g_param_mirror /
+// re-dispatch via apply_param_instance (instance state), which contradicts this
+// function's "no mirror access" contract and would require an instance_id it does
+// not receive. They remain inline in apply_param_instance below. Because both are
+// classified global by is_global_drum_param, dispatch_legacy_param is never called
+// with idx 17 or 72 from the per-voice path; in the normal path apply_param_instance
+// short-circuits them before delegating. Net behavior is IDENTICAL to the original.
+static void dispatch_legacy_param(SynthEngine& s, int idx, float v) {
+    if (idx < 0 || idx >= PARAM_COUNT) return;
     if (v < 0.0f) v = 0.0f;
     if (v > 1.0f) v = 1.0f;
-    SynthEngine& s = *e;
-
-    // Fix 3: sentinel indices >= NEW_PARAM_BASE (200) are OB-Xf params with
-    // no legacy ancestor. Dispatch 1:1 to the NEW processX() methods (no
-    // rescale) and mirror the value so obxd_get_param can report it.
-    if (idx >= 200) {
-        int new_idx = idx - 200;
-        if (new_idx >= 0 && new_idx < NEW_PARAM_COUNT)
-            g_new_param_mirror[instance_id][new_idx] = v;
-        apply_new_param_instance(s, new_idx, v);
-        return;
-    }
-
-    if (idx < 0 || idx >= PARAM_COUNT) return;
-    g_param_mirror[instance_id][idx] = v;
     switch (idx) {
         case UNDEFINED:        break;                                  // 0  sentinel
         case MIDILEARN:        break;                                  // 1  REMOVED
@@ -471,17 +513,7 @@ static void apply_param_instance(int instance_id, int idx, float v) {
             s.processUnisonDetune(xdInvLogsc(dXd, 0.001f, 1.0f));
         } break;
         case OSC2_DET:        s.processOsc2Detune(v); break;           // 16 1:1
-        case LFOFREQ: {                                                // 17 → LFO1Rate (~75x rescale)
-            // Synced path uses the 9→21 bucket map; consult the live mirror
-            // for LFO_SYNC. (During .fxp load, LFO_SYNC may not yet be set
-            // when LFOFREQ is dispatched — known limitation, see header.)
-            if (g_param_mirror[instance_id][LFO_SYNC] > 0.5f) {
-                s.processLFO1Rate(mapLfoSyncedRate(v));
-            } else {
-                float hzXd = xdLogsc(v, 0.f, 50.f, 120.f);
-                s.processLFO1Rate(xdInvLogsc(hzXd, 0.f, 250.f, 3775.f));
-            }
-        } break;
+        // LFOFREQ (17) intentionally absent — handled inline in apply_param_instance.
         case LFOSINWAVE:      s.processLFO1Wave1(lfoBoolToBlend(v)); break;   // 18 bool→blend
         case LFOSQUAREWAVE:   s.processLFO1Wave2(lfoBoolToBlend(v)); break;   // 19
         case LFOSHWAVE:       s.processLFO1Wave3(lfoBoolToBlend(v)); break;   // 20
@@ -542,13 +574,7 @@ static void apply_param_instance(int instance_id, int idx, float v) {
         case PAN8:            s.processPan(v, 8); break;               // 69
         case UNLEARN:         break;                                   // 70 REMOVED
         case ECONOMY_MODE:    break;                                   // 71 REMOVED
-        case LFO_SYNC:
-            s.processLFO1Sync(v);
-            // Legacy .fxp loads dispatch params sequentially 0..79, so LFOFREQ
-            // (17) was processed before LFO_SYNC (72) and used a stale sync
-            // state. Re-dispatch LFOFREQ now that sync is known.
-            apply_param_instance(instance_id, LFOFREQ, g_param_mirror[instance_id][LFOFREQ]);
-            break;
+        // LFO_SYNC (72) intentionally absent — handled inline in apply_param_instance.
         case PW_ENV:          s.processEnvToPWAmount(v * (0.85f / 1.0555555555f)); break; // 73 RESCALE
         case PW_ENV_BOTH:     s.processEnvToPWBothOscs(v); break;      // 74 1:1
         case ENV_PITCH_BOTH:  s.processPitchBothOscs(v); break;        // 75 1:1 (method has no "EnvTo")
@@ -557,6 +583,144 @@ static void apply_param_instance(int instance_id, int idx, float v) {
         case LEVEL_DIF:       s.processLevelSlop(v); break;            // 78 1:1
         case SELF_OSC_PUSH:   s.processFilter2PolePush(v); break;      // 79 1:1
         default: break;
+    }
+}
+
+// Dispatch one legacy (idx, v) pair to the NEW engine. `v` is clamped to
+// [0,1] and stored in the legacy mirror BEFORE the (possibly rescaled)
+// call. See the file header for the full rescale rule list.
+//
+// OctOBX PCM: the bulk of the switch now lives in dispatch_legacy_param() above
+// (pure move refactor — behavior IDENTICAL). LFOFREQ (17) and LFO_SYNC (72) stay
+// inline here because their bodies touch g_param_mirror / re-dispatch, which
+// dispatch_legacy_param's "no mirror access" contract forbids.
+static void apply_param_instance(int instance_id, int idx, float v) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    SynthEngine* e = g_engines[instance_id];
+    if (!e) return;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    SynthEngine& s = *e;
+
+    // Fix 3: sentinel indices >= NEW_PARAM_BASE (200) are OB-Xf params with
+    // no legacy ancestor. Dispatch 1:1 to the NEW processX() methods (no
+    // rescale) and mirror the value so obxd_get_param can report it.
+    if (idx >= 200) {
+        int new_idx = idx - 200;
+        if (new_idx >= 0 && new_idx < NEW_PARAM_COUNT)
+            g_new_param_mirror[instance_id][new_idx] = v;
+        apply_new_param_instance(s, new_idx, v);
+        return;
+    }
+
+    if (idx < 0 || idx >= PARAM_COUNT) return;
+    g_param_mirror[instance_id][idx] = v;
+
+    // OctOBX PCM: LFOFREQ (17) reads the live LFO_SYNC mirror entry to pick the
+    // synced vs free-running rate path; kept inline (needs instance_id).
+    if (idx == LFOFREQ) {
+        // Synced path uses the 9→21 bucket map; consult the live mirror
+        // for LFO_SYNC. (During .fxp load, LFO_SYNC may not yet be set
+        // when LFOFREQ is dispatched — known limitation, see header.)
+        if (g_param_mirror[instance_id][LFO_SYNC] > 0.5f) {
+            s.processLFO1Rate(mapLfoSyncedRate(v));
+        } else {
+            float hzXd = xdLogsc(v, 0.f, 50.f, 120.f);
+            s.processLFO1Rate(xdInvLogsc(hzXd, 0.f, 250.f, 3775.f));
+        }
+        return;
+    }
+    // OctOBX PCM: LFO_SYNC (72) re-dispatches LFOFREQ now that sync state is known
+    // (legacy .fxp loads dispatch params sequentially 0..79, so LFOFREQ at 17 was
+    // processed with a stale sync). Kept inline (re-dispatch needs instance_id).
+    if (idx == LFO_SYNC) {
+        s.processLFO1Sync(v);
+        apply_param_instance(instance_id, LFOFREQ, g_param_mirror[instance_id][LFOFREQ]);
+        return;
+    }
+
+    dispatch_legacy_param(s, idx, v);
+}
+
+// OctOBX PCM: seed every pad/layer slot in the per-layer param store with the same
+// sensible defaults apply_defaults_for_instance() writes to g_param_mirror, so a
+// freshly-initialised drum layer sounds like the OB-Xf init patch. Called once from
+// obxd_init(). The new-param store is already zero-initialized (= {} above), which
+// matches apply_defaults_for_instance leaving g_new_param_mirror at 0.
+static void seed_drum_layer_defaults() {
+    for (int pad = 0; pad < 8; ++pad) {
+        for (int layer = 0; layer < 4; ++layer) {
+            for (int i = 0; i < PARAM_COUNT; ++i)
+                g_drum_layer_params[pad][layer][i] = 0.0f;
+            // Mirror the key defaults from apply_defaults_for_instance()'s mirror writes:
+            g_drum_layer_params[pad][layer][VOLUME]     = 0.5f;
+            g_drum_layer_params[pad][layer][VOICE_COUNT]= 1.0f;   // 8 voices (old max)
+            g_drum_layer_params[pad][layer][TUNE]       = 0.5f;
+            g_drum_layer_params[pad][layer][OCTAVE]     = 0.5f;
+            g_drum_layer_params[pad][layer][UNISON]     = 0.0f;
+            g_drum_layer_params[pad][layer][OSC1MIX]    = 0.0f;   // OctOBX PCM: silence osc for drum voices
+            g_drum_layer_params[pad][layer][OSC2MIX]    = 0.0f;
+            g_drum_layer_params[pad][layer][OSC1Saw]    = 1.0f;
+            g_drum_layer_params[pad][layer][OSC2Saw]    = 1.0f;
+            g_drum_layer_params[pad][layer][OSC2_DET]   = 0.4f;
+            g_drum_layer_params[pad][layer][CUTOFF]     = 1.0f;
+            g_drum_layer_params[pad][layer][RESONANCE]  = 0.0f;
+            g_drum_layer_params[pad][layer][LATK]       = 0.0f;
+            g_drum_layer_params[pad][layer][LDEC]       = 0.3f;
+            g_drum_layer_params[pad][layer][LSUS]       = 1.0f;
+            g_drum_layer_params[pad][layer][LREL]       = 0.3f;
+            for (int i = PAN1; i <= PAN8; ++i)
+                g_drum_layer_params[pad][layer][i] = 0.5f;   // center (constructor default)
+        }
+    }
+}
+
+// OctOBX PCM: after a drum note-on (assignPcmLayer set pcmNeedsParams=true on each
+// triggered PCM voice), stamp every such voice with its layer's full param set.
+//
+// For each freshly-triggered voice we scope the engine's ForEachVoice to that single
+// voice via Motherboard::pcmVoiceOverride, then run every voice-level legacy param
+// through dispatch_legacy_param (which therefore stamps only this voice) plus all 28
+// NEW params via apply_new_param_instance. Global/structural params are skipped here
+// (they are routed to the live instance 9 once, via apply_param_instance, by
+// obxd_set_drum_layer_param).
+//
+// ASSUMPTION for NEW params (idx >= 200): all are treated as voice-level. In reality
+// a few NEW processX setters hit synth-global fields rather than ForEachVoice
+// (UnisonVoices→setUnisonVoices, VoiceReassign→synth.reallocate, VibratoWave→
+// synth.vibratoLFO, LFO1PW→synth.globalLFO); for those, last-layer-applied wins on the
+// shared field. is_global_drum_param currently covers ONLY legacy idx; extending it to
+// NEW params is a follow-up if per-layer NEW-param control proves necessary.
+static void apply_drum_layer_params_for_instance(int instance_id) {
+    SynthEngine* e = (instance_id >= 0 && instance_id < INSTANCE_COUNT) ? g_engines[instance_id] : nullptr;
+    if (!e) return;
+    Motherboard* mb = e->getMotherboard();
+    if (!mb) return;
+    for (int i = 0; i < MAX_VOICES; i++) {
+        Voice* v = &mb->voices[i];
+        if (!v->pcmActive || !v->pcmNeedsParams) continue;
+        v->pcmNeedsParams = false;
+        int pad = v->pcmPadId, layer = v->pcmLayerId;
+        if (pad < 0 || pad >= 8 || layer < 0 || layer >= 4) continue;
+        mb->pcmVoiceOverride = v;   // scope ForEachVoice to this voice only
+        for (int idx = 0; idx < PARAM_COUNT; idx++) {
+            if (is_global_drum_param(idx)) continue;   // globals handled via instance routing
+            dispatch_legacy_param(*e, idx, g_drum_layer_params[pad][layer][idx]);
+        }
+        for (int n = 0; n < NEW_PARAM_COUNT; n++) {
+            apply_new_param_instance(*e, n, g_drum_layer_new[pad][layer][n]);
+        }
+        // Smoother-driven filter params + amp env are NOT applied by dispatch_legacy_param
+        // (their processX set engine smoothers, not the voice) — set them directly from the
+        // mirror so the editor's Cutoff/Reso/Mode + Amp-ADSR knobs reach this voice.
+        v->par.filter.cutoff = g_drum_layer_params[pad][layer][CUTOFF] * 120.f;  // linsc(cutoff, 0, 120)
+        v->filter.setResonance(0.991f - logsc(1.f - g_drum_layer_params[pad][layer][RESONANCE], 0.f, 0.991f, 40.f));
+        v->filter.setMultimode(g_drum_layer_params[pad][layer][MULTIMODE]);
+        v->ampEnv.setAttack(logsc(g_drum_layer_params[pad][layer][LATK], 4.f, 60000.f, 900.f));
+        v->ampEnv.setDecay(logsc(g_drum_layer_params[pad][layer][LDEC], 4.f, 60000.f, 900.f));
+        v->ampEnv.setSustain(g_drum_layer_params[pad][layer][LSUS]);
+        v->ampEnv.setRelease(logsc(g_drum_layer_params[pad][layer][LREL], 8.f, 60000.f, 900.f));
+        mb->pcmVoiceOverride = nullptr;
     }
 }
 
@@ -1186,6 +1350,9 @@ void obxd_init(int sample_rate) {
     // OctOBX PCM: instance 9 is the dedicated drum instance — give it the full
     // 32-voice budget (8 pads × 4 layers = MAX_VOICES) so layers can sound at once.
     obxd_set_polyphony(9, MAX_VOICES);
+    // OctOBX PCM: one-time seed of the per-layer param store (8 pads × 4 layers)
+    // so fresh drum layers start from the OB-Xf init defaults.
+    seed_drum_layer_defaults();
 }
 
 // Render `n` samples into the master stereo buffer. The AudioWorklet
@@ -1311,8 +1478,15 @@ void obxd_midi_in(int instance_id, uint8_t status, uint8_t d1, uint8_t d2) {
             s.processNoteOff(d1 & 0x7F, (d2 & 0x7F) / 127.0f, channel);
             break;
         case 0x90:  // Note on; velocity 0 is interpreted as note-off
-            if (d2 == 0) s.processNoteOff(d1 & 0x7F, 0.0f, channel);
-            else         s.processNoteOn(d1 & 0x7F, (d2 & 0x7F) / 127.0f, channel);
+            if (d2 == 0) {
+                s.processNoteOff(d1 & 0x7F, 0.0f, channel);
+            } else {
+                s.processNoteOn(d1 & 0x7F, (d2 & 0x7F) / 127.0f, channel);
+                // OctOBX PCM: instance 9 is the dedicated drum instance. After a note-on
+                // the engine's setNoteOn/assignPcmLayer has marked each triggered PCM voice
+                // (pcmNeedsParams=true); stamp each with its full per-layer param store now.
+                if (instance_id == 9) apply_drum_layer_params_for_instance(9);
+            }
             break;
         case 0xB0:  // CC
             switch (d1 & 0x7F) {
@@ -1609,6 +1783,44 @@ void obxd_clear_pcm(int instance_id) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     if (!g_engines[instance_id]) return;
     g_engines[instance_id]->clearPcm();
+}
+
+// OctOBX PCM: per-layer param get/set. pad 0..7, layer 0..3, idx 0..79 (legacy) or
+// >=200 (new). Voice-level idx -> layer mirror (applied to each triggered voice on the
+// next note-on). Global/structural idx -> instance 9 live (so Volume/Tune/Polyphony/
+// global-LFO/etc. affect the whole drum instance immediately).
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_drum_layer_param(int pad, int layer, int idx, float v) {
+    if (pad < 0 || pad >= 8 || layer < 0 || layer >= 4) return;
+    if (v < 0.0f) v = 0.0f; if (v > 1.0f) v = 1.0f;
+    if (idx >= 200) {
+        int n = idx - 200;
+        if (n >= 0 && n < NEW_PARAM_COUNT) g_drum_layer_new[pad][layer][n] = v;
+        // new params: assume voice-level; if any are global, add to is_global_drum_param logic
+        return;
+    }
+    if (idx < 0 || idx >= PARAM_COUNT) return;
+    g_drum_layer_params[pad][layer][idx] = v;
+    if (is_global_drum_param(idx)) {
+        // route to the live instance so Volume/Tune/etc. affect the whole drum instance
+        apply_param_instance(9, idx, v);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+float obxd_get_drum_layer_param(int pad, int layer, int idx) {
+    if (pad < 0 || pad >= 8 || layer < 0 || layer >= 4) return -1.0f;
+    if (idx >= 200) {
+        int n = idx - 200;
+        if (n < 0 || n >= NEW_PARAM_COUNT) return -1.0f;
+        return g_drum_layer_new[pad][layer][n];
+    }
+    if (idx < 0 || idx >= PARAM_COUNT) return -1.0f;
+    if (is_global_drum_param(idx)) {
+        // read live instance value for globals
+        return g_param_mirror[9][idx];
+    }
+    return g_drum_layer_params[pad][layer][idx];
 }
 
 }  // extern "C"
