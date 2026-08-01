@@ -164,6 +164,18 @@ class Voice
     DelayLine<B_SAMPLES * OVERSAMPLE_FACTOR, float> ampEnvDelayed, filterEnvDelayed, lfo1Delayed,
         lfo2Delayed;
 
+    // ── OctOBX PCM extension ──────────────────────────────────────
+    bool   pcmActive{false};       // true = this voice plays a PCM sample
+    float* pcmData{nullptr};      // pointer to float PCM buffer
+    int    pcmLen{0};             // frames in buffer
+    float  pcmPos{0.f};           // playback position (float for interpolation)
+    float  pcmRate{1.f};          // playback rate multiplier (1.0 = original pitch)
+    float  pcmGain{1.f};          // mix level (1.0 = pure PCM, 0.0 = pure osc)
+    float  pcmPan{0.5f};          // per-voice pan (overrides pannings[])
+    int    pcmChokeGroup{-1};     // -1 = none, 0..7 = group
+    int    pcmPadId{-1};          // which pad triggered this voice (for choke)
+    // ─────────────────────────────────────────────────────────────
+
     Voice()
     {
         slop.level = juce::Random::getSystemRandom().nextFloat() - 0.5f;
@@ -335,6 +347,18 @@ class Voice
         oscs.par.osc.pw = savedOscPW;
         oscs.par.osc.crossmod = savedCrossmod;
 
+        // ── OctOBX PCM extension: inject sample into the filter path ──
+        if (pcmActive && pcmData && pcmPos < (float)pcmLen)
+        {
+            int i0 = (int)pcmPos;
+            int i1 = (i0 + 1 < pcmLen) ? i0 + 1 : i0;
+            float frac = pcmPos - (float)i0;
+            float pcmOut = pcmData[i0] * (1.f - frac) + pcmData[i1] * frac;
+            oscSample = oscSample * (1.f - pcmGain) + pcmOut * pcmGain;
+            pcmPos += pcmRate;
+        }
+        // ──────────────────────────────────────────────────────────────
+
         // process oscillator brightness
         oscSample = oscSample - tpt_lp_unwarped(state.oscBlock, oscSample, 12, sampleRateInv);
         oscSample = tpt_process(state.brightness, oscSample, state.brightnessCoef);
@@ -492,6 +516,9 @@ class Voice
         }
 
         midiNote = note;
+        // ── OctOBX PCM: reset playback position on trigger ──
+        pcmPos = 0.f;
+        // ────────────────────────────────────────────────────
         channel = chan;
         mpeBend = 0.f;
         matrixAdjustments.clear();

@@ -336,6 +336,35 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     });
                     break;
                 }
+                // OctOBX PCM
+                case 'load_pcm': {
+                    // msg = {instance_id, pad, layer, pcmL: Float32Array, frames}
+                    const pcmL = msg.pcmL;
+                    if (!wasmModule || !pcmL || !pcmL.length) break;
+                    const size = msg.frames * 4;
+                    const ptr = wasmModule._malloc(size);
+                    wasmModule.HEAPF32.set(pcmL, ptr >> 2);
+                    wasmModule._obxd_load_pcm(id, msg.pad | 0, msg.layer | 0, ptr, msg.frames | 0);
+                    // WASM takes ownership of the pointer — do NOT free
+                    break;
+                }
+                case 'set_pcm_layer':
+                    if (wasmModule) wasmModule._obxd_set_pcm_layer(id, msg.pad | 0, msg.layer | 0,
+                        +msg.gain, +msg.cutoff, +msg.res, +msg.mode,
+                        +msg.aA, +msg.aD, +msg.aS, +msg.aR, +msg.pan);
+                    break;
+                case 'set_pcm_note_map':
+                    if (wasmModule) wasmModule._obxd_set_pcm_note_map(id, msg.note | 0, msg.pad | 0);
+                    break;
+                case 'set_pcm_layer_count':
+                    if (wasmModule) wasmModule._obxd_set_pcm_layer_count(id, msg.pad | 0, msg.count | 0);
+                    break;
+                case 'set_pcm_choke':
+                    if (wasmModule) wasmModule._obxd_set_pcm_choke(id, msg.pad | 0, msg.group | 0);
+                    break;
+                case 'clear_pcm':
+                    if (wasmModule) wasmModule._obxd_clear_pcm(id);
+                    break;
                 default:
                     break;
             }

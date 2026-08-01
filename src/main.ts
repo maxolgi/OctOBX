@@ -17,6 +17,7 @@ import { HardwareMidiOutput, drainMidiToHardware } from "./midi-output";
 import { HardwareMidiInput } from "./midi-input";
 import { setupStatePersistence } from "./state-persistence";
 import { setupObxdRack } from "./obxd-rack";
+import { mountDrumModule } from "./drum-rack";
 import type { OctopusWasmModule } from "./octopus-types";
 
 let activePanelCleanup: (() => void) | null = null;
@@ -81,29 +82,40 @@ async function main() {
     console.log("[octobx] All systems go");
 }
 
-function switchPanel(view: "classic" | "modern" | "synth") {
+function switchPanel(view: "classic" | "modern" | "synth" | "drums") {
     if (!wasmModule) return;
     if (activePanelCleanup) { activePanelCleanup(); activePanelCleanup = null; }
 
     const classicEl = document.getElementById("view-classic")!;
     const modernEl = document.getElementById("view-modern")!;
     const obxdEl = document.getElementById("obxd-panel")!;
+    const drumEl = document.getElementById("drum-panel")!;
 
     if (view === "synth") {
         classicEl.style.display = "none";
         modernEl.style.display = "none";
         obxdEl.style.display = "";
+        drumEl.style.display = "none";
         window.scrollTo(0, 0);
     } else if (view === "classic") {
         classicEl.style.display = "";
         modernEl.style.display = "none";
         obxdEl.style.display = "";
+        drumEl.style.display = "none";
         activePanelCleanup = buildClassicPanel(wasmModule);
-    } else {
+    } else if (view === "modern") {
         classicEl.style.display = "none";
         modernEl.style.display = "";
         obxdEl.style.display = "";
+        drumEl.style.display = "none";
         activePanelCleanup = startOctopusPanel(wasmModule);
+    } else {
+        classicEl.style.display = "none";
+        modernEl.style.display = "none";
+        obxdEl.style.display = "none";
+        drumEl.style.display = "";
+        mountDrumModule(drumEl).catch((e: unknown) => console.warn("[drum] mount failed", e));
+        window.scrollTo(0, 0);
     }
 }
 
@@ -111,7 +123,7 @@ function setupViewToggle() {
     const toggle = document.getElementById("view-toggle") as HTMLSelectElement | null;
     if (!toggle) return;
     toggle.addEventListener("change", () => {
-        switchPanel(toggle.value as "classic" | "modern" | "synth");
+        switchPanel(toggle.value as "classic" | "modern" | "synth" | "drums");
     });
 }
 

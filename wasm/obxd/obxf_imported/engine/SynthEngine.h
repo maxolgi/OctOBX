@@ -107,11 +107,15 @@ class SynthEngine
             auto &v = synth.voices[i];
             if (v.isSounding())
             {
-                v.par.filter.cutoff = co;
-                v.filter.setResonance(juce::jlimit(0.f, 0.991f,
-                                                   re + v.matrixAdjustments.filterResonance *
-                                                            VoiceMatrixRanges::filterResonance));
-                v.filter.setMultimode(fm);
+                // OctOBX PCM extension: PCM voices keep their own independent filter params
+                if (!v.pcmActive)
+                {
+                    v.par.filter.cutoff = co;
+                    v.filter.setResonance(juce::jlimit(0.f, 0.991f,
+                                                       re + v.matrixAdjustments.filterResonance *
+                                                                VoiceMatrixRanges::filterResonance));
+                    v.filter.setMultimode(fm);
+                }
                 v.pitchBend = pb;
             }
         }
@@ -573,6 +577,29 @@ class SynthEngine
     {
         const auto v = linsc(val, 0.f, 0.67f);
         ForEachVoice(par.slop.level = v);
+    }
+
+    // OctOBX PCM configuration
+    void loadPcmSample(int pad, int layer, float* data, int len)
+    {
+        synth.pcmBank[pad][layer].data = data;
+        synth.pcmBank[pad][layer].len = len;
+    }
+    void setPcmLayerParams(int pad, int layer, float gain,
+        float cutoff, float res, float mode,
+        float aA, float aD, float aS, float aR, float pan)
+    {
+        auto& L = synth.pcmBank[pad][layer];
+        L.gain = gain; L.cutoff = cutoff; L.resonance = res; L.filterMode = mode;
+        L.ampAtt = aA; L.ampDec = aD; L.ampSus = aS; L.ampRel = aR; L.pan = pan;
+    }
+    void setPcmNoteMap(int note, int pad) { synth.pcmNoteToPad[note] = pad; }
+    void setPcmLayerCount(int pad, int count) { synth.pcmLayerCount[pad] = count; }
+    void setPcmChokeGroup(int pad, int group) { synth.pcmChokeGroup[pad] = group; }
+    void clearPcm()
+    {
+        std::memset(synth.pcmNoteToPad, -1, sizeof(synth.pcmNoteToPad));
+        for (int p = 0; p < 8; p++) synth.pcmLayerCount[p] = 0;
     }
 };
 

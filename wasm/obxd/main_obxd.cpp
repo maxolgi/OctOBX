@@ -1183,6 +1183,9 @@ void obxd_init(int sample_rate) {
     // Default polyphony: instance 0 = 8 voices, others = 1 voice (mono).
     obxd_set_polyphony(0, 8);
     for (int i = 1; i < INSTANCE_COUNT; ++i) obxd_set_polyphony(i, 1);
+    // OctOBX PCM: instance 9 is the dedicated drum instance — give it the full
+    // 32-voice budget (8 pads × 4 layers = MAX_VOICES) so layers can sound at once.
+    obxd_set_polyphony(9, MAX_VOICES);
 }
 
 // Render `n` samples into the master stereo buffer. The AudioWorklet
@@ -1546,6 +1549,66 @@ int obxd_clear_matrix_row(int instance_id, int row) {
     if (!mb) return 0;
     mb->voiceMatrix.clearRow(row);
     return 1;
+}
+
+// =========================================================================
+// OctOBX PCM drum-mode exports
+//
+// These drive the OB-Xf SynthEngine's PCM/sample-playback subsystem (added
+// by the parallel SynthEngine.h change). `data` points into WASM linear
+// memory (a JS Float32Array view over HEAPU8). No copy is made — the
+// engine holds the pointer for the lifetime of the sample.
+// =========================================================================
+
+// OctOBX PCM: load a float sample buffer into pad/layer of one instance.
+EMSCRIPTEN_KEEPALIVE
+void obxd_load_pcm(int instance_id, int pad, int layer, float* data, int len) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    g_engines[instance_id]->loadPcmSample(pad, layer, data, len);
+}
+
+// OctOBX PCM: set per-layer params (gain, filter, amp env, pan) for a pad.
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_pcm_layer(int instance_id, int pad, int layer,
+    float gain, float cutoff, float res, float mode,
+    float aA, float aD, float aS, float aR, float pan) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    g_engines[instance_id]->setPcmLayerParams(pad, layer, gain, cutoff, res, mode,
+                                              aA, aD, aS, aR, pan);
+}
+
+// OctOBX PCM: map a MIDI note number to a pad.
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_pcm_note_map(int instance_id, int note, int pad) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    g_engines[instance_id]->setPcmNoteMap(note, pad);
+}
+
+// OctOBX PCM: set how many layers a pad plays (velocity-split stack).
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_pcm_layer_count(int instance_id, int pad, int count) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    g_engines[instance_id]->setPcmLayerCount(pad, count);
+}
+
+// OctOBX PCM: assign a pad to a choke group (new hit cuts prior hits).
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_pcm_choke(int instance_id, int pad, int group) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    g_engines[instance_id]->setPcmChokeGroup(pad, group);
+}
+
+// OctOBX PCM: clear all loaded PCM samples/state for one instance.
+EMSCRIPTEN_KEEPALIVE
+void obxd_clear_pcm(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+    if (!g_engines[instance_id]) return;
+    g_engines[instance_id]->clearPcm();
 }
 
 }  // extern "C"
