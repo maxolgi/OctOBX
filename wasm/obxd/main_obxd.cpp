@@ -459,6 +459,32 @@ static bool is_global_drum_param(int idx) {
     }
 }
 
+// OctOBX PCM: filter cutoff/resonance/mode + amp-env params whose processX setters
+// do NOT cleanly scope to a single voice via pcmVoiceOverride, and which are therefore
+// applied DIRECTLY onto the triggered voice in apply_drum_layer_params_for_instance
+// (v->par.filter.cutoff, v->filter.setResonance/Multimode, v->ampEnv.setAttack/Decay/
+// Sustain/Release). dispatch_legacy_param must NOT be called for them on the per-voice
+// path:
+//   - CUTOFF/RESONANCE/MULTIMODE route to cutoffSmoother/resSmoother/filterModeSmoother
+//     (synth-GLOBAL smoothers), so dispatching them per voice pollutes the shared state.
+//   - LATK/LDEC/LSUS/LREL route to processAmpEnv* which, while ForEachVoice-scoped, apply
+//     the OB-Xd->OB-Xf rescale baked into dispatch_legacy_param; that differs from the
+//     direct per-voice writes below and would overwrite the voice with the wrong value.
+//
+// These are intentionally NOT folded into is_global_drum_param: they are per-pad/per-layer
+// values (each drum layer has its own cutoff + amp-ADSR), so they must NOT be routed live
+// to instance 9 (obxd_set_drum_layer_param) nor read back from g_param_mirror[9]
+// (obxd_get_drum_layer_param).
+static bool is_smoother_driven_drum_param(int idx) {
+    switch (idx) {
+        case CUTOFF: case RESONANCE: case MULTIMODE:
+        case LATK: case LDEC: case LSUS: case LREL:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // OctOBX PCM: the legacy idx -> SynthEngine processX dispatch, factored out so it
 // can be reused for single-voice application (with synth.pcmVoiceOverride set, which
 // scopes ForEachVoice to just that one voice) WITHOUT duplicating the ~80-case
@@ -705,6 +731,7 @@ static void apply_drum_layer_params_for_instance(int instance_id) {
         mb->pcmVoiceOverride = v;   // scope ForEachVoice to this voice only
         for (int idx = 0; idx < PARAM_COUNT; idx++) {
             if (is_global_drum_param(idx)) continue;   // globals handled via instance routing
+            if (is_smoother_driven_drum_param(idx)) continue;  // applied directly per-voice below (avoids global-smoother pollution)
             dispatch_legacy_param(*e, idx, g_drum_layer_params[pad][layer][idx]);
         }
         for (int n = 0; n < NEW_PARAM_COUNT; n++) {

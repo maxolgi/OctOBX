@@ -19,6 +19,8 @@
 #ifndef OBXF_SRC_ENGINE_SYNTHENGINE_H
 #define OBXF_SRC_ENGINE_SYNTHENGINE_H
 
+#include <cstdlib>
+
 #include <core/Constants.h>
 #include "Voice.h"
 #include "Motherboard.h"
@@ -583,6 +585,7 @@ class SynthEngine
     // OctOBX PCM configuration
     void loadPcmSample(int pad, int layer, float* data, int len)
     {
+        if (pad < 0 || pad >= 8 || layer < 0 || layer >= 4) return;
         synth.pcmBank[pad][layer].data = data;
         synth.pcmBank[pad][layer].len = len;
     }
@@ -590,17 +593,56 @@ class SynthEngine
         float cutoff, float res, float mode,
         float aA, float aD, float aS, float aR, float pan)
     {
+        if (pad < 0 || pad >= 8 || layer < 0 || layer >= 4) return;
         auto& L = synth.pcmBank[pad][layer];
         L.gain = gain; L.cutoff = cutoff; L.resonance = res; L.filterMode = mode;
         L.ampAtt = aA; L.ampDec = aD; L.ampSus = aS; L.ampRel = aR; L.pan = pan;
     }
-    void setPcmNoteMap(int note, int pad) { synth.pcmNoteToPad[note] = pad; }
-    void setPcmLayerCount(int pad, int count) { synth.pcmLayerCount[pad] = count; }
-    void setPcmChokeGroup(int pad, int group) { synth.pcmChokeGroup[pad] = group; }
+    void setPcmNoteMap(int note, int pad)
+    {
+        if (note < 0 || note >= 128 || pad < 0 || pad >= 8) return;
+        synth.pcmNoteToPad[note] = pad;
+    }
+    void setPcmLayerCount(int pad, int count)
+    {
+        if (pad < 0 || pad >= 8) return;
+        if (count < 0 || count > 4) return;
+        synth.pcmLayerCount[pad] = count;
+    }
+    void setPcmChokeGroup(int pad, int group)
+    {
+        if (pad < 0 || pad >= 8) return;
+        synth.pcmChokeGroup[pad] = group;
+    }
     void clearPcm()
     {
+        // Cut any voices still referencing PCM buffers before we free them,
+        // otherwise processSample() would dereference a dangling v->pcmData.
+        for (int i = 0; i < MAX_VOICES; i++)
+        {
+            if (synth.voices[i].pcmActive)
+            {
+                synth.voices[i].NoteOff(0.f);
+                synth.voices[i].pcmActive = false;
+                synth.voices[i].pcmData = nullptr;
+                synth.voices[i].pcmLen = 0;
+            }
+        }
+        for (int pad = 0; pad < 8; pad++)
+        {
+            for (int layer = 0; layer < 4; layer++)
+            {
+                if (synth.pcmBank[pad][layer].data)
+                {
+                    std::free(synth.pcmBank[pad][layer].data);
+                    synth.pcmBank[pad][layer].data = nullptr;
+                    synth.pcmBank[pad][layer].len = 0;
+                }
+            }
+        }
         std::memset(synth.pcmNoteToPad, -1, sizeof(synth.pcmNoteToPad));
         for (int p = 0; p < 8; p++) synth.pcmLayerCount[p] = 0;
+        for (int p = 0; p < 8; p++) synth.pcmChokeGroup[p] = -1;
     }
 };
 

@@ -28,7 +28,6 @@ export const DRUM_INSTANCE = 9;  // fixed OB-Xf instance reserved for drums
 
 // Legacy ParamsEnum.h indices used to configure the engine for sample
 // playback (sources: obxf-param-mappings.ts — frozen ObxdParam enum).
-const LEGACY_VOICE_COUNT = 3;     // VOICE_COUNT  -> Polyphony
 const LEGACY_OSC1_MIX = 40;       // OSC1MIX      -> Osc1Mix
 const LEGACY_OSC2_MIX = 41;       // OSC2MIX      -> Osc2Mix
 const LEGACY_NOISE_MIX = 42;      // NOISEMIX     -> NoiseMix
@@ -46,6 +45,17 @@ const LEGACY_AMP_RELEASE = 54;    // LREL         -> AmpEnvRelease
 const sampleCache = new Map<string, Float32Array>();
 
 let audioContext: AudioContext | null = null;
+
+/*
+ * Promise chain that serializes concurrent loadDrumKit calls. Without it,
+ * two interleaved loads (one fetch-yields between clearPcm and the
+ * load_pcm posts) would each _malloc a PCM buffer on the C side, and the
+ * second's pointer overwrite would leak the first's buffer —
+ * loadPcmSample unconditionally overwrites pcmBank[pad][layer].data
+ * without freeing the prior value. Chaining every load after the previous
+ * one resolves closes the re-entrancy window.
+ */
+let kitLoadChain: Promise<void> = Promise.resolve();
 
 /*
  * Lazily obtain an AudioContext. Prefer the shared one owned by the OB-Xf
@@ -151,10 +161,6 @@ export async function initDrumMode(): Promise<void> {
         catch (e) { console.warn("[drum] setObxdInstanceParam", idx, "failed:", e); }
     };
 
-    // Polyphony -> max. VOICE_COUNT uses the OB-Xd 1..8 normalization, but
-    // the C-side apply_param_instance() rescales it onto OB-Xf's 1..33
-    // range (see obxf-param-mappings.ts idx 3); v=1.0 yields the engine max.
-    set(LEGACY_VOICE_COUNT, 1.0);
     set(LEGACY_OSC1_MIX, 0.0);
     set(LEGACY_OSC2_MIX, 0.0);
     set(LEGACY_NOISE_MIX, 0.0);
@@ -169,7 +175,7 @@ export async function initDrumMode(): Promise<void> {
  * each unique enabled sample once, push the PCM + per-layer params, then
  * wire up note mapping, layer counts, and choke groups.
  */
-export async function loadDrumKit(kit: DrumKit): Promise<void> {
+async function loadDrumKitImpl(kit: DrumKit): Promise<void> {
     clearPcm();
 
     const ctx = getOrCreateAudioContext();
@@ -210,7 +216,13 @@ export async function loadDrumKit(kit: DrumKit): Promise<void> {
     for (let p = 0; p < kit.pads.length; p++) {
         const pad = kit.pads[p];
 
-        let enabledLayers = 0;
+        // loadedIdx is the DENSE layer index the C engine expects: enabled
+        // layers are packed at 0, 1, 2, ... so skipping a disabled/failed
+        // layer doesn't leave a hole. setNoteOn's PCM path assigns layers
+        // 0..count-1 sequentially, so a sparse `l` here would point at a
+        // null pcmBank slot and play silence. After the loop, loadedIdx
+        // equals the number of layers actually loaded (== count).
+        let loadedIdx = 0;
         for (let l = 0; l < pad.layers.length; l++) {
             const lyr = pad.layers[l];
             const pcm = lyr.sampleName ? decoded.get(lyr.sampleName) : undefined;
@@ -219,28 +231,45 @@ export async function loadDrumKit(kit: DrumKit): Promise<void> {
                 type: "load_pcm",
                 instance_id: DRUM_INSTANCE,
                 pad: p,
-                layer: l,
+                layer: loadedIdx,
                 pcmL: pcm,
                 frames: pcm.length,
             });
             // The C side stores all layer params together, so the full
             // set_pcm_layer is sent alongside the PCM it configures.
-            sendLayerParams(p, l, lyr);
+            sendLayerParams(p, loadedIdx, lyr);
             // Seed the per-layer param store the editor reads from so the
             // kit's filter/amp values appear on knob load / instance switch.
-            seedLayerMirror(p, l, lyr);
-            enabledLayers++;
+            seedLayerMirror(p, loadedIdx, lyr);
+            loadedIdx++;
         }
 
         postDrum({ type: "set_pcm_note_map", instance_id: DRUM_INSTANCE, note: pad.midiNote, pad: p });
 
-        postDrum({ type: "set_pcm_layer_count", instance_id: DRUM_INSTANCE, pad: p, count: enabledLayers });
+        postDrum({ type: "set_pcm_layer_count", instance_id: DRUM_INSTANCE, pad: p, count: loadedIdx });
 
         postDrum({ type: "set_pcm_choke", instance_id: DRUM_INSTANCE, pad: p, group: pad.chokeGroup });
     }
 
     console.info("[drum] kit loaded:", kit.pads.length, "pads");
 }
+
+/*
+ * Serialize concurrent kit loads onto kitLoadChain. Each call waits for
+ * the previous load to finish before running loadDrumKitImpl, closing the
+ * re-entrancy window where two interleaved fetches would each _malloc a
+ * PCM buffer and the second overwrite would leak the first. The stored
+ * chain swallows rejections so one failed load can't permanently stall
+ * subsequent ones; the returned promise still reflects the real outcome
+ * for the caller.
+ */
+export function loadDrumKit(kit: DrumKit): Promise<void> {
+    const run = kitLoadChain.then(() => loadDrumKitImpl(kit));
+    kitLoadChain = run.then(noop, noop);
+    return run;
+}
+
+function noop(): void { /* keep the chain alive on rejection */ }
 
 /*
  * Re-send the full set_pcm_layer message for one pad/layer (the C side

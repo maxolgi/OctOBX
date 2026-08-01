@@ -9,7 +9,6 @@ import {
     initDrumMode,
     loadDrumKit,
     setLayerParam,
-    setPadLayerCount,
     previewPad,
     setDrumLayerParam,
     getDrumLayerParam,
@@ -106,10 +105,6 @@ function cloneKit(kit: DrumKit): DrumKit {
             };
         }),
     };
-}
-
-function enabledLayerCount(padIndex: number): number {
-    return currentKit.pads[padIndex].layers.filter((l) => l.enabled).length;
 }
 
 function collectSampleNames(): string[] {
@@ -341,7 +336,20 @@ function renderLayerButtons(): void {
             const l = pad.layers[layerIndex];
             if (!l.enabled) {
                 l.enabled = true;
-                setPadLayerCount(selectedPad, enabledLayerCount(selectedPad));
+                // Reload the full kit so the layer list is re-compacted to
+                // dense indices and the newly-enabled layer gets its PCM data
+                // pushed into pcmBank. setPadLayerCount alone left gaps + a
+                // null pcmBank slot so the layer played silence (Bug D — the
+                // left-click path missed the reload the contextmenu handler
+                // already does). UI is refreshed below synchronously so the
+                // toggle reflects immediately; the reload only re-pushes PCM.
+                void (async () => {
+                    try {
+                        await loadDrumKit(currentKit);
+                    } catch (e) {
+                        console.warn("[drum] reload on layer enable failed:", e);
+                    }
+                })();
             }
             renderLayerButtons();
             renderLayerEditor();
@@ -351,9 +359,20 @@ function renderLayerButtons(): void {
             ev.preventDefault();
             const l = pad.layers[layerIndex];
             l.enabled = !l.enabled;
-            setPadLayerCount(selectedPad, enabledLayerCount(selectedPad));
             refreshPadBank();
             renderLayerButtons();
+            // Reload the full kit so the layer list is re-compacted to dense
+            // indices and any newly-enabled layer gets its PCM data pushed.
+            // Sending set_pcm_layer_count alone left gaps + null pcmBank
+            // slots (Bug C). UI is refreshed above synchronously so the
+            // toggle reflects immediately; the reload only re-pushes PCM.
+            void (async () => {
+                try {
+                    await loadDrumKit(currentKit);
+                } catch (e) {
+                    console.warn("[drum] reload on layer toggle failed:", e);
+                }
+            })();
         });
 
         layerBtnsEl.appendChild(btn);
