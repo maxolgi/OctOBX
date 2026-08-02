@@ -114,6 +114,21 @@ let uiBuilt = false;
 let audioInitializing = false;
 let meterInterval: ReturnType<typeof setInterval> | null = null;
 
+/*
+ * Callback fired after the AudioWorklet initializes. app-state.ts registers
+ * here to restore saved synth + drum state before the default preload runs.
+ * Returns true if state was restored (skip default preload), false otherwise.
+ */
+let awpReadyCallback: (() => Promise<boolean>) | null = null;
+export function onAWPReady(cb: () => Promise<boolean>): void { awpReadyCallback = cb; }
+
+export interface SynthInstanceState {
+    active: boolean;
+    polyphony: number;
+    bendRange: number;
+    patchName: string;
+}
+
 function formatPatchName(name: string): string {
     return name && name.length > 0 ? `\u2014 ${name} \u2014` : "\u2014 init \u2014";
 }
@@ -449,15 +464,14 @@ function startAudioInit(): void {
     if (isObxdReady() || audioInitializing) return;
     audioInitializing = true;
     setupObxdAudio().then(async () => {
-        // All 10 instances are created with their factory patches +
-        // default polyphony by _obxd_init(). Sync the knob grid to
-        // whatever the user is currently looking at.
+        const restored = awpReadyCallback ? await awpReadyCallback() : false;
+        // Always sync knob positions — whether from factory defaults
+        // (!restored) or from restored engine params (restored).
         await syncObxdControlsFromEngine(getObxdSelectedInstance());
-        console.log("[obxd] audio engine up — all 10 instances initialized");
-        // Preload the default drum kit on instance 9 so it's configured
-        // as a drum sampler from the start — not lazily on first
-        // Drums-view open (which would change the sound mid-playback).
-        void preloadDrumKit();
+        if (!restored) {
+            console.log("[obxd] audio engine up — all 10 instances initialized");
+            void preloadDrumKit();
+        }
     }).catch((e) => {
         console.error("[obxd] audio init failed:", e);
     }).finally(() => {
@@ -518,4 +532,31 @@ export function setupObxdRack(): void {
     // Start meter polling + lazy audio bootstrap.
     startMeterLoop();
     wireLazyAudioInit();
+}
+
+// ---------------------------------------------------------------------------
+// State persistence — exported for app-state.ts save/restore
+// ---------------------------------------------------------------------------
+
+export function getSynthInstanceState(): SynthInstanceState[] {
+    return Array.from({ length: INSTANCE_COUNT }, (_, i) => ({
+        active: instancePower[i],
+        polyphony: instancePolyphony[i],
+        bendRange: instanceBendRange[i],
+        patchName: instancePatchName[i],
+    }));
+}
+
+export function restoreSynthAfterAWP(state: SynthInstanceState[]): void {
+    for (let i = 0; i < INSTANCE_COUNT && i < state.length; i++) {
+        const s = state[i];
+        instancePower[i] = s.active;
+        instancePolyphony[i] = s.polyphony;
+        instancePatchName[i] = s.patchName;
+        instanceBendRange[i] = s.bendRange;
+        setObxdInstanceActive(i, s.active);
+        setObxdInstancePolyphony(i, s.polyphony);
+        applyLegacyBendRange(i, s.bendRange);
+    }
+    updateHeaderForInstance(getObxdSelectedInstance());
 }

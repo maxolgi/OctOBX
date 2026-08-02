@@ -18,6 +18,7 @@ import { HardwareMidiInput } from "./midi-input";
 import { setupStatePersistence } from "./state-persistence";
 import { setupObxdRack } from "./obxd-rack";
 import { mountDrumModule } from "./drum-rack";
+import { loadAppState, registerAWPReadyCallback } from "./app-state";
 import type { OctopusWasmModule } from "./octopus-types";
 
 let activePanelCleanup: (() => void) | null = null;
@@ -78,6 +79,12 @@ async function main() {
     // compliance. The AudioWorklet reads MIDI directly from the
     // SharedArrayBuffer, so no drain-loop wiring is needed here.
     setupObxdRack();
+
+    // Load saved synth + drum state from localStorage (cached for restore
+    // after AWP initializes). Register the restore callback so it fires
+    // on the first PLAY (when the AudioWorklet comes up).
+    loadAppState();
+    registerAWPReadyCallback();
 
     console.log("[octobx] All systems go");
 }

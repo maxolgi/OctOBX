@@ -424,7 +424,8 @@ sequentially after setting the running status byte.
 | `obxd-processor.tail.js` | Plain JS appended to emcc output to form `obxd-processor.js` for `audioWorklet.addModule()`. Subclasses `AudioWorkletProcessor`. |
 | `obxd-awp-shim.js` | Plain JS prepended to emcc output; polyfills `self`/`location`/`fetch`/`performance` for AudioWorkletGlobalScope. |
 | `transport-sync.ts` | Wires PLAY/STOP/BPM to the Octopus engine + transport indicator. |
-| `state-persistence.ts` | Save/Load buttons → IDBFS sync |
+| `state-persistence.ts` | Octopus sequencer state save/load via IDBFS (Emscripten's IndexedDB FS). SAVE triggers `_wasm_save_state` → MEMFS + `FS.syncfs(false)` → IDBFS. Shift+SAVE also downloads .bin + JSON. LOAD imports .bin files. Shift+LOAD clears IDBFS + app state. |
+| `app-state.ts` | Synth + drum state persistence. Dumps all synth (10×108) and drum (8×4×108) params from the AWP in bulk, plus per-instance settings and drum kit, to localStorage JSON. Restores after AWP ready via `onAWPReady` callback. |
 | `drum-rack.ts` | Drum module UI: kit selector, 8 pads × 4 layers with sample-name selectors + mute/enable toggles, and per-layer knob strips (48 controls: 8 global + 40 per-layer). SVG arc knobs with iOS-style toggle pills and tri-state LFO-routing pills. Layer section has Gain/Pan/Pitch knobs with custom dispatch (bypass `g_drum_layer_params`, update `DrumLayer` TS object + `pushLayer` → `set_pcm_layer`). `syncEditor`/`syncKnobStrips` re-seed knob positions from the worklet mirror on pad/layer switch. |
 | `drum-audio.ts` | Main-thread audio bootstrap for the drum module on OB-Xf instance 9 (32 voices). `loadDrumKit` fetches samples from smpldsnds CDN, decodes via `AudioContext.decodeAudioData`, posts float arrays to the worklet via `obxd_load_pcm`. Serialized via `kitLoadChain` promise chain (prevents concurrent loads). `sendLayerParams` pushes per-layer params (gain, filter, amp env, pan, pitch). `seedLayerMirror` seeds `g_drum_layer_params` on load. `pushLayer` re-sends one layer's full param set. |
 | `drum-state.ts` | Pure data layer: `DrumLayer` / `DrumPad` / `DrumKit` interfaces + factory functions. No project dependencies. `DrumLayer` fields: enabled, sampleName, gain, filterCutoff/Resonance/Mode, amp ADSR, pan, pitch (0..1, 0.5=original), muted, `_seeded` flag. |
@@ -537,10 +538,9 @@ browser console:
 
 ## Known issues
 
-1. **IDBFS not mounting** — `FS.mount()` fails because the module's FS object
-   isn't fully initialized at mount time; Octopus state doesn't persist across
-   reloads yet. (OB-Xf MIDI-learn bindings persist separately via localStorage,
-   so they survive reloads even though Octopus state does not.)
+1. **IDBFS** — fixed. Was accessing `module.IDBFS` (undefined — not in
+   `EXPORTED_RUNTIME_METHODS`) instead of `FS.filesystems.IDBFS`. Now
+   mounts IDBFS at `/persistent/` and persists automatically.
 2. **OB-Xf factory patches now ship** — 10 CC0/Public Domain OB-Xf presets
    live in `wasm/obxd/patches/` (`01_pad.fxp` … `10_kick.fxp`), sourced from
    the Surge Synth Team OB-Xf factory library. `build.sh synth` runs `xxd -i`

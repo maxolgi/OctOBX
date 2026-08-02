@@ -41,8 +41,9 @@ export interface OctopusWasmModule {
         writeFile(path: string, data: string | Uint8Array): void;
         readFile(path: string): Uint8Array;
         analyzePath(path: string): { exists: boolean };
+        unlink(path: string): void;
+        filesystems?: { IDBFS?: unknown; [key: string]: unknown };
     };
-    IDBFS?: unknown;
     onRuntimeInitialized?: () => void;
 }
 

@@ -305,6 +305,76 @@ class ObxdProcessor extends AudioWorkletProcessor {
                         this.port.postMessage({ type: 'param_value', instance_id: msg.instance_id, idx: msg.idx | 0, value: v });
                     }
                     break;
+                // Bulk param dump/restore for state persistence (save/load).
+                // Single round-trip for all 10 instances × 108 params.
+                case 'dump_all_params': {
+                    const total = INSTANCE_COUNT * 108;
+                    const params = new Array(total);
+                    if (wasmModule) {
+                        for (let i = 0; i < INSTANCE_COUNT; i++) {
+                            const base = i * 108;
+                            for (let p = 0; p < 80; p++)
+                                params[base + p] = wasmModule._obxd_get_param(i, p);
+                            for (let n = 0; n < 28; n++)
+                                params[base + 80 + n] = wasmModule._obxd_get_param(i, 200 + n);
+                        }
+                    } else {
+                        params.fill(0);
+                    }
+                    this.port.postMessage({ type: 'all_params_dumped', params });
+                    break;
+                }
+                case 'restore_all_params': {
+                    if (wasmModule && Array.isArray(msg.params)) {
+                        const params = msg.params;
+                        for (let i = 0; i < INSTANCE_COUNT; i++) {
+                            const base = i * 108;
+                            for (let p = 0; p < 80; p++)
+                                wasmModule._obxd_set_param(i, p, +params[base + p]);
+                            for (let n = 0; n < 28; n++)
+                                wasmModule._obxd_set_param(i, 200 + n, +params[base + 80 + n]);
+                        }
+                    }
+                    this.port.postMessage({ type: 'all_params_restored' });
+                    break;
+                }
+                // Bulk drum layer param dump/restore (state persistence).
+                // Dumps 8 pads × 4 layers × 108 params (80 legacy + 28 new).
+                case 'dump_drum_params': {
+                    const dtotal = 8 * 4 * 108;
+                    const dparams = new Array(dtotal);
+                    if (wasmModule) {
+                        for (let dpad = 0; dpad < 8; dpad++) {
+                            for (let dlayer = 0; dlayer < 4; dlayer++) {
+                                const dbase = dpad * 432 + dlayer * 108;
+                                for (let dp = 0; dp < 80; dp++)
+                                    dparams[dbase + dp] = wasmModule._obxd_get_drum_layer_param(dpad, dlayer, dp);
+                                for (let dn = 0; dn < 28; dn++)
+                                    dparams[dbase + 80 + dn] = wasmModule._obxd_get_drum_layer_param(dpad, dlayer, 200 + dn);
+                            }
+                        }
+                    } else {
+                        dparams.fill(0);
+                    }
+                    this.port.postMessage({ type: 'drum_params_dumped', params: dparams });
+                    break;
+                }
+                case 'restore_drum_params': {
+                    if (wasmModule && Array.isArray(msg.params)) {
+                        const dparams = msg.params;
+                        for (let dpad = 0; dpad < 8; dpad++) {
+                            for (let dlayer = 0; dlayer < 4; dlayer++) {
+                                const dbase = dpad * 432 + dlayer * 108;
+                                for (let dp = 0; dp < 80; dp++)
+                                    wasmModule._obxd_set_drum_layer_param(dpad, dlayer, dp, +dparams[dbase + dp]);
+                                for (let dn = 0; dn < 28; dn++)
+                                    wasmModule._obxd_set_drum_layer_param(dpad, dlayer, 200 + dn, +dparams[dbase + 80 + dn]);
+                            }
+                        }
+                    }
+                    this.port.postMessage({ type: 'drum_params_restored' });
+                    break;
+                }
                 // OctOBX PCM — per-drum-layer full-param get/set (mirrors get_param / set_param).
                 case 'set_drum_layer_param':
                     if (wasmModule && typeof msg.idx === 'number' && typeof msg.value === 'number') {

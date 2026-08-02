@@ -160,7 +160,11 @@ static void load_state(const char *filepath) {
     int pages_loaded = 0, grid_loaded = 0;
 
     while (fread(tag, 1, 4, f) == 4 && fread(&sz, 4, 1, f) == 1) {
-        card8 buf[65536];
+        /* Static, not stack — the 64 KB buffer would consume the entire
+         * default 64 KB WASM stack, overflowing on the first PersGridImport
+         * / PersPageImport call chain. Safe because load_state() always
+         * runs under cyg_scheduler_lock() (no reentrancy). */
+        static card8 buf[65536];
         if (sz > sizeof(buf)) break;
         if (fread(buf, 1, sz, f) != sz) break;
 
@@ -446,8 +450,27 @@ void EMSCRIPTEN_KEEPALIVE wasm_save_state(void) {
 }
 
 void EMSCRIPTEN_KEEPALIVE wasm_load_state(void) {
+    /* Hold the scheduler lock for the entire load so the sequencer
+     * pthread can't read Page/Track/Step repositories mid-overwrite. */
+    cyg_scheduler_lock();
     load_state("/persistent/octopus_state.bin");
+
+    /* Post-load validation. PersistentV2_GridImport is the only
+     * importer that doesn't bounds-check GRID_CURSOR (every other
+     * index is guarded with `if (pageId < MAX_NROF_PAGES)`). An
+     * out-of-range GRID_CURSOR makes Page_repository[GRID_CURSOR] an
+     * OOB access in VIEWER_fill_MIR / executeKey → hard WASM trap.
+     * A zero tempo causes integer div-by-zero in G_TIMER_REFILL_update. */
+    if (GRID_CURSOR >= MAX_NROF_PAGES) {
+        GRID_CURSOR = 0;
+    }
+    if (G_master_tempo < MIN_TEMPO || G_master_tempo > MAX_TEMPO) {
+        G_master_tempo = 120;
+    }
+
+    G_TIMER_REFILL_update();
     Page_requestRefresh();
+    cyg_scheduler_unlock();
 }
 
 /* Returns 1 if the firmware's internal save (GRID+PGM) wrote to MEMFS

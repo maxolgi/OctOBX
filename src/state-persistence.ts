@@ -1,11 +1,15 @@
 /*
- * state-persistence.ts — Save/load Octopus sequencer state via browser
- * file download/upload.
+ * state-persistence.ts — Save/load Octopus sequencer state.
  *
  * The Octopus engine writes state to /persistent/octopus_state.bin in
- * Emscripten's MEMFS (in-memory filesystem). Instead of IDBFS (which is
- * broken in this build), we read the MEMFS file and trigger a download
- * for Save, and write an uploaded file into MEMFS for Load.
+ * Emscripten's MEMFS. IDBFS is mounted at /persistent so the file
+ * persists across page reloads via IndexedDB (see octopus-module.ts).
+ *
+ * SAVE: _wasm_save_state() writes to MEMFS + syncs to IDBFS (the C
+ *   side calls FS.syncfs(false) via EM_ASM). Shift+SAVE also downloads
+ *   .bin + app-state JSON.
+ * LOAD: file picker imports a .bin into MEMFS + syncs to IDBFS.
+ * Shift+LOAD: clears IDBFS + app-state localStorage (recovery).
  */
 
 import type { OctopusWasmModule } from "./octopus-types";
@@ -13,6 +17,7 @@ import {
     loadMidiLearnBindings,
     saveMidiLearnBindings,
 } from "./obxf-midi-learn-integration";
+import { saveAppState, clearAppState, downloadAppStateJson } from "./app-state";
 
 const STATE_PATH = "/persistent/octopus_state.bin";
 
@@ -22,8 +27,7 @@ function ensurePersistentDir(module: OctopusWasmModule): void {
 
 /*
  * Read the state file from MEMFS and trigger a browser download.
- * Called by the SAVE button (after wasm_save_state writes the file)
- * and by the classic panel (after GRID+PGM sets the g_state_saved flag).
+ * Called by Shift+SAVE and by the classic panel (after GRID+PGM).
  */
 export function downloadStateFile(module: OctopusWasmModule): void {
     let data: Uint8Array;
@@ -51,35 +55,66 @@ export function downloadStateFile(module: OctopusWasmModule): void {
     console.log(`[octobx] State downloaded (${data.length} bytes)`);
 }
 
+/*
+ * Sync MEMFS to IDBFS so the state persists across reloads. Called by
+ * onStateSaved (GRID+PGM path) and the file-import handler, since those
+ * paths write to MEMFS without going through _wasm_save_state's EM_ASM
+ * syncfs call.
+ */
+function syncIdbfs(module: OctopusWasmModule): void {
+    try {
+        module.FS.syncfs(false, (err: Error | null) => {
+            if (err) console.error("[octobx] IDBFS sync failed:", err);
+        });
+    } catch { /* IDBFS not mounted */ }
+}
+
+/*
+ * Post-save callback for the GRID+PGM path. The firmware's save_state()
+ * wrote to MEMFS; we sync to IDBFS and download the .bin.
+ */
+export function onStateSaved(module: OctopusWasmModule): void {
+    syncIdbfs(module);
+    downloadStateFile(module);
+}
+
 export function setupStatePersistence(module: OctopusWasmModule) {
-    // Restore OB-Xf MIDI-learn bindings from localStorage. They live
-    // alongside (not inside) the binary sequencer state because they're
-    // a JSON document, not part of the engine's flash image. Auto-save
-    // fires on every learn/unlearn via the manager's onLearnedCallback,
-    // so the SAVE button below doesn't need to also write them.
     loadMidiLearnBindings();
 
     const saveBtn = document.getElementById("oct-save");
     const loadBtn = document.getElementById("oct-load");
 
-    saveBtn?.addEventListener("click", () => {
+    saveBtn?.addEventListener("click", async (e) => {
         ensurePersistentDir(module);
         module._wasm_save_state();
-        // Persist the latest MIDI-learn bindings too — defensive: the
-        // auto-save hook should already have written them, but a SAVE
-        // is a natural "snapshot everything" gesture so we re-flush.
         saveMidiLearnBindings();
-        downloadStateFile(module);
+        await saveAppState();
+        if (e.shiftKey) {
+            downloadStateFile(module);
+            downloadAppStateJson();
+        }
     });
 
-    /* Hidden file input — activated by the LOAD button click */
     const fileInput = document.createElement("input");
     fileInput.type = "file";
     fileInput.accept = ".bin,application/octet-stream";
     fileInput.style.display = "none";
     document.body.appendChild(fileInput);
 
-    loadBtn?.addEventListener("click", () => fileInput.click());
+    loadBtn?.addEventListener("click", (e) => {
+        if (e.shiftKey) {
+            try {
+                if (module.FS.analyzePath(STATE_PATH).exists) {
+                    module.FS.unlink(STATE_PATH);
+                    syncIdbfs(module);
+                }
+            } catch { /* nothing to clear */ }
+            clearAppState();
+            console.log("[octobx] Cleared IDBFS + app state");
+            return;
+        }
+        fileInput.click();
+    });
 
     fileInput.addEventListener("change", async () => {
         const file = fileInput.files && fileInput.files[0];
@@ -89,6 +124,7 @@ export function setupStatePersistence(module: OctopusWasmModule) {
             ensurePersistentDir(module);
             module.FS.writeFile(STATE_PATH, data);
             module._wasm_load_state();
+            syncIdbfs(module);
             console.log(`[octobx] State loaded from file (${data.length} bytes)`);
         } catch (e) {
             console.error("[octobx] State load failed:", e);

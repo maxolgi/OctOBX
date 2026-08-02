@@ -475,6 +475,52 @@ export function isDrumReady(): boolean {
     return ready;
 }
 
+// --- State persistence (exported for app-state.ts) ------------------------
+
+export function getDrumState(): {
+    kitIndex: number;
+    kit: DrumKit;
+    selectedPad: number;
+    selectedLayer: number;
+} {
+    return {
+        kitIndex: currentKitIndex,
+        kit: cloneKit(currentKit),
+        selectedPad,
+        selectedLayer,
+    };
+}
+
+export async function restoreDrumState(state: {
+    kitIndex: number;
+    kit: DrumKit;
+    selectedPad: number;
+    selectedLayer: number;
+}): Promise<void> {
+    for (const pad of state.kit.pads) {
+        for (const layer of pad.layers) layer._seeded = false;
+    }
+    currentKitIndex = state.kitIndex;
+    currentKit = cloneKit(state.kit);
+    selectedPad = state.selectedPad ?? 0;
+    selectedLayer = state.selectedLayer ?? 0;
+    if (kitSelectEl) kitSelectEl.value = String(currentKitIndex);
+    if (mountedContainer) {
+        refreshPadBank();
+        renderLayerButtons();
+        renderLayerEditor();
+    }
+    try {
+        await initDrumMode();
+        await loadDrumKit(currentKit);
+        ready = true;
+        if (statusEl) statusEl.textContent = "Ready - " + currentKit.name;
+        syncEditor();
+    } catch (e) {
+        console.warn("[drum] restoreDrumState failed:", e);
+    }
+}
+
 // --- Kit / pad helpers ----------------------------------------------------
 
 function cloneKit(kit: DrumKit): DrumKit {

@@ -447,6 +447,77 @@ export function clearObxdInstanceMatrixRow(id: number, row: number): void {
 }
 
 // ---------------------------------------------------------------------------
+// Bulk param dump/restore (state persistence)
+// ---------------------------------------------------------------------------
+
+/*
+ * Dump all synth params from all 10 instances in a single AWP round-trip.
+ * Returns a flat number[1080] array (10 instances × 108 params each) or
+ * null if the worklet isn't ready. Used by app-state.ts at save time.
+ */
+export async function dumpAllSynthParams(): Promise<number[] | null> {
+    if (!workletNode) return null;
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "all_params_dumped",
+        5000,
+    );
+    workletNode.port.postMessage({ type: "dump_all_params" });
+    const raw = await replyPromise;
+    if (!raw) return null;
+    return (raw as { params?: number[] }).params ?? null;
+}
+
+/*
+ * Restore all synth params to all 10 instances in a single AWP round-trip.
+ * Takes the flat number[1080] array produced by dumpAllSynthParams. Used
+ * by app-state.ts at restore time (after AWP ready).
+ */
+export async function restoreAllSynthParams(params: number[]): Promise<void> {
+    if (!workletNode) return;
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "all_params_restored",
+        5000,
+    );
+    workletNode.port.postMessage({ type: "restore_all_params", params });
+    await replyPromise;
+}
+
+/*
+ * Dump all drum layer params (8 pads × 4 layers × 108 params) from the
+ * C-side g_drum_layer_params + g_drum_layer_new mirrors. Used by
+ * app-state.ts at save time.
+ */
+export async function dumpAllDrumParams(): Promise<number[] | null> {
+    if (!workletNode) return null;
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "drum_params_dumped",
+        5000,
+    );
+    workletNode.port.postMessage({ type: "dump_drum_params" });
+    const raw = await replyPromise;
+    if (!raw) return null;
+    return (raw as { params?: number[] }).params ?? null;
+}
+
+/*
+ * Restore all drum layer params in a single AWP round-trip. Used by
+ * app-state.ts at restore time (after drum kit load).
+ */
+export async function restoreAllDrumParams(params: number[]): Promise<void> {
+    if (!workletNode) return;
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "drum_params_restored",
+        5000,
+    );
+    workletNode.port.postMessage({ type: "restore_drum_params", params });
+    await replyPromise;
+}
+
+// ---------------------------------------------------------------------------
 // Selection state — UI-only concern.
 // ---------------------------------------------------------------------------
 

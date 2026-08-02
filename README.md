@@ -381,8 +381,8 @@ Makefile's `-sEXPORTED_FUNCTIONS` list.
 | `wasm_set_tempo(bpm)` | Change tempo |
 | `wasm_pause()` | Toggle pause |
 | `wasm_midi_input(status, d1, d2)` | MIDI input from Web MIDI |
-| `wasm_save_state()` | Save to IDBFS |
-| `wasm_load_state()` | Load from IDBFS |
+| `wasm_save_state()` | Save to MEMFS (`/persistent/octopus_state.bin`) |
+| `wasm_load_state()` | Load from MEMFS (under scheduler lock + post-load validation) |
 | `wasm_shutdown()` | Stop sequencer |
 | `get_mir_ptr()` | Pointer to raw MIR array (170 bytes) |
 | `get_processed_mir_ptr()` | MIR with blink processing applied |
@@ -593,7 +593,8 @@ for fast include-chain error surfacing without a full codegen/link.
 | `obxf-midi-learn-integration.ts` | Singleton `ObxfMidiLearnManager` + per-param registry. `processHardwareCC()` is the single entry point `midi-input.ts` calls before forwarding a CC — returns true when consumed by learn. Bindings persist to localStorage; auto-save on every learn/unlearn. |
 | `obxf-midi-learn-ui.ts` | MIDI-learn **overlay** UI: renders the OB-Xf `midiLearnButton`, paints per-knob `CC{n}` badges above bound controls, toggles the red panel-border learn-mode indicator, click-badge-to-unlearn. |
 | `transport-sync.ts` | Wires PLAY/STOP/BPM to the Octopus engine and updates the on-screen transport indicator. |
-| `state-persistence.ts` | Save/Load buttons → IDBFS sync. |
+| `state-persistence.ts` | Octopus sequencer state save/load via localStorage (base64). SAVE writes to localStorage; Shift+SAVE also downloads `.bin` + JSON. LOAD imports `.bin` files. Autoloads on startup. |
+| `app-state.ts` | Synth + drum state persistence. Dumps all synth (10×108) and drum (8×4×108) params from the AWP in bulk, plus per-instance settings (power, polyphony, channel, MPE, bend range) and drum kit, to localStorage JSON. Restores after AWP ready via `onAWPReady` callback. |
 | `drum-rack.ts` | Drum module UI: kit selector, 8 pads × 4 layers with sample-name selectors + mute/enable toggles, and per-layer knob strips (48 controls: 8 global + 40 per-layer). SVG arc knobs with iOS-style toggle pills and tri-state LFO-routing pills. Layer section has Gain/Pan/Pitch knobs with custom dispatch (bypass `g_drum_layer_params`, update `DrumLayer` object + `pushLayer` → `set_pcm_layer`). `syncEditor`/`syncKnobStrips` re-seed knob positions on pad/layer switch. |
 | `drum-audio.ts` | Main-thread audio bootstrap for the drum module on OB-Xf instance 9 (32 voices). `loadDrumKit` fetches samples from smpldsnds CDN, decodes via `AudioContext.decodeAudioData`, posts float arrays to the worklet via `obxd_load_pcm`. Serialized via `kitLoadChain` promise chain (prevents concurrent loads). `sendLayerParams` pushes per-layer params (gain, filter, amp env, pan, pitch). `seedLayerMirror` seeds `g_drum_layer_params` on load. `pushLayer` re-sends one layer's full param set. |
 | `drum-state.ts` | Pure data layer: `DrumLayer` / `DrumPad` / `DrumKit` interfaces + factory functions. No project dependencies. `DrumLayer` fields: enabled, sampleName, gain, filterCutoff/Resonance/Mode, amp ADSR, pan, pitch (0..1, 0.5=original), muted, `_seeded` flag. |
@@ -796,18 +797,58 @@ stderr_logfile_backups=3
 Then `sudo supervisorctl update && sudo supervisorctl restart octobx`.
 Logs land in `logs/vite.{out,err}.log` (gitignored).
 
-## Firmware modifications
+## Firmware — used as-is
 
-No firmware source changes beyond the existing patches in the
-`OCT_CE_OS` fork (see its `patches/` history). The WASM build uses
-`-D__linux__` so all Linux-specific firmware guards apply:
+OctOBX makes **zero local modifications** to the firmware. The `firmware/`
+submodule points at the [`maxolgi/OCT_CE_OS`](https://github.com/maxolgi/OCT_CE_OS)
+fork, which already carries all platform-adaptation guards. OctOBX consumes
+that fork unchanged — never edit files under `firmware/`.
 
-1. `includes-declarations.h` — includes `hal_linux.h` (our WASM version)
-2. `play_MIDI.h:85` — `MIDI_send()` routes to `midi_send_event()`
-3. `show_hwdriver.h:36` — hardware `VIEWER_show_MIR()` suppressed
-4. `Intr_TMR.h` — MIDI clock moved to sequencer thread, `g_tick_ns`
-   precompute
-5. `cpu-load.c` — CPU load check disabled
+The WASM build defines `-D__linux__` (plus `-D__EMSCRIPTEN__`), which activates
+the guards already committed in the fork. The relevant fork patches:
+
+1. `includes-declarations.h` — eCos includes replaced by `#include "hal_linux.h"`
+2. `play_MIDI.h` — `MIDI_send()` routes to `midi_send_event()` instead of UART mailbox
+3. `show_hwdriver.h` — hardware `VIEWER_show_MIR()` body suppressed (JS reads MIR from heap)
+4. `Intr_TMR.h` — MIDI clock sent from sequencer thread instead of timer ISR; `g_tick_ns` precompute
+5. `cpu-load.c` — `cpu_load_at_max()` returns 0 (no hardware CPU-load timer)
+6. `OS_infrastructure.h` — page-refresh alarm creation skipped (CONSTANT_BLINK mode)
+7. `Init_memory.h` — `MIR_init()` loop bound fixed (original `ndx < 18` overflows `MIR[2][17][5]`)
+
+All platform adaptation that is specific to OctOBX (not shared with the native
+port) lives in `wasm/hal_wasm.c`, `wasm/main_wasm.c`, `wasm/midi_wasm.c`, and
+`wasm/hal_linux.h` — never in the firmware itself.
+
+## State persistence
+
+OctOBX persists state across page reloads via two mechanisms:
+
+| Layer | Storage | Trigger | Format |
+|---|---|---|---|
+| Octopus sequencer | IDBFS (IndexedDB) | SAVE button, GRID+PGM | binary (`/persistent/octopus_state.bin`) |
+| Synth + drum state | localStorage | SAVE button | JSON (`octobx:app_state:v1`) |
+| MIDI-learn bindings | localStorage | learn/unlearn (auto) | JSON (`octobx:midi_learn_v1`) |
+
+**IDBFS** — Emscripten's IndexedDB File System is mounted at `/persistent/`
+in `octopus-module.ts`. The firmware writes state to
+`/persistent/octopus_state.bin` in MEMFS; `FS.syncfs(false)` flushes it to
+IndexedDB. On page load, `FS.syncfs(true)` reads it back before
+`engine_init()` calls `load_state()`.
+
+**SAVE button** — `_wasm_save_state()` writes to MEMFS + syncs to IDBFS.
+Also saves synth/drum state to localStorage. No file download.
+**Shift+SAVE** — also downloads `octopus_state_*.bin` (hardware-compatible)
+and `octobx_app_state_*.json`. **GRID+PGM** (Octopus panel) — saves to
+MEMFS + syncs to IDBFS + downloads `.bin`. **LOAD button** — imports a
+`.bin` file into MEMFS + syncs to IDBFS. **Shift+LOAD** — clears IDBFS +
+localStorage (recovery for corrupt state).
+
+**Synth/drum restore** — cached on page load, pushed to the AudioWorklet
+after it initializes (first PLAY click) via an `onAWPReady` callback. The
+restore sequence is: drum kit load → synth params → drum layer params →
+per-instance settings + routing.
+
+**Recovery** — append `?nosync` to the URL to skip IDBFS autoload.
 
 ## Testing
 
@@ -825,6 +866,8 @@ the dev server, and verify in the browser console:
   drive the 10 instances, switching the instance selector re-syncs knob
   positions, loading a `.fxp` changes one instance's sound only, MIDI-learn
   binds a hardware CC to a knob.
+- Save/load: tweak synth + drum params, click SAVE, reload, click PLAY —
+  all tweaks should be restored. Shift+SAVE downloads `.bin` + `.json`.
 
 ## Reference docs in repo
 
@@ -836,11 +879,10 @@ the dev server, and verify in the browser console:
 
 ## Known issues
 
-1. **IDBFS not mounting** — `FS.mount()` fails because the module's FS
-   object isn't fully initialized at mount time; Octopus state doesn't
-   persist across reloads yet. (OB-Xf MIDI-learn bindings persist separately
-   via localStorage, so they survive reloads even though Octopus state does
-   not.)
+1. **IDBFS** — fixed. Was accessing `module.IDBFS` (undefined — not in
+   `EXPORTED_RUNTIME_METHODS`) instead of `FS.filesystems.IDBFS`. Now
+   mounts IDBFS at `/persistent/` and the Octopus state file persists
+   across reloads automatically.
 2. **MPE timbre & channel pressure not wired** — `obxd_midi_in()` routes
    per-channel pitch bend through `processMPEPitch(channel, val)` and note
    on/off through channel-aware `processNoteOn/Off` when `g_mpe_enabled[id]`
