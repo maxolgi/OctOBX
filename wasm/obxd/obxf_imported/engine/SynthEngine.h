@@ -591,12 +591,12 @@ class SynthEngine
     }
     void setPcmLayerParams(int pad, int layer, float gain,
         float cutoff, float res, float mode,
-        float aA, float aD, float aS, float aR, float pan)
+        float aA, float aD, float aS, float aR, float pan, float pitch)
     {
         if (pad < 0 || pad >= 8 || layer < 0 || layer >= 4) return;
         auto& L = synth.pcmBank[pad][layer];
         L.gain = gain; L.cutoff = cutoff; L.resonance = res; L.filterMode = mode;
-        L.ampAtt = aA; L.ampDec = aD; L.ampSus = aS; L.ampRel = aR; L.pan = pan;
+        L.ampAtt = aA; L.ampDec = aD; L.ampSus = aS; L.ampRel = aR; L.pan = pan; L.pitch = pitch;
     }
     void setPcmNoteMap(int note, int pad)
     {

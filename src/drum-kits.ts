@@ -34,6 +34,7 @@ function layerFor(padIndex: number, sampleName: string, secondary: boolean): Dru
         ampSustain: 0.0,
         ampRelease: 0.2,
         pan: PAN_BY_PAD[padIndex],
+        pitch: 0.5,
         muted: false,
     };
 }

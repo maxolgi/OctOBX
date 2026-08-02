@@ -91,6 +91,7 @@ class Motherboard
         float  ampSus{1.f};
         float  ampRel{0.3f};
         float  pan{0.5f};
+        float  pitch{1.f};        // playback rate multiplier (1.0 = original)
     };
     PcmLayerDef pcmBank[8][4];           // 8 pads × 4 layers
     int   pcmNoteToPad[128];             // MIDI note → pad index (-1 = none)
@@ -473,6 +474,7 @@ class Motherboard
         v->pcmPos = 0.f;
         v->pcmGain = L.gain;
         v->pcmPan = L.pan;
+        v->pcmRate = L.pitch;
         v->pcmChokeGroup = pcmChokeGroup[pad];
         v->pcmPadId = pad;
         v->pcmLayerId = layer;       // OctOBX PCM: remember layer for full-param application

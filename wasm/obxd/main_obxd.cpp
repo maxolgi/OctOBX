@@ -1773,11 +1773,11 @@ void obxd_load_pcm(int instance_id, int pad, int layer, float* data, int len) {
 EMSCRIPTEN_KEEPALIVE
 void obxd_set_pcm_layer(int instance_id, int pad, int layer,
     float gain, float cutoff, float res, float mode,
-    float aA, float aD, float aS, float aR, float pan) {
+    float aA, float aD, float aS, float aR, float pan, float pitch) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     if (!g_engines[instance_id]) return;
     g_engines[instance_id]->setPcmLayerParams(pad, layer, gain, cutoff, res, mode,
-                                              aA, aD, aS, aR, pan);
+                                              aA, aD, aS, aR, pan, pitch);
 }
 
 // OctOBX PCM: map a MIDI note number to a pad.

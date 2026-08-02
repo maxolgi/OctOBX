@@ -14,6 +14,7 @@ export interface DrumLayer {
     ampSustain: number;     // 0..1
     ampRelease: number;     // 0..1
     pan: number;            // 0..1 (0.5 = center)
+    pitch: number;          // 0..1 (0.5 = original, 0 = -1 oct, 1 = +1 oct)
     muted: boolean;
     _seeded?: boolean;      // internal: tracks whether layer params have been seeded into g_drum_layer_params
 }
@@ -47,6 +48,7 @@ export function createDefaultLayer(): DrumLayer {
         ampSustain: 1.0,
         ampRelease: 0.2,
         pan: 0.5,
+        pitch: 0.5,
         muted: false,
     };
 }

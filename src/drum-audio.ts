@@ -124,6 +124,7 @@ function sendLayerParams(pad: number, layer: number, lyr: DrumLayer): void {
         aS: lyr.ampSustain,
         aR: lyr.ampRelease,
         pan: lyr.pan,
+        pitch: Math.pow(2, (lyr.pitch - 0.5) * 2),
     });
 }
 

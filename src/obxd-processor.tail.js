@@ -363,7 +363,7 @@ class ObxdProcessor extends AudioWorkletProcessor {
                 case 'set_pcm_layer':
                     if (wasmModule) wasmModule._obxd_set_pcm_layer(id, msg.pad | 0, msg.layer | 0,
                         +msg.gain, +msg.cutoff, +msg.res, +msg.mode,
-                        +msg.aA, +msg.aD, +msg.aS, +msg.aR, +msg.pan);
+                        +msg.aA, +msg.aD, +msg.aS, +msg.aR, +msg.pan, +msg.pitch);
                     break;
                 case 'set_pcm_note_map':
                     if (wasmModule) wasmModule._obxd_set_pcm_note_map(id, msg.note | 0, msg.pad | 0);

@@ -226,6 +226,11 @@ const LAYER_DIRECT_KNOBS: DrumKnobDef[] = [
         customSet: (v) => { const l = currentKit.pads[selectedPad].layers[selectedLayer]; l.pan = v; pushLayer(l); },
         customGet: () => currentKit.pads[selectedPad].layers[selectedLayer].pan,
     },
+    {
+        label: "Pitch", idx: -1, default: 0.5,
+        customSet: (v) => { const l = currentKit.pads[selectedPad].layers[selectedLayer]; l.pitch = v; pushLayer(l); },
+        customGet: () => currentKit.pads[selectedPad].layers[selectedLayer].pitch,
+    },
 ];
 
 interface DrumKnobHandle {
