@@ -12,9 +12,10 @@ import {
     previewPad,
     setDrumLayerParam,
     getDrumLayerParam,
+    DRUM_INSTANCE,
 } from "./drum-audio";
-import { buildObxdSynthUi } from "./obxd-synth-ui";
-import type { ObxdParamTarget, ObxdEditorHandle } from "./obxd-synth-ui";
+import { setObxdInstanceParam } from "./obxd-audio";
+import type { ObxdParamTarget } from "./obxd-synth-ui";
 
 // --- Module state ---------------------------------------------------------
 
@@ -31,8 +32,8 @@ let kitSelectEl: HTMLSelectElement;
 let layerBtnsEl: HTMLDivElement;
 let editorEl: HTMLDivElement;
 let drumControlsEl: HTMLDivElement;
-let obxfEditorHost: HTMLDivElement;
-let editorHandle: ObxdEditorHandle | null = null;
+let drumKnobHost: HTMLDivElement;
+let layerStripLabel: HTMLDivElement;
 const padBtns: HTMLButtonElement[] = [];
 const padDots: HTMLSpanElement[][] = [];
 
@@ -44,6 +45,386 @@ const drumTarget: ObxdParamTarget = {
     get: (idx) => getDrumLayerParam(selectedPad, selectedLayer, idx),
     set: (idx, v) => setDrumLayerParam(selectedPad, selectedLayer, idx, v),
 };
+
+// --- Drum knob strips -----------------------------------------------------
+
+// Legacy param indices for the knob strips.
+const IDX_VOLUME = 2;
+const IDX_BRIGHTNESS = 38;
+const IDX_FLT_KF = 43;
+const IDX_CUTOFF = 44;
+const IDX_RESONANCE = 45;
+const IDX_MULTIMODE = 46;
+const IDX_HQMODE = 47;
+const IDX_FENV_AMT = 50;
+const IDX_LATK = 51;
+const IDX_LDEC = 52;
+const IDX_LSUS = 53;
+const IDX_LREL = 54;
+const IDX_FATK = 55;
+const IDX_FDEC = 56;
+const IDX_FSUS = 57;
+const IDX_FREL = 58;
+const IDX_ENV_SLOP = 59;
+const IDX_FILT_SLOP = 60;
+const IDX_LFO1_RATE = 17;
+const IDX_LFO1_SYNC = 72;
+const IDX_LFO1_W1 = 18;
+const IDX_LFO1_W2 = 19;
+const IDX_LFO1_W3 = 20;
+const IDX_FOURPOLE = 49;
+const IDX_BANDPASS = 48;
+const IDX_SELF_OSC_PUSH = 79;
+const IDX_FENV_INVERT = 76;
+const IDX_VFLTENV = 10;
+const IDX_VAMPENV = 11;
+const IDX_LFO1AMT = 21;
+const IDX_LFO2AMT = 22;
+const IDX_LFOFILTER = 25;
+
+// SVG arc helpers (from the pre-OB-Xf knob factory, commit 1c1f09d^).
+const SVG_NS = "http://www.w3.org/2000/svg";
+function polar(cx: number, cy: number, r: number, deg: number): { x: number; y: number } {
+    const rad = (deg - 90) * Math.PI / 180;
+    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+function arcPath(cx: number, cy: number, r: number, startDeg: number, endDeg: number): string {
+    const a = polar(cx, cy, r, startDeg);
+    const b = polar(cx, cy, r, endDeg);
+    const large = (endDeg - startDeg) <= 180 ? 0 : 1;
+    return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
+}
+
+// NEW param sentinel indices (NEW_PARAM_BASE + N, assigned at runtime by obxd-synth-ui
+// in the order controls appear in obxfControls). Verified by tracing obxf-layout.ts:
+const IDX_LFO1_PW = 210;
+const IDX_LFO1_TO_VOL = 211;
+const IDX_LFO2_SYNC = 212;
+const IDX_LFO2_RATE = 213;
+const IDX_LFO2_MOD1 = 214;
+const IDX_LFO2_MOD2 = 215;
+const IDX_LFO2_W1 = 216;
+const IDX_LFO2_W2 = 217;
+const IDX_LFO2_W3 = 218;
+const IDX_LFO2_PW = 219;
+const IDX_LFO2_TO_FILT = 222;
+const IDX_LFO2_TO_VOL = 225;
+const IDX_FILT_XPANDER = 208;
+const IDX_FILT_XPANDER_MODE = 209;
+const IDX_FENV_ATK_CURVE = 226;
+const IDX_AENV_ATK_CURVE = 227;
+
+interface DrumKnobDef {
+    label: string;
+    idx: number;       // legacy param index (-1 for custom dispatch)
+    default?: number;  // reset value for double-click
+    toggle?: boolean;  // if true, render as toggle button instead of knob
+    triState?: boolean; // if true, render as Off/On/Inv tri-state button (LFO routings)
+    customSet?: (v: number) => void;
+    customGet?: () => number;
+}
+
+const GLOBAL_KNOBS: DrumKnobDef[] = [
+    { label: "Volume", idx: IDX_VOLUME, default: 0.5 },
+    { label: "HQ", idx: IDX_HQMODE, default: 0, toggle: true },
+    { label: "LFO1 Rate", idx: IDX_LFO1_RATE, default: 0.5 },
+    { label: "LFO1 Sync", idx: IDX_LFO1_SYNC, default: 0, toggle: true },
+    { label: "LFO1 W1", idx: IDX_LFO1_W1, default: 0.5 },
+    { label: "LFO1 W2", idx: IDX_LFO1_W2, default: 0.5 },
+    { label: "LFO1 W3", idx: IDX_LFO1_W3, default: 0.5 },
+    { label: "LFO1 PW", idx: IDX_LFO1_PW, default: 0.5 },
+];
+
+interface DrumKnobGroup {
+    label: string;
+    knobs: DrumKnobDef[];
+}
+
+const LAYER_GROUPS: DrumKnobGroup[] = [
+    {
+        label: "Filter",
+        knobs: [
+            { label: "Cutoff", idx: IDX_CUTOFF, default: 1.0 },
+            { label: "Reson", idx: IDX_RESONANCE, default: 0.0 },
+            { label: "Mode", idx: IDX_MULTIMODE, default: 0.0 },
+            { label: "Env Amt", idx: IDX_FENV_AMT, default: 0.0 },
+            { label: "Key Trk", idx: IDX_FLT_KF, default: 0.0 },
+            { label: "4-Pole", idx: IDX_FOURPOLE, default: 0, toggle: true },
+            { label: "BP Blend", idx: IDX_BANDPASS, default: 0, toggle: true },
+            { label: "Push", idx: IDX_SELF_OSC_PUSH, default: 0, toggle: true },
+            { label: "Xpander", idx: IDX_FILT_XPANDER, default: 0, toggle: true },
+            { label: "Xp Mode", idx: IDX_FILT_XPANDER_MODE, default: 0 },
+        ],
+    },
+    {
+        label: "Filter Env",
+        knobs: [
+            { label: "Attack", idx: IDX_FATK, default: 0.0 },
+            { label: "Decay", idx: IDX_FDEC, default: 0.3 },
+            { label: "Sustain", idx: IDX_FSUS, default: 1.0 },
+            { label: "Release", idx: IDX_FREL, default: 0.3 },
+            { label: "Invert", idx: IDX_FENV_INVERT, default: 0, toggle: true },
+            { label: "Vel\u2192Flt", idx: IDX_VFLTENV, default: 0 },
+            { label: "Atk Crv", idx: IDX_FENV_ATK_CURVE, default: 0.5 },
+        ],
+    },
+    {
+        label: "Amp Env",
+        knobs: [
+            { label: "Attack", idx: IDX_LATK, default: 0.0 },
+            { label: "Decay", idx: IDX_LDEC, default: 0.3 },
+            { label: "Sustain", idx: IDX_LSUS, default: 1.0 },
+            { label: "Release", idx: IDX_LREL, default: 0.3 },
+            { label: "Vel\u2192Amp", idx: IDX_VAMPENV, default: 0 },
+            { label: "Atk Crv", idx: IDX_AENV_ATK_CURVE, default: 0.5 },
+        ],
+    },
+    {
+        label: "LFO1",
+        knobs: [
+            { label: "Mod Amt1", idx: IDX_LFO1AMT, default: 0.0 },
+            { label: "Mod Amt2", idx: IDX_LFO2AMT, default: 0.0 },
+            { label: "Filter", idx: IDX_LFOFILTER, default: 0, triState: true },
+            { label: "Volume", idx: IDX_LFO1_TO_VOL, default: 0, triState: true },
+        ],
+    },
+    {
+        label: "LFO2",
+        knobs: [
+            { label: "Rate", idx: IDX_LFO2_RATE, default: 0.5 },
+            { label: "Sync", idx: IDX_LFO2_SYNC, default: 0, toggle: true },
+            { label: "Mod Amt1", idx: IDX_LFO2_MOD1, default: 0.0 },
+            { label: "Mod Amt2", idx: IDX_LFO2_MOD2, default: 0.0 },
+            { label: "Wave 1", idx: IDX_LFO2_W1, default: 0.5 },
+            { label: "Wave 2", idx: IDX_LFO2_W2, default: 0.5 },
+            { label: "Wave 3", idx: IDX_LFO2_W3, default: 0.5 },
+            { label: "PW", idx: IDX_LFO2_PW, default: 0.5 },
+            { label: "Filter", idx: IDX_LFO2_TO_FILT, default: 0, triState: true },
+            { label: "Volume", idx: IDX_LFO2_TO_VOL, default: 0, triState: true },
+        ],
+    },
+    {
+        label: "Misc",
+        knobs: [
+            { label: "Bright", idx: IDX_BRIGHTNESS, default: 1.0 },
+            { label: "Filt Slop", idx: IDX_FILT_SLOP, default: 0.0 },
+            { label: "Env Slop", idx: IDX_ENV_SLOP, default: 0.0 },
+        ],
+    },
+];
+
+// Per-layer Gain and Pan — these bypass g_drum_layer_params and instead
+// update the DrumLayer TS object + pushLayer (set_pcm_layer message).
+const LAYER_DIRECT_KNOBS: DrumKnobDef[] = [
+    {
+        label: "Gain", idx: -1, default: 0.85,
+        customSet: (v) => { const l = currentKit.pads[selectedPad].layers[selectedLayer]; l.gain = v; pushLayer(l); },
+        customGet: () => currentKit.pads[selectedPad].layers[selectedLayer].gain,
+    },
+    {
+        label: "Pan", idx: -1, default: 0.5,
+        customSet: (v) => { const l = currentKit.pads[selectedPad].layers[selectedLayer]; l.pan = v; pushLayer(l); },
+        customGet: () => currentKit.pads[selectedPad].layers[selectedLayer].pan,
+    },
+];
+
+interface DrumKnobHandle {
+    el: HTMLElement;
+    setValue: (v: number) => void;
+    idx: number;
+    isGlobal: boolean;
+    customGet?: () => number;
+}
+
+let globalStripKnobs: DrumKnobHandle[] = [];
+let layerStripKnobs: DrumKnobHandle[] = [];
+
+function dispatchValue(idx: number, v: number, isGlobal: boolean): void {
+    if (isGlobal) {
+        setObxdInstanceParam(DRUM_INSTANCE, idx, v);
+    } else {
+        drumTarget.set(idx, v);
+    }
+}
+
+function buildDrumKnob(def: DrumKnobDef, isGlobal: boolean): DrumKnobHandle {
+    // Helper to build the standard wrapper (control + label below)
+    const makeWrap = (): { wrap: HTMLDivElement; label: HTMLDivElement } => {
+        const wrap = document.createElement("div");
+        wrap.className = "drum-strip-knob";
+        const label = document.createElement("div");
+        label.className = "drum-strip-label";
+        label.textContent = def.label;
+        return { wrap, label };
+    };
+
+    // Toggle — horizontal pill with sliding knob
+    if (def.toggle) {
+        const { wrap, label } = makeWrap();
+        const pill = document.createElement("div");
+        pill.className = "drum-strip-pill";
+        const dot = document.createElement("div");
+        dot.className = "drum-strip-pill-knob";
+        pill.appendChild(dot);
+        wrap.appendChild(pill);
+        wrap.appendChild(label);
+        let state = 0;
+        const setValue = (v: number): void => {
+            state = v >= 0.5 ? 1 : 0;
+            pill.classList.toggle("on", state === 1);
+        };
+        pill.addEventListener("click", () => {
+            state = state ? 0 : 1;
+            pill.classList.toggle("on", state === 1);
+            dispatchValue(def.idx, state, isGlobal);
+        });
+        setValue(def.default ?? 0);
+        return { el: wrap, setValue, idx: def.idx, isGlobal };
+    }
+
+    // Tri-state — 3-position pill (Off=left/grey, On=center/green, Inv=right/red)
+    if (def.triState) {
+        const { wrap, label } = makeWrap();
+        const pill = document.createElement("div");
+        pill.className = "drum-strip-pill tri";
+        const dot = document.createElement("div");
+        dot.className = "drum-strip-pill-knob";
+        pill.appendChild(dot);
+        wrap.appendChild(pill);
+        wrap.appendChild(label);
+        let state = 0;
+        const values = [0, 0.5, 1.0];
+        const setValue = (v: number): void => {
+            if (v < 0.25) state = 0;
+            else if (v < 0.75) state = 1;
+            else state = 2;
+            pill.classList.toggle("on", state === 1);
+            pill.classList.toggle("inv", state === 2);
+        };
+        pill.addEventListener("click", () => {
+            state = (state + 1) % 3;
+            setValue(values[state]);
+            dispatchValue(def.idx, values[state], isGlobal);
+        });
+        setValue(def.default ?? 0);
+        return { el: wrap, setValue, idx: def.idx, isGlobal };
+    }
+
+    // SVG arc knob
+    const wrap = document.createElement("div");
+    wrap.className = "drum-strip-knob";
+
+    const cx = 20, cy = 20, rOut = 16, rIn = 10;
+    const ARC_START = -135, ARC_SWEEP = 270;
+
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 40 40");
+    svg.setAttribute("width", "40");
+    svg.setAttribute("height", "40");
+    svg.style.cursor = "ns-resize";
+    svg.style.touchAction = "none";
+
+    // Background track arc
+    const trackPath = document.createElementNS(SVG_NS, "path");
+    trackPath.setAttribute("d", arcPath(cx, cy, rOut, ARC_START, ARC_START + ARC_SWEEP));
+    trackPath.setAttribute("fill", "none");
+    trackPath.setAttribute("stroke", "#3a3a3a");
+    trackPath.setAttribute("stroke-width", "3");
+    trackPath.setAttribute("stroke-linecap", "round");
+    svg.appendChild(trackPath);
+
+    // Value arc
+    const valuePath = document.createElementNS(SVG_NS, "path");
+    valuePath.setAttribute("fill", "none");
+    valuePath.setAttribute("stroke", "#0c0");
+    valuePath.setAttribute("stroke-width", "3");
+    valuePath.setAttribute("stroke-linecap", "round");
+    svg.appendChild(valuePath);
+
+    // Inner body circle
+    const body = document.createElementNS(SVG_NS, "circle");
+    body.setAttribute("cx", String(cx));
+    body.setAttribute("cy", String(cy));
+    body.setAttribute("r", String(rIn));
+    body.setAttribute("fill", "#2a2a2a");
+    body.setAttribute("stroke", "#444");
+    body.setAttribute("stroke-width", "1");
+    svg.appendChild(body);
+
+    // Indicator line
+    const indicator = document.createElementNS(SVG_NS, "line");
+    indicator.setAttribute("stroke", "#0c0");
+    indicator.setAttribute("stroke-width", "2");
+    indicator.setAttribute("stroke-linecap", "round");
+    svg.appendChild(indicator);
+
+    const labelEl = document.createElement("div");
+    labelEl.className = "drum-strip-label";
+    labelEl.textContent = def.label;
+
+    wrap.appendChild(svg);
+    wrap.appendChild(labelEl);
+
+    let value = def.customGet ? def.customGet() : (def.default ?? 0.5);
+
+    const paint = (): void => {
+        const endDeg = ARC_START + value * ARC_SWEEP;
+        valuePath.setAttribute("d", arcPath(cx, cy, rOut, ARC_START, endDeg));
+        const tip = polar(cx, cy, rIn - 1, endDeg);
+        const base = polar(cx, cy, 3, endDeg);
+        indicator.setAttribute("x1", String(base.x));
+        indicator.setAttribute("y1", String(base.y));
+        indicator.setAttribute("x2", String(tip.x));
+        indicator.setAttribute("y2", String(tip.y));
+    };
+
+    const setValue = (v: number): void => {
+        value = Math.max(0, Math.min(1, v));
+        paint();
+    };
+
+    const setValueAndDispatch = (v: number): void => {
+        value = Math.max(0, Math.min(1, v));
+        paint();
+        if (def.customSet) {
+            def.customSet(value);
+        } else {
+            dispatchValue(def.idx, value, isGlobal);
+        }
+    };
+
+    paint();
+
+    svg.addEventListener("wheel", (ev) => {
+        ev.preventDefault();
+        setValueAndDispatch(value + (ev.deltaY > 0 ? -0.03 : 0.03));
+    }, { passive: false });
+
+    let dragging = false;
+    let startY = 0;
+    let startVal = 0;
+    svg.addEventListener("pointerdown", (ev) => {
+        dragging = true;
+        startY = ev.clientY;
+        startVal = value;
+        svg.setPointerCapture(ev.pointerId);
+        ev.preventDefault();
+    });
+    svg.addEventListener("pointermove", (ev) => {
+        if (!dragging) return;
+        setValueAndDispatch(startVal + (startY - ev.clientY) * 0.005);
+    });
+    svg.addEventListener("pointerup", (ev) => {
+        dragging = false;
+        svg.releasePointerCapture(ev.pointerId);
+    });
+
+    svg.addEventListener("dblclick", () => {
+        setValueAndDispatch(def.default ?? 0.5);
+    });
+
+    return { el: wrap, setValue, idx: def.idx, isGlobal, customGet: def.customGet };
+}
 
 // --- Public API (fixed contract consumed by main.ts) ----------------------
 
@@ -263,11 +644,12 @@ function buildUI(container: HTMLElement): void {
     drumControlsEl = document.createElement("div");
     drumControlsEl.className = "drum-sample-row";
 
-    obxfEditorHost = document.createElement("div");
-    obxfEditorHost.className = "drum-obxf-host";
+    // Drum knob strips — the sole editor for per-layer params.
+    drumKnobHost = document.createElement("div");
+    drumKnobHost.className = "drum-knob-host";
 
     editorEl.appendChild(drumControlsEl);
-    editorEl.appendChild(obxfEditorHost);
+    editorEl.appendChild(drumKnobHost);
 
     root.appendChild(header);
     root.appendChild(padsLabel);
@@ -279,11 +661,66 @@ function buildUI(container: HTMLElement): void {
 
     container.appendChild(root);
 
-    // Build the full OB-Xf editor exactly once, bound to the drum target.
-    // drumTarget reads selectedPad/selectedLayer at call time, so a single
-    // editor instance serves every pad/layer combination — we never rebuild
-    // it, only re-seed via editorHandle.sync() on selection change.
-    editorHandle = buildObxdSynthUi(obxfEditorHost, drumTarget);
+    // Build the drum knob strips.
+    globalStripKnobs = [];
+    layerStripKnobs = [];
+
+    const buildGroupSection = (label: string, knobs: DrumKnobDef[], isGlobal: boolean): HTMLDivElement => {
+        const section = document.createElement("div");
+        section.className = "drum-knob-section";
+        const labelEl = document.createElement("div");
+        labelEl.className = "drum-knob-section-label";
+        labelEl.textContent = label;
+        const row = document.createElement("div");
+        row.className = "drum-knob-row";
+        for (const def of knobs) {
+            const kh = buildDrumKnob(def, isGlobal);
+            if (isGlobal) globalStripKnobs.push(kh);
+            else layerStripKnobs.push(kh);
+            row.appendChild(kh.el);
+        }
+        section.appendChild(labelEl);
+        section.appendChild(row);
+        return section;
+    };
+
+    const buildPair = (a: HTMLElement, b: HTMLElement): HTMLDivElement => {
+        const pair = document.createElement("div");
+        pair.className = "drum-knob-pair";
+        pair.appendChild(a);
+        pair.appendChild(b);
+        return pair;
+    };
+
+    const findGroup = (label: string): DrumKnobGroup => LAYER_GROUPS.find(g => g.label === label)!;
+
+    // Global + Layer (Gain/Pan) side by side.
+    drumKnobHost.appendChild(buildPair(
+        buildGroupSection("Global", GLOBAL_KNOBS, true),
+        buildGroupSection("Layer", LAYER_DIRECT_KNOBS, false),
+    ));
+
+    // Layer label.
+    layerStripLabel = sectionLabel("Layer " + (selectedLayer + 1) + " params");
+    drumKnobHost.appendChild(layerStripLabel);
+
+    // Filter + Misc side by side.
+    drumKnobHost.appendChild(buildPair(
+        buildGroupSection("Filter", findGroup("Filter").knobs, false),
+        buildGroupSection("Misc", findGroup("Misc").knobs, false),
+    ));
+
+    // Filter Env + Amp Env side by side.
+    drumKnobHost.appendChild(buildPair(
+        buildGroupSection("Filter Env", findGroup("Filter Env").knobs, false),
+        buildGroupSection("Amp Env", findGroup("Amp Env").knobs, false),
+    ));
+
+    // LFO1 + LFO2 side by side.
+    drumKnobHost.appendChild(buildPair(
+        buildGroupSection("LFO1", findGroup("LFO1").knobs, false),
+        buildGroupSection("LFO2", findGroup("LFO2").knobs, false),
+    ));
 }
 
 function sectionLabel(text: string): HTMLDivElement {
@@ -446,11 +883,23 @@ function renderLayerEditor(): void {
     drumControlsEl.appendChild(muteLabel);
 }
 
-// Re-seed the OB-Xf editor from the currently-selected drum layer's param
-// store. No-op until buildUI has instantiated the editor.
+// Re-seed the per-layer knob strip values from the currently-selected drum
+// layer's param store. Also refreshes the layer-strip header label.
 function syncEditor(): void {
-    if (!editorHandle) return;
-    editorHandle.sync().catch((e) => console.warn("[drum] editor sync failed", e));
+    if (layerStripLabel) {
+        layerStripLabel.textContent = "Layer " + (selectedLayer + 1) + " params";
+    }
+    if (layerStripKnobs.length === 0) return;
+    syncKnobStrips().catch((e) => console.warn("[drum] knob sync failed", e));
+}
+
+// Sync the per-layer knob strip values from the per-layer param store. Global
+// knobs are fire-and-forget (no read-back), so they are intentionally skipped.
+async function syncKnobStrips(): Promise<void> {
+    for (const kh of layerStripKnobs) {
+        const v = kh.customGet ? kh.customGet() : await drumTarget.get(kh.idx);
+        if (v >= 0) kh.setValue(v);
+    }
 }
 
 // --- Stylesheet (injected once) -------------------------------------------
@@ -535,6 +984,114 @@ function ensureStyle(): void {
     background: #000;
     flex: 0 0 auto;
     max-width: 100%;
+}
+/* Drum knob strips — SVG arc knobs grouped into sections (global + per-layer)
+   between the drum controls and the full OB-Xf editor. */
+.drum-knob-host {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+}
+.drum-knob-pair {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+.drum-knob-pair > .drum-knob-section {
+    flex: 0 0 auto;
+}
+.drum-knob-section {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px 8px;
+    flex: 0 0 auto;
+}
+.drum-knob-section-label {
+    color: var(--text-dim);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 3px;
+    margin-bottom: 4px;
+}
+.drum-knob-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+}
+.drum-strip-knob {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: 44px;
+    user-select: none;
+}
+.drum-strip-label {
+    font-size: 8px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    letter-spacing: 0.5px;
+    text-align: center;
+    font-family: monospace;
+    white-space: nowrap;
+}
+.drum-strip-toggle {
+    width: 44px;
+    min-height: 22px;
+    padding: 4px 2px;
+    font-family: monospace;
+    font-size: 9px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1.1;
+}
+.drum-strip-toggle:hover { background: #333; }
+.drum-strip-toggle.on {
+    background: #1a3a1a;
+    color: var(--accent);
+    border-color: var(--accent);
+}
+/* Horizontal pill toggle (iOS-style) — used for drum strip toggles + tri-states */
+.drum-strip-pill {
+    width: 40px;
+    height: 20px;
+    border-radius: 10px;
+    background: #1a1a1a;
+    border: 1px solid var(--border);
+    position: relative;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+    flex-shrink: 0;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+.drum-strip-pill:hover { border-color: #555; }
+.drum-strip-pill-knob {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #555;
+    top: 2px;
+    left: 2px;
+    transition: left 0.15s ease;
+}
+.drum-strip-pill.on .drum-strip-pill-knob {
+    left: 22px;
+}
+.drum-strip-pill.tri.on .drum-strip-pill-knob {
+    left: 12px;
+}
+.drum-strip-pill.tri.inv .drum-strip-pill-knob {
+    left: 22px;
 }
 `;
     const style = document.createElement("style");

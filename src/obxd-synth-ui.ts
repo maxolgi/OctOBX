@@ -111,6 +111,44 @@ const ID_ALIASES: Record<string, string> = {
 const NEW_PARAM_BASE = 200;
 const NEW_PARAM_IDS: string[] = [];
 
+// Legacy ParamsEnum.h indices that have NO effect on PCM drum voices.
+// Oscillators are replaced by PCM at injection (pcmGain=1), so all osc
+// params, osc-targeted LFO routings, pan (overridden by pcmPan), unison
+// (bypassed by PCM allocation), and portamento are inert.
+const DRUM_INACTIVE_INDICES = new Set<number>([
+    0, 1,       // UNDEFINED, MIDILEARN — sentinels/no-ops
+    3, 4, 5,    // VOICE_COUNT, TUNE, OCTAVE — structural/osc-only
+    7, 8, 9,   // BENDOSC2, LEGATOMODE, BENDLFORATE — osc/vibrato only
+    12, 13, 14, 15, // ASPLAYEDALLOCATION, PORTAMENTO, UNISON, UDET — structural/osc
+    16,         // OSC2_DET — osc detune
+    23, 24, 26, 27, // LFO1 osc-targeted routings (LFOOSC1, LFOOSC2, LFOPW1, LFOPW2)
+    28, 29,     // OSC2HS, XMOD — osc sync/crossmod
+    30, 31,     // OSC1P, OSC2P — osc pitch
+    32,         // OSCQuantize — removed no-op
+    33, 34, 35, 36, // OSC1Saw, OSC1Pul, OSC2Saw, OSC2Pul — osc waveforms
+    37,         // PW — osc pulse width
+    39,         // ENVPITCH — env-to-osc-pitch
+    40, 41, 42, // OSC1MIX, OSC2MIX, NOISEMIX — mixer (replaced by PCM)
+    61,         // PORTADER — portamento slop (osc only)
+    62, 63, 64, 65, 66, 67, 68, 69, // PAN1-PAN8 — overridden by pcmPan
+    70, 71,     // UNLEARN, ECONOMY_MODE — removed no-ops
+    73, 74, 75, // PW_ENV, PW_ENV_BOTH, ENV_PITCH_BOTH — osc PW/pitch
+    77, 78,     // PW_OSC2_OFS, LEVEL_DIF — osc PW offset / osc level slop
+]);
+
+// Control IDs for NEW OB-Xf params (sentinel idx ≥ 200) and special widgets
+// that don't affect PCM drums.
+const DRUM_INACTIVE_IDS = new Set<string>([
+    // NEW params — osc-only:
+    "Osc2Keytrack", "EnvToPitchInvert", "EnvToPWInvert",
+    "RingModVol", "NoiseColor",
+    "UnisonVoices", "VoiceReassign",
+    "VibratoWave",
+    "LFO2ToOsc1Pitch", "LFO2ToOsc2Pitch", "LFO2ToOsc1PW", "LFO2ToOsc2PW",
+    // Special widgets — osc/mixer decorative labels:
+    "Osc1TriangleLabel", "Osc1PulseLabel", "Osc2TriangleLabel", "Osc2PulseLabel",
+]);
+
 function resolveLegacyIndex(c: ControlSpec): number {
     const streamId = ID_ALIASES[c.id] ?? c.id;
     const legacy = idToLegacyIndex.get(streamId);
@@ -760,6 +798,7 @@ export function buildObxdSynthUi(
     // helpers keep working unchanged. A targeted (drum) build keeps its cache
     // strictly local so it never pollutes the Synth view's module-level state.
     const controls: ControlHandle[] = [];
+    const drumMode = !!target;
     if (!target) {
         cachedControls = controls;
     }
@@ -787,7 +826,8 @@ export function buildObxdSynthUi(
 
     // Static label/background SVGs (underneath controls, above background.svg).
     const staticLabels = obxfControls.filter(c =>
-        c.paramBound === false && c.asset && c.asset.startsWith("label-"));
+        c.paramBound === false && c.asset && c.asset.startsWith("label-") &&
+        !(drumMode && (c.section === Section.Oscillators || c.section === Section.Mixer || c.section === Section.Voice || c.section === Section.MPE)));
     for (const c of staticLabels) {
         const el = document.createElement("div");
         el.style.position = "absolute";
@@ -809,7 +849,8 @@ export function buildObxdSynthUi(
         }
     }
 
-    // Voice LEDs (32 per instance, bottom-right of panel).
+    // Voice LEDs (32 per instance, bottom-right of panel). Skipped in drum mode.
+    if (!drumMode) {
     for (const def of VOICE_LED_DEFS) {
         const led = document.createElement("div");
         led.style.cssText = `position: absolute; left: ${def.x}px; top: ${def.y}px; width: 9px; height: 9px; overflow: hidden; pointer-events: none; background-image: url(/obxf-assets/${def.asset}.svg); background-repeat: no-repeat; background-size: 100% auto; opacity: 0.2;`;
@@ -829,9 +870,12 @@ export function buildObxdSynthUi(
         ledRafId = requestAnimationFrame(updateVoiceLeds);
     }
     if (voiceLeds.length > 0) updateVoiceLeds();
+    }
 
     // Parameter-bound controls (the 104) — ALL directly on the panel.
-    const paramBound = obxfControls.filter(c => c.paramBound !== false);
+    const paramBound = obxfControls.filter(c =>
+        c.paramBound !== false &&
+        !(drumMode && (DRUM_INACTIVE_INDICES.has(resolveLegacyIndex(c)) || DRUM_INACTIVE_IDS.has(c.id))));
     for (const c of paramBound) {
         const legacyIdx = resolveLegacyIndex(c);
         const isNew = legacyIdx >= NEW_PARAM_BASE;
@@ -864,9 +908,11 @@ export function buildObxdSynthUi(
 
     // Interactive special widgets (programmer buttons, MPE, etc.).
     const skipIds = new Set(["midiLearnButton", "patchNameLabel", "patchNumberMenu",
-        "aboutButton", "mtsSettingsButton", "settingsButton", "mtsDynamicButton", "mtsStatusLabel"]);
+        "aboutButton", "mtsSettingsButton", "settingsButton", "mtsDynamicButton", "mtsStatusLabel",
+        "lfo1SelectButton", "lfo2SelectButton"]);
     const specials = obxfControls.filter(c =>
-        c.paramBound === false && c.asset && !c.asset.startsWith("label-") && !skipIds.has(c.id));
+        c.paramBound === false && c.asset && !c.asset.startsWith("label-") && !skipIds.has(c.id) &&
+        !(drumMode && (DRUM_INACTIVE_IDS.has(c.id) || c.section === Section.Oscillators || c.section === Section.Mixer || c.section === Section.Programmer || c.section === Section.MPE || c.section === Section.Global || c.section === Section.Control || c.section === Section.Voice)));
     for (const c of specials) {
         const dom = buildSpecialWidget(c);
         if (dom) {
