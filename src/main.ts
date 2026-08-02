@@ -119,11 +119,25 @@ function switchPanel(view: "classic" | "modern" | "synth" | "drums") {
     }
 }
 
+const VIEW_ORDER = ["classic", "modern", "synth", "drums"] as const;
+let currentViewIdx = 0;
+
 function setupViewToggle() {
     const toggle = document.getElementById("view-toggle") as HTMLSelectElement | null;
     if (!toggle) return;
     toggle.addEventListener("change", () => {
-        switchPanel(toggle.value as "classic" | "modern" | "synth" | "drums");
+        currentViewIdx = VIEW_ORDER.indexOf(toggle.value as typeof VIEW_ORDER[number]);
+        switchPanel(VIEW_ORDER[currentViewIdx]);
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key !== "Tab") return;
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+        e.preventDefault();
+        currentViewIdx = (currentViewIdx + (e.shiftKey ? -1 : 1) + VIEW_ORDER.length) % VIEW_ORDER.length;
+        const view = VIEW_ORDER[currentViewIdx];
+        toggle.value = view;
+        switchPanel(view);
     });
 }
 
