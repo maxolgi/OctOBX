@@ -240,6 +240,48 @@ engine is NOT compiled unchanged — it is **curated** into the browser build:
   and mirrors their values in `g_new_param_mirror` so the knob UI syncs
   correctly after `.fxp` load / instance switch.
 
+## PCM drum engine
+
+Instance 9 of the OB-Xf synth is the dedicated drum sampler: 32-voice
+polyphony, 8 pads × 4 layers. PCM samples are loaded as float mono arrays into
+`pcmBank[8][4]` in `Motherboard.h`. When a MIDI note mapped to a pad arrives,
+`setNoteOn()` assigns voices to all enabled layers (layered, NOT
+round-robin). Each voice plays its PCM sample through the OB-Xf filter + amp
+chain (independent from the oscillator path).
+
+**C-side data flow:**
+
+- `Motherboard::assignPcmLayer(v, pad, layer)` stamps the voice: sets
+  `pcmActive=true`, `pcmData`/`pcmLen` from `pcmBank`, `pcmGain`/`pcmPan`/
+  `pcmRate` from the layer def, and applies the layer's independent filter
+  (cutoff/res/mode) + amp envelope (ADSR).
+- `Voice::ProcessSample()` linearly interpolates the PCM buffer at
+  `pcmPos += pcmRate`, crossfades with the oscillator output
+  (`osc = osc*(1-gain) + pcm*gain`), then runs the result through the filter
+  and amp as usual.
+- Choke groups (`pcmChokeGroup[8]`) allow classic hi-hat cut behavior — a
+  new hit on a pad in the same choke group stops all prior voices in that
+  group before playing.
+
+**Param routing (two paths):**
+
+1. **Global/structural params** (Volume, HQ, LFO1 rate/wave) → route live to
+   instance 9 via `apply_param_instance(9, idx, v)` when
+   `obxd_set_drum_layer_param` detects `is_global_drum_param(idx)`.
+2. **Voice-level params** (filter, envs, LFO routings) → stored in
+   `g_drum_layer_params[pad][layer][idx]`, applied to each triggered voice
+   on the next note-on (via `apply_drum_layer_params_for_instance`).
+
+**Per-layer Gain, Pan, Pitch** bypass `g_drum_layer_params` entirely — they
+are PCM-specific fields in `pcmBank[pad][layer]` (C side) and `DrumLayer`
+objects (TS side). Pushed via `sendLayerParams` → `set_pcm_layer` →
+`setPcmLayerParams`. Pitch knob (0..1) maps to playback rate
+`2^((v-0.5)*2)` (±1 octave, 0.5 = original).
+
+**Kit presets** (`drum-kits.ts`) source samples from the Public Domain
+smpldsnds CDN. Secondary layers default to `gain: 0.55, filterCutoff: 0.8`
+(quieter + darker). Closed HH + Open HH share choke group 0.
+
 ## eCos compatibility shim
 
 `wasm/hal_linux.h` + `wasm/hal_wasm.c` provide all the eCos types, macros, and
@@ -261,12 +303,13 @@ in `defs_general.h`). Don't rely on a Win32-style `HANDLE` here.
 Browser (COOP/COEP/CORP cross-origin isolated)
 ├── Main Thread
 │   ├── Octopus UI (classic panel or modern grid)
+│   ├── Drum UI (kit selector, 8 pads × 4 layers, knob strips)
 │   ├── MIR rendering (60Hz RAF → reads WASM heap via HEAPU8)
 │   ├── OB-Xf rack + editor UI (instance selector, knobs, meters, .fxp loader, MIDI-learn)
 │   ├── Single 60Hz MIDI drain loop (RAF) → fans each batch out to:
 │   │   • HardwareMidiOutput  → Web MIDI output port
 │   │   • OB-Xf bridge (obxd-bridge.ts) → AudioWorklet (per-instance)
-│   └── Transport controls + state persistence
+│   └── Transport controls + state persistence (Tab cycles 4 views)
 ├── WASM Module — Octopus engine  (octopus_wasm.wasm)
 │   ├── Firmware core (~50k lines, unchanged)
 │   ├── hal_wasm.c / midi_wasm.c / main_wasm.c
@@ -274,7 +317,10 @@ Browser (COOP/COEP/CORP cross-origin isolated)
     └── Sequencer thread (48 PPQN, nanosleep timing)
 
 AudioWorklet — OB-Xf synth  (obxd_wasm.wasm, separate emcc build)
-└── main_obxd.cpp — 10 SynthEngine instances summed + soft-clipped
+├── main_obxd.cpp — 10 SynthEngine instances summed + soft-clipped
+│   └── Instance 9 = dedicated drum sampler (32 voices, 8 pads × 4 layers,
+│       PCM sample playback mixed into the OB-Xf filter/amp chain)
+└── PCM sample bank (pcmBank[8][4] in Motherboard.h, float mono samples)
 ```
 
 - **pthreads** — the sequencer runs in a Web Worker via Emscripten pthreads.
@@ -321,6 +367,14 @@ per-channel MPE routing through the bridge is wired in `obxd-bridge.ts`). All
 instance-aware except `obxd_panic_all`. See README "OB-Xf synth — WASM source"
 for the full table.
 
+**OB-Xf PCM drum engine** (`wasm/obxd/main_obxd.cpp`):
+`obxd_load_pcm`, `obxd_set_pcm_layer` (gain/cutoff/res/mode/amp-env/pan/pitch),
+`obxd_set_pcm_note_map`, `obxd_set_pcm_layer_count`, `obxd_set_pcm_choke`,
+`obxd_clear_pcm`, `obxd_set_drum_layer_param` / `obxd_get_drum_layer_param`
+(per-layer voice-level param mirror for instance 9; global params route live
+via `apply_param_instance(9, …)`). Instance 9 is the dedicated drum instance
+(32 voices, 8 pads × 4 layers). See "PCM drum engine" section below.
+
 > **Note on reserved CCs:** mod wheel (CC 1), sustain pedal (CC 64), all-sound-off
 > (CC 120), and all-notes-off (CC 123) are available BOTH inside `obxd_midi_in()`'s
 > CC switch (CC 1 → `processModWheel`, CC 64 → `sustainOn()`/`sustainOff()`, CC 120 →
@@ -349,7 +403,7 @@ sequentially after setting the running status byte.
 
 | File | Role |
 |---|---|
-| `main.ts` | Entry point: SharedArrayBuffer check → load WASM → `engine_init()` → build UI → transport/persistence → hardware MIDI → OB-XD rack. The single 60Hz MIDI drain loop is started before the panel so events flow before any DOM update consumes the frame. |
+| `main.ts` | Entry point: SharedArrayBuffer check → load WASM → `engine_init()` → build UI → transport/persistence → hardware MIDI → OB-XD rack → drum module mount. The single 60Hz MIDI drain loop is started before the panel so events flow before any DOM update consumes the frame. Tab key cycles the 4 views (classic → modern → synth → drums); Shift+Tab reverses. Skips when focus is on a form control (`<input>`/`<select>`/`<textarea>`). |
 | `octopus-types.ts` | TS interface matching the C `EMSCRIPTEN_KEEPALIVE` exports |
 | `octopus-module.ts` | Loads the WASM module (dynamic `<script>`, `locateFile`, IDBFS mount attempt) |
 | `classic-panel.ts` | Faithful port of the Octopus control surface (same DOM/IDs as `web_gui.html`); direct WASM calls instead of WebSocket |
@@ -371,6 +425,10 @@ sequentially after setting the running status byte.
 | `obxd-awp-shim.js` | Plain JS prepended to emcc output; polyfills `self`/`location`/`fetch`/`performance` for AudioWorkletGlobalScope. |
 | `transport-sync.ts` | Wires PLAY/STOP/BPM to the Octopus engine + transport indicator. |
 | `state-persistence.ts` | Save/Load buttons → IDBFS sync |
+| `drum-rack.ts` | Drum module UI: kit selector, 8 pads × 4 layers with sample-name selectors + mute/enable toggles, and per-layer knob strips (48 controls: 8 global + 40 per-layer). SVG arc knobs with iOS-style toggle pills and tri-state LFO-routing pills. Layer section has Gain/Pan/Pitch knobs with custom dispatch (bypass `g_drum_layer_params`, update `DrumLayer` TS object + `pushLayer` → `set_pcm_layer`). `syncEditor`/`syncKnobStrips` re-seed knob positions from the worklet mirror on pad/layer switch. |
+| `drum-audio.ts` | Main-thread audio bootstrap for the drum module on OB-Xf instance 9 (32 voices). `loadDrumKit` fetches samples from smpldsnds CDN, decodes via `AudioContext.decodeAudioData`, posts float arrays to the worklet via `obxd_load_pcm`. Serialized via `kitLoadChain` promise chain (prevents concurrent loads). `sendLayerParams` pushes per-layer params (gain, filter, amp env, pan, pitch). `seedLayerMirror` seeds `g_drum_layer_params` on load. `pushLayer` re-sends one layer's full param set. |
+| `drum-state.ts` | Pure data layer: `DrumLayer` / `DrumPad` / `DrumKit` interfaces + factory functions. No project dependencies. `DrumLayer` fields: enabled, sampleName, gain, filterCutoff/Resonance/Mode, amp ADSR, pan, pitch (0..1, 0.5=original), muted, `_seeded` flag. |
+| `drum-kits.ts` | 10 drum-kit presets sourced from the Public Domain smpldsnds CDN. Each kit maps its samples onto 8 GM pads (Kick, Snare, Closed HH, Open HH, Tom Lo, Clap, Cowbell, Ride). Secondary layers get `gain: 0.55, filterCutoff: 0.8` (quieter + darker than primary `0.85 / 1.0`). Closed HH + Open HH share choke group 0. |
 
 Input conventions: `skey(key, press)` → `module._wasm_key_press(key, press)`;
 rotary knobs → `module._wasm_rotary(idx, dir)`; drag-paint step pads
