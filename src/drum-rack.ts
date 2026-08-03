@@ -3,8 +3,8 @@
  * selector / mute). */
 
 import { createObxdToggle } from "./obxd-knob";
-import type { DrumKit, DrumLayer } from "./drum-state";
-import { DRUM_KITS } from "./drum-kits";
+import type { DrumKit, DrumLayer, DrumPad } from "./drum-state";
+import { DRUM_KITS, SAMPLE_CATALOG } from "./drum-kits";
 import {
     initDrumMode,
     loadDrumKit,
@@ -12,6 +12,7 @@ import {
     previewPad,
     setDrumLayerParam,
     getDrumLayerParam,
+    reassertDrumInstanceStructural,
     DRUM_INSTANCE,
 } from "./drum-audio";
 import { setObxdInstanceParam } from "./obxd-audio";
@@ -41,9 +42,25 @@ const padDots: HTMLSpanElement[][] = [];
 // lets) so every get/set addresses the currently-selected drum layer at call
 // time. Built once; the editor is re-seeded via editorHandle.sync() whenever
 // the pad/layer selection changes.
+//
+// DENSE LAYER INDEXING: the C engine addresses g_drum_layer_params[pad][dense]
+// where dense packs enabled+sampled layers at 0,1,2,… We translate sparse
+// selectedLayer → dense here via denseLayerIndexOf(). For layers not in the
+// played set (disabled or sampleless), get returns -1 (syncKnobStrips'
+// `if (v >= 0) kh.setValue(v)` guard leaves the knob position untouched) and
+// set is a no-op (the tweak persists in TS but won't reach the engine until
+// the layer enters the played set).
 const drumTarget: ObxdParamTarget = {
-    get: (idx) => getDrumLayerParam(selectedPad, selectedLayer, idx),
-    set: (idx, v) => setDrumLayerParam(selectedPad, selectedLayer, idx, v),
+    get: (idx) => {
+        const dense = denseLayerIndexOf(currentKit.pads[selectedPad], selectedLayer);
+        if (dense < 0) return Promise.resolve(-1);
+        return getDrumLayerParam(selectedPad, dense, idx);
+    },
+    set: (idx, v) => {
+        const dense = denseLayerIndexOf(currentKit.pads[selectedPad], selectedLayer);
+        if (dense < 0) return;
+        setDrumLayerParam(selectedPad, dense, idx, v);
+    },
 };
 
 // --- Drum knob strips -----------------------------------------------------
@@ -511,7 +528,12 @@ export async function restoreDrumState(state: {
         renderLayerEditor();
     }
     try {
-        await initDrumMode();
+        // reassertDrumInstanceStructural runs initDrumMode AND re-asserts
+        // polyphony=32. Defensive: a prior synth-params restore (or stale
+        // localStorage) may have lowered polyphony below 2, which makes
+        // Motherboard's PCM Pass 1 assign only one voice per pad hit so
+        // stacked layers go silent.
+        await reassertDrumInstanceStructural();
         await loadDrumKit(currentKit);
         ready = true;
         if (statusEl) statusEl.textContent = "Ready - " + currentKit.name;
@@ -539,22 +561,48 @@ function cloneKit(kit: DrumKit): DrumKit {
     };
 }
 
-function collectSampleNames(): string[] {
-    const set = new Set<string>();
-    for (const pad of currentKit.pads) {
-        for (const l of pad.layers) {
-            if (l.sampleName) set.add(l.sampleName);
-        }
-    }
-    return Array.from(set).sort();
+/*
+ * Find the SAMPLE_CATALOG index whose source matches the layer's effective
+ * source URL (lyr.sourceUrl, falling back to the loaded kit's source).
+ * Returns 0 if no match (defensive — catalog is always non-empty).
+ */
+function catalogIndexForLayer(lyr: DrumLayer, kitSource: string): number {
+    const src = lyr.sourceUrl ?? kitSource;
+    const idx = SAMPLE_CATALOG.findIndex((c) => c.source === src);
+    return idx >= 0 ? idx : 0;
 }
 
 // Push the currently-selected layer's params to the engine. When the layer
 // is muted, force gain to 0 so the real gain is preserved on the layer obj
 // for when the user unmutes.
 function pushLayer(lyr: DrumLayer): void {
+    const dense = denseLayerIndexOf(currentKit.pads[selectedPad], selectedLayer);
+    if (dense < 0) return; // selected layer isn't in the played set (disabled or sampleless); engine write would land in a dead pcmBank slot
     const eff: DrumLayer = lyr.muted ? { ...lyr, gain: 0 } : lyr;
-    setLayerParam(selectedPad, selectedLayer, eff);
+    setLayerParam(selectedPad, dense, eff);
+}
+
+/*
+ * Translate a sparse TS layer index (0..3, position in DrumPad.layers[]) into
+ * the DENSE layer index the C engine expects. loadDrumKitImpl packs
+ * enabled+sampled layers at dense 0, 1, 2, … and the C-side setNoteOn iterates
+ * `0..pcmLayerCount-1` reading pcmBank[pad][dense]. A sparse layer that is
+ * disabled or has no sample isn't in the played set — return -1 so callers
+ * can short-circuit (no engine write means no dead-slot write that would be
+ * silently never read). Mirrors loadDrumKitImpl's iteration at
+ * src/drum-audio.ts:281 — keep in sync.
+ */
+function denseLayerIndexOf(pad: DrumPad, sparseIdx: number): number {
+    const target = pad.layers[sparseIdx];
+    if (!target) return -1;
+    if (target.enabled === false || !target.sampleName) return -1;
+    let dense = 0;
+    for (let i = 0; i < sparseIdx; i++) {
+        const l = pad.layers[i];
+        if (l.enabled === false || !l.sampleName) continue;
+        dense++;
+    }
+    return dense;
 }
 
 // --- Kit loading ----------------------------------------------------------
@@ -662,7 +710,13 @@ function buildUI(container: HTMLElement): void {
         const padIndex = i;
         btn.addEventListener("click", () => {
             selectedPad = padIndex;
-            selectedLayer = 0;
+            // Preserve selectedLayer across pad switches so the user can
+            // tweak the same layer index on every pad without re-selecting
+            // it each time. renderLayerButtons/Editor/syncEditor below will
+            // re-seed the UI for the new pad; if the currently-selected
+            // layer isn't playable on the new pad (disabled or sampleless),
+            // denseLayerIndexOf returns -1 and the knobs retain their
+            // previous positions harmlessly.
             refreshPadBank();
             renderLayerButtons();
             renderLayerEditor();
@@ -824,6 +878,13 @@ function renderLayerButtons(): void {
             const l = pad.layers[layerIndex];
             if (!l.enabled) {
                 l.enabled = true;
+                // Enabling a previously-disabled layer shifts the dense
+                // mapping for higher layers in this pad. Reset _seeded on
+                // every layer so the next reload re-seeds g_drum_layer_params
+                // at the new dense indices — otherwise stale params from the
+                // previously-disabled layer's slot would be applied to the
+                // now-enabled layer (see contextmenu handler for details).
+                for (const pl of pad.layers) pl._seeded = false;
                 // Reload the full kit so the layer list is re-compacted to
                 // dense indices and the newly-enabled layer gets its PCM data
                 // pushed into pcmBank. setPadLayerCount alone left gaps + a
@@ -847,6 +908,17 @@ function renderLayerButtons(): void {
             ev.preventDefault();
             const l = pad.layers[layerIndex];
             l.enabled = !l.enabled;
+            // Toggling a layer's enabled state shifts the dense mapping for
+            // every other layer in this pad (e.g. disabling L1 makes L2 shift
+            // from dense 1 to dense 0). The _seeded flag tracks "has this
+            // layer's params been seeded into g_drum_layer_params" — but it
+            // doesn't track WHICH dense slot they were seeded into. Without
+            // resetting _seeded here, the next reload would skip seeding and
+            // leave stale params at the new dense slots (the disabled layer's
+            // old params would be applied to whatever layer now occupies that
+            // dense slot — e.g. L1's low cutoff silencing L2). Reset on every
+            // layer in the pad so they all re-seed at their new dense indices.
+            for (const pl of pad.layers) pl._seeded = false;
             refreshPadBank();
             renderLayerButtons();
             // Reload the full kit so the layer list is re-compacted to dense
@@ -868,31 +940,104 @@ function renderLayerButtons(): void {
 }
 
 function renderLayerEditor(): void {
-    // Drum-specific controls only (sample selector + mute). The full OB-Xf
-    // editor lives in obxfEditorHost (built once in buildUI) and is re-seeded
-    // via editorHandle.sync() on selection change — NOT rebuilt here.
+    // Drum-specific controls only (sample-kit + sample selectors + mute).
+    // The full OB-Xf editor lives in obxfEditorHost (built once in buildUI)
+    // and is re-seeded via editorHandle.sync() on selection change — NOT
+    // rebuilt here.
     drumControlsEl.replaceChildren();
     const lyr = currentKit.pads[selectedPad].layers[selectedLayer];
 
-    // Sample selector (reassign among samples already present in the kit).
+    // --- Sample-kit dropdown -------------------------------------------
+    // Selects which kit's samples populate the sample dropdown. Defaults to
+    // the catalog entry matching the layer's effective source URL so the
+    // current sample's name appears in the dropdown on first render. When
+    // the user changes kit, the sample dropdown auto-selects the new kit's
+    // FIRST sample (per design choice — see plan), and both sampleName and
+    // sourceUrl are updated so the loader fetches from the chosen kit.
+    const kitLabel = document.createElement("span");
+    kitLabel.textContent = "Kit:";
+
+    const kitSelect = document.createElement("select");
+    kitSelect.title = "Sample source kit";
+    SAMPLE_CATALOG.forEach((c, i) => {
+        const o = document.createElement("option");
+        o.value = String(i);
+        o.textContent = c.name;
+        kitSelect.appendChild(o);
+    });
+    kitSelect.value = String(catalogIndexForLayer(lyr, currentKit.source));
+
+    // --- Sample dropdown -----------------------------------------------
+    // Populated from whichever catalog entry the kit dropdown points at.
+    // Includes a leading "--" option to clear the layer's sample (sets
+    // sampleName = null; sourceUrl is preserved so the next sample pick
+    // returns to the same kit).
     const sampleLabel = document.createElement("span");
     sampleLabel.textContent = "Sample:";
 
     const sampleSelect = document.createElement("select");
-    const noneOpt = document.createElement("option");
-    noneOpt.value = "";
-    noneOpt.textContent = "--";
-    sampleSelect.appendChild(noneOpt);
-    for (const s of collectSampleNames()) {
-        const o = document.createElement("option");
-        o.value = s;
-        o.textContent = s;
-        sampleSelect.appendChild(o);
-    }
-    sampleSelect.value = lyr.sampleName ?? "";
+    sampleSelect.title = "Sample (PCM audio file)";
+
+    const repopulateSamples = (catalogIdx: number, selectedName: string | null): void => {
+        sampleSelect.replaceChildren();
+        const noneOpt = document.createElement("option");
+        noneOpt.value = "";
+        noneOpt.textContent = "--";
+        sampleSelect.appendChild(noneOpt);
+        const entry = SAMPLE_CATALOG[catalogIdx];
+        for (const s of entry.samples) {
+            const o = document.createElement("option");
+            o.value = s;
+            o.textContent = s;
+            sampleSelect.appendChild(o);
+        }
+        sampleSelect.value = selectedName ?? "";
+        // If the requested sample isn't in this catalog, the select falls
+        // back to "" (--); callers handle that case explicitly.
+        if (selectedName && sampleSelect.value !== selectedName) {
+            sampleSelect.value = "";
+        }
+    };
+    repopulateSamples(parseInt(kitSelect.value, 10) || 0, lyr.sampleName);
+
+    // --- Kit dropdown change handler -----------------------------------
+    // On kit change: auto-pick the new kit's FIRST sample (no smart-match,
+    // no "--" — per design choice), set sourceUrl to the new kit, reload.
+    kitSelect.addEventListener("change", () => {
+        const idx = parseInt(kitSelect.value, 10) || 0;
+        const entry = SAMPLE_CATALOG[idx];
+        const firstSample = entry.samples[0] ?? null;
+        lyr.sampleName = firstSample;
+        lyr.sourceUrl = entry.source;
+        repopulateSamples(idx, firstSample);
+        void (async () => {
+            try {
+                await loadDrumKit(currentKit);
+                ready = true;
+            } catch (e) {
+                console.warn("[drum] reload on kit change failed:", e);
+            }
+            refreshPadBank();
+            renderLayerButtons();
+        })();
+    });
+
+    // --- Sample dropdown change handler --------------------------------
+    // On sample change: keep the layer's existing synth params intact
+    // (filter/ADSR/gain/pan/pitch) — pure sample swap. Sets sampleName +
+    // sourceUrl so the loader fetches from the catalog entry shown in the
+    // kit dropdown. Picking "--" clears sampleName (sourceUrl is preserved
+    // so the next pick returns to the same kit).
     sampleSelect.addEventListener("change", () => {
         const v = sampleSelect.value;
-        lyr.sampleName = v === "" ? null : v;
+        const idx = parseInt(kitSelect.value, 10) || 0;
+        const entry = SAMPLE_CATALOG[idx];
+        if (v === "") {
+            lyr.sampleName = null;
+        } else {
+            lyr.sampleName = v;
+            lyr.sourceUrl = entry.source;
+        }
         void (async () => {
             try {
                 await loadDrumKit(currentKit);
@@ -905,8 +1050,8 @@ function renderLayerEditor(): void {
         })();
     });
 
-    // Mute toggle (drum-specific; routes through the sample-layer gain path,
-    // not the OB-Xf param target).
+    // --- Mute toggle (unchanged) ---------------------------------------
+    // Routes through the sample-layer gain path, not the OB-Xf param target.
     const muteTog = createObxdToggle({
         idx: 0,
         label: "Mute",
@@ -928,6 +1073,8 @@ function renderLayerEditor(): void {
     muteLabel.className = "drum-mute-label";
     muteLabel.textContent = "Mute";
 
+    drumControlsEl.appendChild(kitLabel);
+    drumControlsEl.appendChild(kitSelect);
     drumControlsEl.appendChild(sampleLabel);
     drumControlsEl.appendChild(sampleSelect);
     drumControlsEl.appendChild(muteTog);

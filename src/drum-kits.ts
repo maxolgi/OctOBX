@@ -187,7 +187,7 @@ export const DRUM_KITS: DrumKit[] = [
         ]),
     },
     {
-        name: "Yamaha MR-10",
+        name: "Yamaha Mr-10",
         source: "https://smpldsnds.github.io/drum-machines/Yamaha-MR10/",
         pads: buildPads([
             ["kick", "kick1"],
@@ -201,3 +201,25 @@ export const DRUM_KITS: DrumKit[] = [
         ]),
     },
 ];
+
+/*
+ * SAMPLE_CATALOG — flat per-kit sample list derived from DRUM_KITS, used by
+ * the layer-editor "Sample kit" + "Sample" dropdowns to mix samples across
+ * kits. Each entry mirrors a DRUM_KITS row but exposes only the unique
+ * sample names that kit offers (deduped across pads/layers, sorted). The
+ * `source` field is the URL prefix layers store in DrumLayer.sourceUrl when
+ * the user picks one of these samples.
+ */
+export interface KitSampleCatalogEntry {
+    name: string;
+    source: string;
+    samples: string[];
+}
+
+export const SAMPLE_CATALOG: KitSampleCatalogEntry[] = DRUM_KITS.map((k) => ({
+    name: k.name,
+    source: k.source,
+    samples: Array.from(new Set(
+        k.pads.flatMap((p) => p.layers.map((l) => l.sampleName).filter((n): n is string => !!n)),
+    )).sort(),
+}));

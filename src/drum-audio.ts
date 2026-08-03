@@ -22,9 +22,17 @@ import {
     getObxdNode,
     sendObxdInstanceMidi,
     setObxdInstanceParam,
+    setObxdInstancePolyphony,
 } from "./obxd-audio";
 
 export const DRUM_INSTANCE = 9;  // fixed OB-Xf instance reserved for drums
+
+/*
+ * MAX_VOICES mirrors the C-side constant in Voice.h (and the value
+ * obxd_init hardcodes for the drum instance). Kept private to this module
+ * — callers use reassertDrumInstanceStructural() rather than passing it.
+ */
+const MAX_VOICES = 32;
 
 // Legacy ParamsEnum.h indices used to configure the engine for sample
 // playback (sources: obxf-param-mappings.ts — frozen ObxdParam enum).
@@ -172,6 +180,48 @@ export async function initDrumMode(): Promise<void> {
 }
 
 /*
+ * Re-assert instance 9's structural settings after a state-restore round-trip.
+ *
+ * restoreAllSynthParams faithfully replays all 108 params for all 10 instances,
+ * including instance 9 — but several of those params are structural (polyphony,
+ * oscillator mutes, amp-env defaults) that initDrumMode owns and the user never
+ * meaningfully edits. The replay clobbers them with stale mirror values that
+ * decode to:
+ *   - VOICE_COUNT (idx 3): polyphony 1 (if saved as 0.0) or 8 (if 1.0), never 32
+ *     → with polyphony=1, Motherboard's PCM Pass 1 only assigns ONE voice per
+ *       pad hit regardless of pcmLayerCount, so only the first enabled layer
+ *       is audible (the second sits silent in pcmBank[pad][1]).
+ *   - OSC1/OSC2/NOISE_MIX (idx 40/41/42): unmuted oscillators mix into the
+ *       drum voice alongside the PCM, colorating hits with raw osc output.
+ *   - AMP_ATTACK/RELEASE (idx 51/54): default envelopes that wash out drum
+ *       transients.
+ *
+ * Calling this after a synth-restore resets those six stray writes to the
+ * values initDrumMode intended. No-op for instances 0..8 (their structural
+ * state is owned by the user, not initDrumMode).
+ */
+export async function reassertDrumInstanceStructural(): Promise<void> {
+    try {
+        await initDrumMode();
+        setObxdInstancePolyphony(DRUM_INSTANCE, MAX_VOICES);
+    } catch (e) {
+        console.warn("[drum] reassertDrumInstanceStructural failed:", e);
+    }
+}
+
+/*
+ * Resolve the full fetch URL for a layer's sample. Layers whose sourceUrl is
+ * set (via the layer-editor sample-kit dropdown) load from that kit's CDN
+ * prefix; layers whose sourceUrl is undefined (factory kit templates +
+ * pre-feature saved state) fall back to the currently-loaded kit's source,
+ * preserving the legacy behavior.
+ */
+function layerSampleUrl(lyr: DrumLayer, kitSource: string): string {
+    const source = lyr.sourceUrl ?? kitSource;
+    return source + lyr.sampleName + ".ogg";
+}
+
+/*
  * Load a full drum kit into instance 9: clear existing PCM, fetch + decode
  * each unique enabled sample once, push the PCM + per-layer params, then
  * wire up note mapping, layer counts, and choke groups.
@@ -181,20 +231,20 @@ async function loadDrumKitImpl(kit: DrumKit): Promise<void> {
 
     const ctx = getOrCreateAudioContext();
 
-    // Collect unique enabled sample names (dedup across pads/layers).
-    // Pads themselves are always present; only layers are toggleable.
-    const sampleNames = new Set<string>();
+    // Collect unique enabled sample URLs (dedup across pads/layers AND across
+    // mixed kit sources — two layers can share a sampleName but point at
+    // different kit sourceUrl prefixes, so the URL is the correct dedup key).
+    const sampleUrls = new Set<string>();
     for (const pad of kit.pads) {
         for (const lyr of pad.layers) {
             if (lyr.enabled === false) continue;
-            if (lyr.sampleName) sampleNames.add(lyr.sampleName);
+            if (lyr.sampleName) sampleUrls.add(layerSampleUrl(lyr, kit.source));
         }
     }
 
-    // Fetch + decode each unique sample once, keyed by full URL.
+    // Fetch + decode each unique sample URL once.
     const decoded = new Map<string, Float32Array>();
-    for (const name of sampleNames) {
-        const url = kit.source + name + ".ogg";
+    for (const url of sampleUrls) {
         let pcm: Float32Array | undefined = sampleCache.get(url);
         if (!pcm) {
             try {
@@ -210,7 +260,7 @@ async function loadDrumKitImpl(kit: DrumKit): Promise<void> {
                 continue;
             }
         }
-        decoded.set(name, pcm);
+        decoded.set(url, pcm);
     }
 
     // Push PCM + layer params for every pad's enabled layers.
@@ -226,7 +276,8 @@ async function loadDrumKitImpl(kit: DrumKit): Promise<void> {
         let loadedIdx = 0;
         for (let l = 0; l < pad.layers.length; l++) {
             const lyr = pad.layers[l];
-            const pcm = lyr.sampleName ? decoded.get(lyr.sampleName) : undefined;
+            const url = lyr.sampleName ? layerSampleUrl(lyr, kit.source) : null;
+            const pcm = url ? decoded.get(url) : undefined;
             if (lyr.enabled === false || !pcm) continue;
             postDrum({
                 type: "load_pcm",

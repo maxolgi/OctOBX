@@ -5,6 +5,12 @@
 export interface DrumLayer {
     enabled: boolean;
     sampleName: string | null;
+    // Source URL prefix of the kit the sample came from. When undefined,
+    // loadDrumKit falls back to the loaded kit's `source` (legacy behavior).
+    // Set when the user picks a sample from a *different* kit via the
+    // layer-editor sample-kit dropdown, so layers in one kit can mix samples
+    // sourced from any of the DRUM_KITS.
+    sourceUrl?: string;
     gain: number;           // 0..1
     filterCutoff: number;   // 0..1
     filterResonance: number;// 0..1
