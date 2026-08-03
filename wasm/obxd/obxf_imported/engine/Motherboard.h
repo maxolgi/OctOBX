@@ -82,7 +82,7 @@ class Motherboard
     struct PcmLayerDef {
         float* data{nullptr};
         int    len{0};
-        float  gain{3.f};
+        float  gain{5.f};
         float  cutoff{1.f};       // normalized 0..1 (same space as processFilterCutoff)
         float  resonance{0.f};    // normalized 0..1
         float  filterMode{0.f};   // normalized 0..1

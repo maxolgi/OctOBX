@@ -170,7 +170,7 @@ class Voice
     int    pcmLen{0};             // frames in buffer
     float  pcmPos{0.f};           // playback position (float for interpolation)
     float  pcmRate{1.f};          // playback rate multiplier (1.0 = original pitch)
-    float  pcmGain{3.f};          // absolute PCM level multiplier (0 = silent, 3 = match osc level, up to 10)
+    float  pcmGain{5.f};          // absolute PCM level multiplier (0 = silent, 5 = default, up to 10)
     float  pcmPan{0.5f};          // per-voice pan (overrides pannings[])
     int    pcmChokeGroup{-1};     // -1 = none, 0..7 = group
     int    pcmPadId{-1};          // which pad triggered this voice (for choke)

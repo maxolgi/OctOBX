@@ -139,7 +139,6 @@ interface DrumKnobDef {
     triState?: boolean; // if true, render as Off/On/Inv tri-state button (LFO routings)
     customSet?: (v: number) => void;
     customGet?: () => number;
-    valueFmt?: (v01: number) => string;  // format knob's 0..1 position for the value label
 }
 
 const GLOBAL_KNOBS: DrumKnobDef[] = [
@@ -235,10 +234,9 @@ const LAYER_GROUPS: DrumKnobGroup[] = [
 // update the DrumLayer TS object + pushLayer (set_pcm_layer message).
 const LAYER_DIRECT_KNOBS: DrumKnobDef[] = [
     {
-        label: "Level", idx: -1, default: 0.255,
+        label: "Level", idx: -1, default: 0.5,
         customSet: (v) => { const l = currentKit.pads[selectedPad].layers[selectedLayer]; l.gain = v * 10; pushLayer(l); },
         customGet: () => currentKit.pads[selectedPad].layers[selectedLayer].gain / 10,
-        valueFmt: (v) => (v * 10).toFixed(1) + "x",
     },
     {
         label: "Pan", idx: -1, default: 0.5,
@@ -386,12 +384,8 @@ function buildDrumKnob(def: DrumKnobDef, isGlobal: boolean): DrumKnobHandle {
     labelEl.className = "drum-strip-label";
     labelEl.textContent = def.label;
 
-    const valueEl = def.valueFmt ? document.createElement("div") : null;
-    if (valueEl) valueEl.className = "drum-strip-value";
-
     wrap.appendChild(svg);
     wrap.appendChild(labelEl);
-    if (valueEl) wrap.appendChild(valueEl);
 
     let value = def.customGet ? def.customGet() : (def.default ?? 0.5);
 
@@ -404,7 +398,6 @@ function buildDrumKnob(def: DrumKnobDef, isGlobal: boolean): DrumKnobHandle {
         indicator.setAttribute("y1", String(base.y));
         indicator.setAttribute("x2", String(tip.x));
         indicator.setAttribute("y2", String(tip.y));
-        if (valueEl && def.valueFmt) valueEl.textContent = def.valueFmt(value);
     };
 
     const setValue = (v: number): void => {
@@ -1251,14 +1244,6 @@ function ensureStyle(): void {
     text-align: center;
     font-family: monospace;
     white-space: nowrap;
-}
-.drum-strip-value {
-    font-size: 8px;
-    color: #0c0;
-    text-align: center;
-    font-family: monospace;
-    white-space: nowrap;
-    line-height: 1;
 }
 .drum-strip-toggle {
     width: 44px;
