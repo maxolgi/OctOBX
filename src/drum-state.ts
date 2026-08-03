@@ -45,7 +45,7 @@ export function createDefaultLayer(): DrumLayer {
     return {
         enabled: false,
         sampleName: null,
-        gain: 5.0,
+        gain: 3.0,
         filterCutoff: 1.0,
         filterResonance: 0.0,
         filterMode: 0.0,

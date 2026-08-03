@@ -25,7 +25,7 @@ function layerFor(padIndex: number, sampleName: string, secondary: boolean): Dru
     return {
         enabled: true,
         sampleName,
-        gain: secondary ? 3.25 : 5.0,
+        gain: secondary ? 2.0 : 3.0,
         filterCutoff: secondary ? 0.8 : 1.0,
         filterResonance: 0.0,
         filterMode: 0.0,
