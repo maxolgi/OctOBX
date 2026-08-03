@@ -356,7 +356,11 @@ class Voice
             int i1 = (i0 + 1 < pcmLen) ? i0 + 1 : i0;
             float frac = pcmPos - (float)i0;
             float pcmOut = pcmData[i0] * (1.f - frac) + pcmData[i1] * frac;
-            oscSample = oscSample * (1.f - pcmGain) + pcmOut * pcmGain;
+            // Apply the same 3x boost OscillatorBlock gives its output (line 296:
+            // `return out * 3.f`), so PCM enters the filter at the same level an
+            // oscillator at mix=1.0 would — without it, normalized PCM samples
+            // (~1.0 peak) are ~3x quieter than a saw at full mix (~0.5 * 3 = 1.5).
+            oscSample = oscSample * (1.f - pcmGain) + (pcmOut * 3.f) * pcmGain;
             pcmPos += pcmRate;
         }
         // ──────────────────────────────────────────────────────────────

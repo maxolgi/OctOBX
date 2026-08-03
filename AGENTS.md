@@ -257,7 +257,10 @@ chain (independent from the oscillator path).
   (cutoff/res/mode) + amp envelope (ADSR).
 - `Voice::ProcessSample()` linearly interpolates the PCM buffer at
   `pcmPos += pcmRate`, crossfades with the oscillator output
-  (`osc = osc*(1-gain) + pcm*gain`), then runs the result through the filter
+  (`osc = osc*(1-gain) + pcm*3*gain` — the `*3` matches OscillatorBlock's
+  internal `return out * 3.f` boost so PCM enters the filter at the same
+  level an oscillator at mix=1.0 would), then runs the result through
+  the filter
   and amp as usual.
 - Choke groups (`pcmChokeGroup[8]`) allow classic hi-hat cut behavior — a
   new hit on a pad in the same choke group stops all prior voices in that
