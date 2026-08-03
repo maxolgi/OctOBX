@@ -170,7 +170,7 @@ class Voice
     int    pcmLen{0};             // frames in buffer
     float  pcmPos{0.f};           // playback position (float for interpolation)
     float  pcmRate{1.f};          // playback rate multiplier (1.0 = original pitch)
-    float  pcmGain{1.f};          // mix level (1.0 = pure PCM, 0.0 = pure osc)
+    float  pcmGain{3.f};          // absolute PCM level multiplier (0 = silent, 3 = match osc level, up to 10)
     float  pcmPan{0.5f};          // per-voice pan (overrides pannings[])
     int    pcmChokeGroup{-1};     // -1 = none, 0..7 = group
     int    pcmPadId{-1};          // which pad triggered this voice (for choke)
@@ -356,11 +356,7 @@ class Voice
             int i1 = (i0 + 1 < pcmLen) ? i0 + 1 : i0;
             float frac = pcmPos - (float)i0;
             float pcmOut = pcmData[i0] * (1.f - frac) + pcmData[i1] * frac;
-            // Apply the same 3x boost OscillatorBlock gives its output (line 296:
-            // `return out * 3.f`), so PCM enters the filter at the same level an
-            // oscillator at mix=1.0 would — without it, normalized PCM samples
-            // (~1.0 peak) are ~3x quieter than a saw at full mix (~0.5 * 3 = 1.5).
-            oscSample = oscSample * (1.f - pcmGain) + (pcmOut * 3.f) * pcmGain;
+            oscSample += pcmOut * pcmGain;
             pcmPos += pcmRate;
         }
         // ──────────────────────────────────────────────────────────────

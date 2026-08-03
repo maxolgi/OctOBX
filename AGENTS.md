@@ -256,11 +256,10 @@ chain (independent from the oscillator path).
   `pcmRate` from the layer def, and applies the layer's independent filter
   (cutoff/res/mode) + amp envelope (ADSR).
 - `Voice::ProcessSample()` linearly interpolates the PCM buffer at
-  `pcmPos += pcmRate`, crossfades with the oscillator output
-  (`osc = osc*(1-gain) + pcm*3*gain` — the `*3` matches OscillatorBlock's
-  internal `return out * 3.f` boost so PCM enters the filter at the same
-  level an oscillator at mix=1.0 would), then runs the result through
-  the filter
+  `pcmPos += pcmRate`, adds it to the oscillator output
+  (`oscSample += pcmOut * pcmGain` where `pcmGain` is an absolute level
+  multiplier, 0..10 — default 3.0 to match OscillatorBlock's internal
+  `return out * 3.f` boost), then runs the result through the filter
   and amp as usual.
 - Choke groups (`pcmChokeGroup[8]`) allow classic hi-hat cut behavior — a
   new hit on a pad in the same choke group stops all prior voices in that
@@ -275,11 +274,13 @@ chain (independent from the oscillator path).
    `g_drum_layer_params[pad][layer][idx]`, applied to each triggered voice
    on the next note-on (via `apply_drum_layer_params_for_instance`).
 
-**Per-layer Gain, Pan, Pitch** bypass `g_drum_layer_params` entirely — they
+**Per-layer Level, Pan, Pitch** bypass `g_drum_layer_params` entirely — they
 are PCM-specific fields in `pcmBank[pad][layer]` (C side) and `DrumLayer`
 objects (TS side). Pushed via `sendLayerParams` → `set_pcm_layer` →
-`setPcmLayerParams`. Pitch knob (0..1) maps to playback rate
-`2^((v-0.5)*2)` (±1 octave, 0.5 = original).
+`setPcmLayerParams`. Level knob (0..10x) is an absolute PCM multiplier
+(3 = match oscillator level, default 2.55 primary / 1.65 secondary).
+Pitch knob (0..1) maps to playback rate `2^((v-0.5)*2)` (±1 octave,
+0.5 = original).
 
 **Dense layer indexing** — the C engine addresses `pcmBank[pad][denseIdx]`
 where `denseIdx` packs enabled+sampled layers at 0, 1, 2, … and

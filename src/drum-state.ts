@@ -11,7 +11,7 @@ export interface DrumLayer {
     // layer-editor sample-kit dropdown, so layers in one kit can mix samples
     // sourced from any of the DRUM_KITS.
     sourceUrl?: string;
-    gain: number;           // 0..1
+    gain: number;           // 0..10 (absolute PCM level multiplier, 3 = match osc level)
     filterCutoff: number;   // 0..1
     filterResonance: number;// 0..1
     filterMode: number;     // 0..1
@@ -45,7 +45,7 @@ export function createDefaultLayer(): DrumLayer {
     return {
         enabled: false,
         sampleName: null,
-        gain: 1.0,
+        gain: 3.0,
         filterCutoff: 1.0,
         filterResonance: 0.0,
         filterMode: 0.0,
