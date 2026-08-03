@@ -234,7 +234,7 @@ const LAYER_GROUPS: DrumKnobGroup[] = [
 // update the DrumLayer TS object + pushLayer (set_pcm_layer message).
 const LAYER_DIRECT_KNOBS: DrumKnobDef[] = [
     {
-        label: "Level", idx: -1, default: 0.5,
+        label: "Level", idx: -1, default: 0.3,
         customSet: (v) => { const l = currentKit.pads[selectedPad].layers[selectedLayer]; l.gain = v * 10; pushLayer(l); },
         customGet: () => currentKit.pads[selectedPad].layers[selectedLayer].gain / 10,
     },
