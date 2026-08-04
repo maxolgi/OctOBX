@@ -44,7 +44,7 @@ let midiSabHead = null;      // Int32Array view (1 element)
 let midiSabTail = null;      // Int32Array view (1 element)
 const MIDI_SYNTH_RING_SIZE = 512;
 const MIDI_SYNTH_RING_MASK = 511;
-let midiRouting = null;      // array[17]: channel → instance_id (-1 = unmapped)
+let midiRouting = null;      // array[17]: channel → bitmask of instance IDs (0 = unmapped)
 
 // Cached HEAPF32 views into the WASM linear memory. The raw `wasmModule.HEAPF32`
 // reference is replaced by emcc whenever WASM memory grows
@@ -172,9 +172,9 @@ class ObxdProcessor extends AudioWorkletProcessor {
                 console.warn('[obxd-processor] SAB MIDI ring init failed:', e && e.message);
             }
         }
-        // Default routing: channels 1-10 → instances 0-9
-        midiRouting = new Array(17).fill(-1);
-        for (let i = 0; i < 10; i++) midiRouting[i + 1] = i;
+        // Default routing: channels 1-10 → instances 0-9 (bitmask: bit i = instance i)
+        midiRouting = new Array(17).fill(0);
+        for (let i = 0; i < 10; i++) midiRouting[i + 1] = (1 << i);
 
         ensureModule(wasmBytesArg).then(() => {
             this.port.postMessage({ type: 'ready' });
@@ -475,11 +475,16 @@ class ObxdProcessor extends AudioWorkletProcessor {
                 const status = packed & 0xff;
                 if (status < 0xf0) {
                     const channel = (packed >> 24) & 0xff;
-                    const instanceId = midiRouting[channel];
-                    if (instanceId !== undefined && instanceId >= 0) {
+                    const mask = midiRouting[channel];
+                    if (mask) {
                         const d1 = (packed >> 8) & 0xff;
                         const d2 = (packed >> 16) & 0xff;
-                        wasmModule._obxd_midi_in(instanceId, status, d1, d2);
+                        let m = mask, bit = 0;
+                        while (m) {
+                            if (m & 1) wasmModule._obxd_midi_in(bit, status, d1, d2);
+                            m >>>= 1;
+                            bit++;
+                        }
                     }
                 }
                 hwBatch.push(packed);

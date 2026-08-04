@@ -335,8 +335,9 @@ export function sendObxdInstanceMidi(id: number, status: number, d1: number, d2:
 /*
  * Push the channel→instance routing table into the AudioWorklet. The
  * routing is an array of 17 ints (index = MIDI channel 0-16, value =
- * instance_id 0-9 or -1 for unmapped). The worklet uses this to dispatch
- * events it reads directly from the Octopus engine's SAB MIDI ring.
+ * bitmask of instance IDs where bit i = instance i; 0 = unmapped).
+ * Multiple instances on the same channel OR their bits together. The
+ * worklet iterates set bits to dispatch each event to all instances.
  */
 export function sendObxdMidiRouting(routing: number[]): void {
     workletNode?.port.postMessage({ type: "set_routing", routing });

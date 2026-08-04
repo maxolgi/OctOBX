@@ -16,7 +16,7 @@ describe("buildChannelToInstance", () => {
         it("maps channels 1..10 → instances 0..9", () => {
             const map = buildChannelToInstance(defaultRoutes());
             for (let id = 0; id < 10; id++) {
-                expect(map.get(id + 1)).toBe(id);
+                expect(map.get(id + 1)).toEqual([id]);
             }
         });
 
@@ -28,6 +28,25 @@ describe("buildChannelToInstance", () => {
         });
     });
 
+    describe("non-MPE channel sharing", () => {
+        it("multiple instances on the same channel all receive events", () => {
+            const routes = defaultRoutes();
+            // Put instances 0, 3, 7 all on channel 1
+            routes[3].channel = 1;
+            routes[7].channel = 1;
+            const map = buildChannelToInstance(routes);
+            expect(map.get(1)).toEqual([0, 3, 7]);
+        });
+
+        it("all 10 instances on channel 1", () => {
+            const routes = defaultRoutes();
+            for (let i = 0; i < 10; i++) routes[i].channel = 1;
+            const map = buildChannelToInstance(routes);
+            expect(map.get(1)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            expect(map.has(2)).toBe(false);
+        });
+    });
+
     describe("MPE instance claims lower zone", () => {
         it("instance 0 with MPE + 4 voice channels claims channels 1..5", () => {
             const routes = defaultRoutes();
@@ -35,26 +54,21 @@ describe("buildChannelToInstance", () => {
             routes[0].mpeVoiceCount = 4;
             const map = buildChannelToInstance(routes);
             // Master=1, voice channels=2,3,4,5
-            expect(map.get(1)).toBe(0);
-            expect(map.get(2)).toBe(0);
-            expect(map.get(3)).toBe(0);
-            expect(map.get(4)).toBe(0);
-            expect(map.get(5)).toBe(0);
+            for (const ch of [1, 2, 3, 4, 5]) {
+                expect(map.get(ch)).toEqual([0]);
+            }
         });
 
-        it("MPE instance shadows non-MPE instances on claimed channels", () => {
+        it("MPE instance blocks non-MPE instances from claimed channels", () => {
             const routes = defaultRoutes();
             routes[0].mpe = true;
             routes[0].mpeVoiceCount = 2;
             // Instance 0 claims channels 1,2,3 (master + 2 voice channels).
-            // Instance 1 normally uses channel 2, but it's now claimed by MPE.
+            // Instance 1 normally uses channel 2, but it's now MPE-claimed.
             const map = buildChannelToInstance(routes);
-            expect(map.get(1)).toBe(0); // MPE master
-            expect(map.get(2)).toBe(0); // MPE voice
-            expect(map.get(3)).toBe(0); // MPE voice
-            // Instance 1's channel 2 is shadowed — NOT remapped to instance 1.
-            expect(map.has(2)).toBe(true);
-            expect(map.get(2)).not.toBe(1);
+            expect(map.get(1)).toEqual([0]); // MPE master
+            expect(map.get(2)).toEqual([0]); // MPE voice
+            expect(map.get(3)).toEqual([0]); // MPE voice
         });
 
         it("non-MPE instances still fill unclaimed channels", () => {
@@ -64,8 +78,8 @@ describe("buildChannelToInstance", () => {
             const map = buildChannelToInstance(routes);
             // Channels 1..3 claimed by MPE instance 0.
             // Channels 4..10 filled by instances 3..9 (instances 1,2 shadowed).
-            expect(map.get(4)).toBe(3);
-            expect(map.get(10)).toBe(9);
+            expect(map.get(4)).toEqual([3]);
+            expect(map.get(10)).toEqual([9]);
         });
     });
 
@@ -76,9 +90,9 @@ describe("buildChannelToInstance", () => {
             ];
             const map = buildChannelToInstance(routes);
             // Master=14, voice channels=15,16 (clamped, not 17..23).
-            expect(map.get(14)).toBe(0);
-            expect(map.get(15)).toBe(0);
-            expect(map.get(16)).toBe(0);
+            expect(map.get(14)).toEqual([0]);
+            expect(map.get(15)).toEqual([0]);
+            expect(map.get(16)).toEqual([0]);
             expect(map.has(17)).toBe(false);
         });
 
@@ -90,7 +104,7 @@ describe("buildChannelToInstance", () => {
             // Should claim channels 1..16 (master + 15 voice channels).
             expect(map.size).toBe(16);
             for (let ch = 1; ch <= 16; ch++) {
-                expect(map.get(ch)).toBe(0);
+                expect(map.get(ch)).toEqual([0]);
             }
         });
     });
@@ -105,10 +119,10 @@ describe("buildChannelToInstance", () => {
             const map = buildChannelToInstance(routes);
             // Pass 1 processes ALL MPE instances; later ones overwrite.
             // Instance 0 claims ch 1,2,3,4. Instance 1 overwrites 2,3,4.
-            expect(map.get(1)).toBe(0);  // only instance 0's master survives
-            expect(map.get(2)).toBe(1);  // overwritten by instance 1
-            expect(map.get(3)).toBe(1);
-            expect(map.get(4)).toBe(1);
+            expect(map.get(1)).toEqual([0]);  // only instance 0's master survives
+            expect(map.get(2)).toEqual([1]);  // overwritten by instance 1
+            expect(map.get(3)).toEqual([1]);
+            expect(map.get(4)).toEqual([1]);
         });
     });
 

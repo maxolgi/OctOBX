@@ -172,10 +172,10 @@ export function getObxdMpeChannels(id: number): number[] {
 
 /*
  * Build the channel→instance routing map from the current module-level state.
- * Delegates to the pure buildRouting() from channel-routing.ts, which is the
- * testable extraction of the MPE-aware routing algorithm.
+ * Returns Map<channel, number[]> — multiple non-MPE instances can share a
+ * channel. Delegates to the pure buildRouting() from channel-routing.ts.
  */
-function buildChannelToInstance(): Map<number, number> {
+function buildChannelToInstance(): Map<number, number[]> {
     const routes: InstanceRoute[] = [];
     for (let id = 0; id < INSTANCE_COUNT; id++) {
         routes.push({
@@ -189,10 +189,14 @@ function buildChannelToInstance(): Map<number, number> {
 
 function syncRoutingToAudioWorklet(): void {
     if (!isObxdReady()) return;
-    // 17-entry array (index 0 unused; channels are 1..16). -1 = unmapped.
-    const routing = new Array(17).fill(-1);
-    for (const [ch, id] of buildChannelToInstance()) {
-        routing[ch] = id;
+    // 17-entry array (index 0 unused; channels are 1..16). Each entry is a
+    // BITMASK of instance IDs (bit 0 = instance 0, bit 1 = instance 1, …).
+    // 0 = unmapped. Multiple instances on the same channel OR their bits.
+    const routing = new Array(17).fill(0);
+    for (const [ch, ids] of buildChannelToInstance()) {
+        let mask = 0;
+        for (const id of ids) mask |= (1 << id);
+        routing[ch] = mask;
     }
     sendObxdMidiRouting(routing);
 }
@@ -229,8 +233,8 @@ export function createObxdBridgeHandler(): BatchDrainHandler {
             if (cmd !== 0x80 && cmd !== 0x90 && cmd !== 0xb0 &&
                 cmd !== 0xc0 && cmd !== 0xd0 && cmd !== 0xe0) continue;
 
-            const instanceId = channelToInstance.get(channel);
-            if (instanceId === undefined) continue;
+            const instanceIds = channelToInstance.get(channel);
+            if (!instanceIds || instanceIds.length === 0) continue;
 
             // Transpose NoteOn / NoteOff note numbers so the synth matches
             // standard MIDI semantics (see OBXD_TRANSPOSE_SEMITONES).
@@ -242,7 +246,10 @@ export function createObxdBridgeHandler(): BatchDrainHandler {
             // Forward the FULL status byte (channel nibble intact). In MPE
             // mode the per-voice channel lives in status & 0x0F; the engine
             // follow-up consumes it for processNoteOn(note, vel, channel).
-            sendObxdInstanceMidi(instanceId, status, d1, data2);
+            // Multiple instances on the same channel each get a copy.
+            for (const instanceId of instanceIds) {
+                sendObxdInstanceMidi(instanceId, status, d1, data2);
+            }
         }
     };
 }
