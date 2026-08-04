@@ -107,13 +107,13 @@ function switchPanel(view: "classic" | "modern" | "synth" | "drums") {
     } else if (view === "classic") {
         classicEl.style.display = "";
         modernEl.style.display = "none";
-        obxdEl.style.display = "";
+        obxdEl.style.display = "none";
         drumEl.style.display = "none";
         activePanelCleanup = buildClassicPanel(wasmModule);
     } else if (view === "modern") {
         classicEl.style.display = "none";
         modernEl.style.display = "";
-        obxdEl.style.display = "";
+        obxdEl.style.display = "none";
         drumEl.style.display = "none";
         activePanelCleanup = startOctopusPanel(wasmModule);
     } else {
@@ -130,12 +130,23 @@ const VIEW_ORDER = ["classic", "modern", "synth", "drums"] as const;
 let currentViewIdx = 0;
 
 function setupViewToggle() {
-    const toggle = document.getElementById("view-toggle") as HTMLSelectElement | null;
-    if (!toggle) return;
-    toggle.addEventListener("change", () => {
-        currentViewIdx = VIEW_ORDER.indexOf(toggle.value as typeof VIEW_ORDER[number]);
-        switchPanel(VIEW_ORDER[currentViewIdx]);
+    const group = document.getElementById("view-toggle");
+    if (!group) return;
+    const buttons = group.querySelectorAll<HTMLButtonElement>(".view-btn");
+
+    const setActive = (view: string) => {
+        buttons.forEach(btn => btn.classList.toggle("active", btn.dataset.view === view));
+    };
+
+    buttons.forEach(btn => {
+        btn.addEventListener("click", () => {
+            const view = btn.dataset.view as typeof VIEW_ORDER[number];
+            currentViewIdx = VIEW_ORDER.indexOf(view);
+            setActive(view);
+            switchPanel(view);
+        });
     });
+
     document.addEventListener("keydown", (e) => {
         if (e.key !== "Tab") return;
         const tag = (e.target as HTMLElement)?.tagName;
@@ -143,7 +154,7 @@ function setupViewToggle() {
         e.preventDefault();
         currentViewIdx = (currentViewIdx + (e.shiftKey ? -1 : 1) + VIEW_ORDER.length) % VIEW_ORDER.length;
         const view = VIEW_ORDER[currentViewIdx];
-        toggle.value = view;
+        setActive(view);
         switchPanel(view);
     });
 }

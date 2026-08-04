@@ -12,7 +12,6 @@
  *     |- "OB-XD" label
  *     |- #obxd-instance-selector     (dropdown, one instance at a time)
  *     |- #obxd-instance-power        (On / Off toggle)
- *     |- #obxd-instance-polyphony    (1 / 2 / 4 / 8 voices)
  *     |- #obxd-instance-channel      (MIDI channel 1..16)
  *     |- #obxd-instance-mpe          (MPE On / Off toggle → setObxdInstanceMpe)
  *     |- #obxd-instance-bendrange    (pitch-bend range 0..96 semitones)
@@ -36,9 +35,9 @@ import {
     getObxdSelectedInstance,
     setObxdSelectedInstance,
     setObxdInstanceActive,
-    setObxdInstancePolyphony,
     setObxdInstanceParam,
     loadObxdInstanceFxp,
+    applyObxdFactoryPatch,
     obxdInstancePanic,
     obxdInstanceResetPatch,
     obxdPanicAll,
@@ -54,6 +53,7 @@ import {
 } from "./obxd-bridge";
 import { buildObxdSynthUi, syncObxdControlsFromEngine } from "./obxd-synth-ui";
 import { preloadDrumKit } from "./drum-rack";
+import { FACTORY_PATCHES } from "./patch-catalog";
 
 const INSTANCE_COUNT = 10;
 
@@ -67,34 +67,10 @@ const INSTANCE_COUNT = 10;
 // supported {2, 12} bucket so the control still has an audible effect.
 const LEGACY_PARAM_BENDRANGE = 6;
 
-// Patch name fallbacks used by the UI label before/without a real .fxp
-// load. The instance selector's <option> text uses these too. Mirrors
-// the names embedded on the C side as factory patches (patches.h).
-const FACTORY_PATCH_NAMES = [
-    "Analog Pad",
-    "Bass Pulse",
-    "Lead Saw",
-    "Pluck",
-    "Strings",
-    "Keys",
-    "Drone",
-    "Stab",
-    "Noise Hat",
-    "Kick",
-];
-
-// Default polyphony (per the plan / C-side init). The polyphony selector
-// only offers {1, 2, 4, 8} so any voice count outside that set just
-// falls back to the closest available option in updateHeaderForInstance.
-const DEFAULT_POLYPHONY = [8, 1, 1, 1, 1, 1, 1, 1, 1, 1];
-
 // Per-instance UI-side state. Power defaults to true (matches the C-side
-// init: all 10 active). Polyphony mirrors the C-side default; updated
-// when the user changes the selector. Patch name starts as the factory
-// label since C-side init applies each factory patch to its instance.
+// init: all 10 active). Patch ID tracks which factory patch is loaded.
 const instancePower = new Array<boolean>(INSTANCE_COUNT).fill(true);
-const instancePolyphony = DEFAULT_POLYPHONY.slice();
-const instancePatchName = FACTORY_PATCH_NAMES.slice();
+const instancePatchId = new Array<number>(INSTANCE_COUNT).fill(-1);
 
 // Per-instance pitch-bend-range UI state. Bend range defaults to 2
 // semitones (the conservative OB-Xd default); the engine's current binary
@@ -124,28 +100,19 @@ export function onAWPReady(cb: () => Promise<boolean>): void { awpReadyCallback 
 
 export interface SynthInstanceState {
     active: boolean;
-    polyphony: number;
     bendRange: number;
-    patchName: string;
+    patchId: number;
 }
 
-function formatPatchName(name: string): string {
-    return name && name.length > 0 ? `\u2014 ${name} \u2014` : "\u2014 init \u2014";
-}
-
-function setPatchName(name: string): void {
-    const el = document.getElementById("obxd-patch-name");
-    if (el) el.textContent = name;
-}
 
 /*
  * Refresh every header control to reflect the currently-selected
  * instance's UI-side state. Called on selector change and after any
  * control mutation that affects the displayed values.
  *
- * The C side is the source of truth for power/polyphony/patch, but the
- * worklet doesn't expose a "get instance state" RPC — we mirror state in
- * the UI arrays above and trust the user not to race two tabs.
+ * The C side is the source of truth for power/patch, but the worklet
+ * doesn't expose a "get instance state" RPC — we mirror state in the UI
+ * arrays above and trust the user not to race two tabs.
  */
 function updateHeaderForInstance(id: number): void {
     const powerBtn = document.getElementById("obxd-instance-power") as HTMLButtonElement | null;
@@ -154,20 +121,6 @@ function updateHeaderForInstance(id: number): void {
         powerBtn.textContent = on ? "On" : "Off";
         powerBtn.setAttribute("aria-pressed", on ? "true" : "false");
         powerBtn.classList.toggle("synth-on", on);
-    }
-
-    const polySel = document.getElementById("obxd-instance-polyphony") as HTMLSelectElement | null;
-    if (polySel) {
-        // Snap to the closest available option (1/2/4/8).
-        const desired = instancePolyphony[id];
-        const options = [1, 2, 4, 8];
-        let best = options[0];
-        let bestDiff = Math.abs(desired - best);
-        for (const o of options) {
-            const d = Math.abs(desired - o);
-            if (d < bestDiff) { best = o; bestDiff = d; }
-        }
-        polySel.value = String(best);
     }
 
     const chanSel = document.getElementById("obxd-instance-channel") as HTMLSelectElement | null;
@@ -195,7 +148,24 @@ function updateHeaderForInstance(id: number): void {
 
     updateMpeChannelsLabel(id);
 
-    setPatchName(formatPatchName(instancePatchName[id]));
+    // Sync both patch dropdowns to this instance's loaded patch.
+    const patchId = instancePatchId[id];
+    const catSel = document.getElementById("obxd-patch-category") as HTMLSelectElement | null;
+    const patchSel = document.getElementById("obxd-patch-selector") as HTMLSelectElement | null;
+    if (patchId >= 0 && patchId < FACTORY_PATCHES.length) {
+        const cat = FACTORY_PATCHES[patchId].category;
+        if (catSel && catSel.value !== cat) {
+            catSel.value = cat;
+            repopulatePatchSelector(cat);
+        }
+        if (patchSel) patchSel.value = String(patchId);
+    } else {
+        if (catSel) catSel.value = "";
+        if (patchSel) {
+            repopulatePatchSelector("");
+            patchSel.value = "-1";
+        }
+    }
 }
 
 /*
@@ -254,26 +224,24 @@ function wireFxLoader(): void {
         const file = fxpInput.files && fxpInput.files[0];
         if (!file) return;
         const id = getObxdSelectedInstance();
-        setPatchName("Loading\u2026");
         try {
             const buf = await file.arrayBuffer();
             const bytes = new Uint8Array(buf);
             const result = await loadObxdInstanceFxp(id, bytes);
             if (result.success) {
-                instancePatchName[id] = result.name || "(unnamed)";
-                setPatchName(formatPatchName(instancePatchName[id]));
-                // Sync knob positions to the freshly loaded patch
-                // (without re-firing onChange / writing back to engine).
+                instancePatchId[id] = -1;
+                const catSel = document.getElementById("obxd-patch-category") as HTMLSelectElement | null;
+                const patchSel = document.getElementById("obxd-patch-selector") as HTMLSelectElement | null;
+                if (catSel) catSel.value = "";
+                if (patchSel) { repopulatePatchSelector(""); patchSel.value = "-1"; }
+                if (patchSel) patchSel.title = result.name || "(custom)";
                 await syncObxdControlsFromEngine(id);
             } else {
-                setPatchName(`\u2014 load failed \u2014`);
                 console.warn(`[obxd] fxp load failed on instance ${id}`);
             }
         } catch (e) {
-            setPatchName("\u2014 load error \u2014");
             console.error(`[obxd] fxp load threw on instance ${id}:`, e);
         } finally {
-            // Allow re-uploading the same file.
             fxpInput.value = "";
         }
     });
@@ -286,8 +254,11 @@ function wireResetButton(): void {
     btn.addEventListener("click", async () => {
         const id = getObxdSelectedInstance();
         obxdInstanceResetPatch(id);
-        instancePatchName[id] = "init";
-        setPatchName(formatPatchName("init"));
+        instancePatchId[id] = -1;
+        const catSel = document.getElementById("obxd-patch-category") as HTMLSelectElement | null;
+        const patchSel = document.getElementById("obxd-patch-selector") as HTMLSelectElement | null;
+        if (catSel) catSel.value = "";
+        if (patchSel) { repopulatePatchSelector(""); patchSel.value = "-1"; }
         await syncObxdControlsFromEngine(id);
         console.log(`[obxd] reset instance ${id} to defaults`);
     });
@@ -327,19 +298,6 @@ function wirePowerButton(): void {
         powerBtn.textContent = next ? "On" : "Off";
         powerBtn.setAttribute("aria-pressed", next ? "true" : "false");
         powerBtn.classList.toggle("synth-on", next);
-    });
-}
-
-function wirePolyphonySelector(): void {
-    const sel = document.getElementById("obxd-instance-polyphony") as HTMLSelectElement | null;
-    if (!sel || sel.dataset.wired) return;
-    sel.dataset.wired = "1";
-
-    sel.addEventListener("change", () => {
-        const id = getObxdSelectedInstance();
-        const v = parseInt(sel.value, 10) || 1;
-        instancePolyphony[id] = v;
-        setObxdInstancePolyphony(id, v);
     });
 }
 
@@ -418,6 +376,88 @@ function wireInstanceSelector(): void {
         updateHeaderForInstance(id);
         // Sync knobs to this instance's current param values. No-ops
         // before the audio engine is up (knobs keep their baked defaults).
+        await syncObxdControlsFromEngine(id);
+    });
+}
+
+/*
+ * Populate the patch selector dropdown with all factory patches grouped
+ * by category. Called once during setupObxdRack().
+ */
+/*
+ * Build the category dropdown from the unique categories in FACTORY_PATCHES.
+ * Includes a "(custom)" sentinel at the top for non-factory-patch state.
+ */
+function buildPatchCategorySelector(): void {
+    const sel = document.getElementById("obxd-patch-category") as HTMLSelectElement | null;
+    if (!sel || sel.dataset.built) return;
+    sel.dataset.built = "1";
+
+    const customOpt = document.createElement("option");
+    customOpt.value = "";
+    customOpt.textContent = "(custom)";
+    sel.appendChild(customOpt);
+
+    const seen = new Set<string>();
+    for (const p of FACTORY_PATCHES) {
+        if (!seen.has(p.category)) {
+            seen.add(p.category);
+            const opt = document.createElement("option");
+            opt.value = p.category;
+            opt.textContent = p.category;
+            sel.appendChild(opt);
+        }
+    }
+}
+
+/*
+ * Repopulate the patch dropdown with patches matching the given category.
+ * Called on category change and on instance switch.
+ */
+function repopulatePatchSelector(category: string): void {
+    const sel = document.getElementById("obxd-patch-selector") as HTMLSelectElement | null;
+    if (!sel) return;
+
+    while (sel.firstChild) sel.removeChild(sel.firstChild);
+
+    if (!category) {
+        const opt = document.createElement("option");
+        opt.value = "-1";
+        opt.textContent = "(custom / init)";
+        sel.appendChild(opt);
+        return;
+    }
+
+    for (let i = 0; i < FACTORY_PATCHES.length; i++) {
+        if (FACTORY_PATCHES[i].category !== category) continue;
+        const opt = document.createElement("option");
+        opt.value = String(i);
+        opt.textContent = FACTORY_PATCHES[i].name;
+        sel.appendChild(opt);
+    }
+}
+
+function wirePatchCategory(): void {
+    const sel = document.getElementById("obxd-patch-category") as HTMLSelectElement | null;
+    if (!sel || sel.dataset.wired) return;
+    sel.dataset.wired = "1";
+
+    sel.addEventListener("change", () => {
+        repopulatePatchSelector(sel.value);
+    });
+}
+
+function wirePatchSelector(): void {
+    const sel = document.getElementById("obxd-patch-selector") as HTMLSelectElement | null;
+    if (!sel || sel.dataset.wired) return;
+    sel.dataset.wired = "1";
+
+    sel.addEventListener("change", async () => {
+        const id = getObxdSelectedInstance();
+        const patchId = parseInt(sel.value, 10);
+        if (patchId < 0 || patchId >= FACTORY_PATCHES.length) return;
+        instancePatchId[id] = patchId;
+        applyObxdFactoryPatch(id, patchId);
         await syncObxdControlsFromEngine(id);
     });
 }
@@ -517,10 +557,13 @@ export function setupObxdRack(): void {
     // Wire all header controls idempotently (dataset.wired guards).
     wireInstanceSelector();
     wirePowerButton();
-    wirePolyphonySelector();
     wireChannelSelector();
     wireMpeToggle();
     wireBendRangeControl();
+    buildPatchCategorySelector();
+    wirePatchCategory();
+    repopulatePatchSelector("");
+    wirePatchSelector();
     wireFxLoader();
     wireResetButton();
     wirePanicButtons();
@@ -541,9 +584,8 @@ export function setupObxdRack(): void {
 export function getSynthInstanceState(): SynthInstanceState[] {
     return Array.from({ length: INSTANCE_COUNT }, (_, i) => ({
         active: instancePower[i],
-        polyphony: instancePolyphony[i],
         bendRange: instanceBendRange[i],
-        patchName: instancePatchName[i],
+        patchId: instancePatchId[i],
     }));
 }
 
@@ -551,12 +593,43 @@ export function restoreSynthAfterAWP(state: SynthInstanceState[]): void {
     for (let i = 0; i < INSTANCE_COUNT && i < state.length; i++) {
         const s = state[i];
         instancePower[i] = s.active;
-        instancePolyphony[i] = s.polyphony;
-        instancePatchName[i] = s.patchName;
+        instancePatchId[i] = s.patchId;
         instanceBendRange[i] = s.bendRange;
         setObxdInstanceActive(i, s.active);
-        setObxdInstancePolyphony(i, s.polyphony);
+        if (s.patchId >= 0 && s.patchId < FACTORY_PATCHES.length) {
+            applyObxdFactoryPatch(i, s.patchId);
+        }
         applyLegacyBendRange(i, s.bendRange);
     }
     updateHeaderForInstance(getObxdSelectedInstance());
+}
+
+// ---------------------------------------------------------------------------
+// Patch ID access — exported for obxd-synth-ui.ts editor buttons (prev/next)
+// ---------------------------------------------------------------------------
+
+export function getInstancePatchId(id: number): number {
+    return instancePatchId[id] ?? -1;
+}
+
+/*
+ * Called from the OB-Xf editor's prev/next/select buttons when they load
+ * a factory patch. Updates the per-instance state AND syncs the rack
+ * header dropdowns so both UIs stay in sync.
+ */
+export function setInstancePatchIdFromEditor(id: number, patchId: number): void {
+    if (id < 0 || id >= INSTANCE_COUNT) return;
+    if (patchId < 0 || patchId >= FACTORY_PATCHES.length) return;
+    instancePatchId[id] = patchId;
+    // Sync dropdowns if this instance is currently selected.
+    if (id === getObxdSelectedInstance()) {
+        const cat = FACTORY_PATCHES[patchId].category;
+        const catSel = document.getElementById("obxd-patch-category") as HTMLSelectElement | null;
+        const patchSel = document.getElementById("obxd-patch-selector") as HTMLSelectElement | null;
+        if (catSel && catSel.value !== cat) {
+            catSel.value = cat;
+            repopulatePatchSelector(cat);
+        }
+        if (patchSel) patchSel.value = String(patchId);
+    }
 }

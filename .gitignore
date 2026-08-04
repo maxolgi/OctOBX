@@ -6,6 +6,10 @@ dist/
 wasm/build/
 # Generated from wasm/obxd/patches/*.fxp by build.sh's xxd step
 wasm/obxd/patches.h
+# Generated from OB-Xf submodule patches by build.sh
+src/patch-catalog.ts
+# Synced from OB-Xf submodule by build.sh (not source — do not commit)
+wasm/obxd/patches/*.fxp
 
 # Self-signed dev certs (regenerate per machine, see README)
 certs/*.pem

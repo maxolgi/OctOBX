@@ -62,6 +62,8 @@ import {
 } from "./obxf-midi-learn-ui";
 import { openObxfPopup } from "./obxf-popup";
 import type { PopupItem } from "./obxf-popup";
+import { FACTORY_PATCHES } from "./patch-catalog";
+import { getInstancePatchId, setInstancePatchIdFromEditor } from "./obxd-rack";
 
 // ===========================================================================
 // 0. Editor target abstraction (instance vs. drum layer)
@@ -640,7 +642,9 @@ function onSpecialKnob(_id: string, _v: number): void {
 
 const mpeMatrixTargetState = new Map<number, string>();
 
-let g_specialPatchId = 0;
+// DOM overlays for the patch name + number display in the Programmer footer.
+let patchNameDisplay: HTMLDivElement | null = null;
+let patchNumberDisplay: HTMLDivElement | null = null;
 
 function onSpecialToggle(id: string, on: boolean): void {
     switch (id) {
@@ -675,22 +679,34 @@ function onSpecialToggle(id: string, on: boolean): void {
 function onSpecialButton(id: string): void {
     const inst = getObxdSelectedInstance();
     switch (id) {
-        case "prevPatchButton":
+        case "prevPatchButton": {
             captureUndoSnapshot();
-            g_specialPatchId = Math.max(0, g_specialPatchId - 1);
-            applyObxdFactoryPatch(inst, g_specialPatchId);
+            const cur = getInstancePatchId(inst);
+            const next = Math.max(0, cur - 1);
+            if (next === cur) break;
+            setInstancePatchIdFromEditor(inst, next);
+            applyObxdFactoryPatch(inst, next);
             syncObxdControlsFromEngine(inst);
+            updatePatchDisplay(inst);
             break;
-        case "nextPatchButton":
+        }
+        case "nextPatchButton": {
             captureUndoSnapshot();
-            g_specialPatchId = Math.min(9, g_specialPatchId + 1);
-            applyObxdFactoryPatch(inst, g_specialPatchId);
+            const cur = getInstancePatchId(inst);
+            const max = FACTORY_PATCHES.length - 1;
+            const next = Math.min(max, cur < 0 ? 0 : cur + 1);
+            if (next === cur) break;
+            setInstancePatchIdFromEditor(inst, next);
+            applyObxdFactoryPatch(inst, next);
             syncObxdControlsFromEngine(inst);
+            updatePatchDisplay(inst);
             break;
+        }
         case "initPatchButton":
             captureUndoSnapshot();
             obxdInstanceResetPatch(inst);
             syncObxdControlsFromEngine(inst);
+            updatePatchDisplay(inst);
             break;
         case "undoPatchButton":
             restoreUndoSnapshot();
@@ -722,11 +738,15 @@ function onSpecialButton(id: string): void {
                 const n = parseInt(id.replace("select", "").replace("Button", ""), 10);
                 if (groupSelectMode) {
                     console.info(`[obxf] Group select ${n} — single group in browser build`);
-                } else if (n >= 1 && n <= 10) {
-                    captureUndoSnapshot();
-                    g_specialPatchId = n - 1;
-                    applyObxdFactoryPatch(inst, g_specialPatchId);
-                    syncObxdControlsFromEngine(inst);
+                } else {
+                    const patchId = n - 1;
+                    if (patchId >= 0 && patchId < FACTORY_PATCHES.length) {
+                        captureUndoSnapshot();
+                        setInstancePatchIdFromEditor(inst, patchId);
+                        applyObxdFactoryPatch(inst, patchId);
+                        syncObxdControlsFromEngine(inst);
+                        updatePatchDisplay(inst);
+                    }
                 }
             }
             break;
@@ -819,10 +839,17 @@ export function buildObxdSynthUi(
     panel.style.flex = "0 0 auto";
     panel.style.color = "#fff";
     panel.style.fontFamily = '"Jersey20", system-ui, sans-serif';
+    panel.style.transformOrigin = "top left";
 
-    container.style.overflowX = "auto";
-    container.style.overflowY = "hidden";
-    container.style.alignItems = "flex-start";
+    if (!drumMode) {
+        container.style.position = "relative";
+        container.style.display = "flex";
+        container.style.justifyContent = "center";
+        container.style.alignItems = "center";
+        container.style.overflow = "hidden";
+        container.style.flex = "1 1 auto";
+        container.style.width = "100%";
+    }
 
     // Static label/background SVGs (underneath controls, above background.svg).
     const staticLabels = obxfControls.filter(c =>
@@ -847,6 +874,25 @@ export function buildObxdSynthUi(
             mpeDoms.push(el);
             el.style.display = "none";
         }
+    }
+
+    // Patch name + number display overlays (Programmer footer).
+    if (!drumMode) {
+        patchNumberDisplay = document.createElement("div");
+        patchNumberDisplay.style.cssText =
+            "position:absolute;left:56px;top:506px;width:43px;height:31px;" +
+            "display:flex;align-items:center;justify-content:center;" +
+            'font-family:"Jersey20",monospace;font-size:16px;color:#ff0000;' +
+            "pointer-events:none;overflow:hidden;";
+        panel.appendChild(patchNumberDisplay);
+
+        patchNameDisplay = document.createElement("div");
+        patchNameDisplay.style.cssText =
+            "position:absolute;left:103px;top:506px;width:166px;height:31px;" +
+            "display:flex;align-items:center;padding:0 6px;" +
+            'font-family:"Jersey20",monospace;font-size:16px;color:#ff0000;' +
+            "pointer-events:none;overflow:hidden;white-space:nowrap;";
+        panel.appendChild(patchNameDisplay);
     }
 
     // Voice LEDs (32 per instance, bottom-right of panel). Skipped in drum mode.
@@ -940,6 +986,22 @@ export function buildObxdSynthUi(
 
     container.appendChild(panel);
 
+    if (!drumMode) {
+        const fitPanel = () => {
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+            if (w > 0 && h > 0) {
+                const s = Math.min(w / obxfTheme.width, h / obxfTheme.height);
+                panel.style.transform = `scale(${s})`;
+                panel.style.left = ((w - obxfTheme.width * s) / 2) + "px";
+                panel.style.top = ((h - obxfTheme.height * s) / 2) + "px";
+            }
+        };
+        panel.style.position = "absolute";
+        fitPanel();
+        new ResizeObserver(fitPanel).observe(container);
+    }
+
     if (NEW_PARAM_IDS.length > 0) {
         console.info(
             `[obxf] ${paramBound.length} controls built; ${NEW_PARAM_IDS.length} are ` +
@@ -975,6 +1037,7 @@ export function buildObxdSynthUi(
         }));
 
         refreshEditorChrome();
+        updatePatchDisplay(typeof targetArg === "number" ? targetArg : getObxdSelectedInstance());
     };
 
     return { sync };
@@ -994,6 +1057,23 @@ function refreshEditorChrome(): void {
     updateUnisonDimming();
 }
 
+/*
+ * Update the patch name + number display overlays in the Programmer footer.
+ * Called on patch navigation (prev/next/select), instance switch, and init.
+ */
+function updatePatchDisplay(inst: number): void {
+    if (!patchNameDisplay || !patchNumberDisplay) return;
+    const patchId = getInstancePatchId(inst);
+    if (patchId >= 0 && patchId < FACTORY_PATCHES.length) {
+        const p = FACTORY_PATCHES[patchId];
+        patchNameDisplay.textContent = p.name;
+        patchNumberDisplay.textContent = String(patchId + 1).padStart(3, "0");
+    } else {
+        patchNameDisplay.textContent = "— init —";
+        patchNumberDisplay.textContent = "---";
+    }
+}
+
 export async function syncObxdControlsFromEngine(instanceId: number): Promise<void> {
     if (cachedControls.length === 0) return;
     if (!isObxdReady()) return;
@@ -1007,6 +1087,7 @@ export async function syncObxdControlsFromEngine(instanceId: number): Promise<vo
     }));
 
     refreshEditorChrome();
+    updatePatchDisplay(instanceId);
 }
 
 // ===========================================================================

@@ -91,6 +91,13 @@
         }
         .transport-bar button:hover { background: #444; }
         .transport-bar button:active { background: #222; }
+        .view-toggle-group { display: flex; gap: 2px; }
+        .view-btn.active {
+            background: #1a3a1a;
+            color: #0f0;
+            border-color: #2a5a2a;
+        }
+        .view-btn.active:hover { background: #1a3a1a; }
         #oct-tempo {
             background: #1a1a1a;
             color: var(--text);
@@ -108,7 +115,7 @@
         }
         .transport-playing { background: #1a3a1a; color: #0f0; }
         .transport-stopped { background: #3a1a1a; color: #f00; }
-        #oct-midi-output, #oct-midi-input, #view-toggle {
+        #oct-midi-output, #oct-midi-input {
             background: #1a1a1a;
             color: var(--text);
             border: 1px solid var(--border);
@@ -237,6 +244,10 @@
             background: rgba(20, 20, 20, 0.95);
             padding: 8px 12px 12px;
             z-index: 999;
+            position: relative;
+            min-height: calc(100vh - 48px);
+            display: flex;
+            flex-direction: column;
         }
         .obxd-panel-header {
             display: flex;
@@ -244,12 +255,6 @@
             gap: 10px;
             margin-bottom: 8px;
             flex-wrap: wrap;
-        }
-        .obxd-panel-header > span:first-child {
-            font-weight: bold;
-            letter-spacing: 1px;
-            color: var(--accent);
-            font-size: 12px;
         }
         /* Instance selector + per-instance controls in the panel header.
            Match the transport-bar select styling so the whole panel reads
@@ -265,7 +270,9 @@
             min-width: 170px;
         }
         #obxd-instance-polyphony,
-        #obxd-instance-channel {
+        #obxd-instance-channel,
+        #obxd-patch-category,
+        #obxd-patch-selector {
             background: #1a1a1a;
             color: var(--text);
             border: 1px solid var(--border);
@@ -473,13 +480,12 @@
     <span>MIDI In:</span>
     <select id="oct-midi-input"><option value="">None</option></select>
     <button id="oct-midi-rescan" title="Re-scan MIDI ports">↻ Rescan</button>
-    <span style="margin-left:auto">View:</span>
-    <select id="view-toggle">
-        <option value="classic">Classic (full panel)</option>
-        <option value="modern">Modern (grid)</option>
-        <option value="synth">Synth (OB-Xf)</option>
-        <option value="drums">Drums (sample)</option>
-    </select>
+    <div id="view-toggle" class="view-toggle-group" style="margin-left:auto">
+        <button class="view-btn active" data-view="classic">Octopus</button>
+        <button class="view-btn" data-view="modern">Modern</button>
+        <button class="view-btn" data-view="synth">Synth</button>
+        <button class="view-btn" data-view="drums">Drums</button>
+    </div>
 </div>
 
 <main class="app-main">
@@ -490,28 +496,19 @@
 
     <div id="obxd-panel" class="obxd-panel">
         <div class="obxd-panel-header">
-            <span>OB-XD</span>
             <select id="obxd-instance-selector">
-                <option value="0">Instance 1 — Analog Pad</option>
-                <option value="1">Instance 2 — Bass Pulse</option>
-                <option value="2">Instance 3 — Lead Saw</option>
-                <option value="3">Instance 4 — Pluck</option>
-                <option value="4">Instance 5 — Strings</option>
-                <option value="5">Instance 6 — Keys</option>
-                <option value="6">Instance 7 — Drone</option>
-                <option value="7">Instance 8 — Stab</option>
-                <option value="8">Instance 9 — Noise Hat</option>
-                <option value="9">Instance 10 — Kick</option>
+                <option value="0">Instance 1</option>
+                <option value="1">Instance 2</option>
+                <option value="2">Instance 3</option>
+                <option value="3">Instance 4</option>
+                <option value="4">Instance 5</option>
+                <option value="5">Instance 6</option>
+                <option value="6">Instance 7</option>
+                <option value="7">Instance 8</option>
+                <option value="8">Instance 9 (Drums)</option>
+                <option value="9">Instance 10</option>
             </select>
             <button id="obxd-instance-power" aria-pressed="true">On</button>
-            <label class="obxd-header-label">Voices:
-                <select id="obxd-instance-polyphony">
-                    <option value="1">1 (mono)</option>
-                    <option value="2">2</option>
-                    <option value="4">4</option>
-                    <option value="8">8</option>
-                </select>
-            </label>
             <label class="obxd-header-label">MIDI Ch:
                 <select id="obxd-instance-channel">
                     <option value="1">1</option>
@@ -542,7 +539,12 @@
             <div id="obxd-instance-meter" class="obxd-meter">
                 <div class="obxd-meter-bar"></div>
             </div>
-            <span id="obxd-patch-name">— Analog Pad —</span>
+            <label class="obxd-header-label">Category:
+                <select id="obxd-patch-category"></select>
+            </label>
+            <label class="obxd-header-label">Patch:
+                <select id="obxd-patch-selector"></select>
+            </label>
             <label class="obxd-file-btn">Load .fxp
                 <input id="obxd-fxp-input" type="file" accept=".fxp,.fxb" hidden>
             </label>

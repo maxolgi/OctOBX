@@ -1325,20 +1325,10 @@ static void set_patch_name(int instance_id, const char* name) {
 #endif
 
 #if HAS_FACTORY_FXP
-// Order MUST match obxd_set_factory_patch's patch_id indexing — the
-// build.sh xxd step emits arrays named patch_<basename-of-fxp>, and we
-// expect them in alphabetical order so patch_id 0..9 lines up with the
-// instance selector's option order in index.html.
-static const unsigned char* g_factory_patches[INSTANCE_COUNT] = {
-    patch_01_pad, patch_02_bass, patch_03_lead, patch_04_pluck, patch_05_strings,
-    patch_06_keys, patch_07_drone, patch_08_stab, patch_09_hat, patch_10_kick,
-};
-static const unsigned g_factory_patch_sizes[INSTANCE_COUNT] = {
-    sizeof(patch_01_pad), sizeof(patch_02_bass), sizeof(patch_03_lead),
-    sizeof(patch_04_pluck), sizeof(patch_05_strings), sizeof(patch_06_keys),
-    sizeof(patch_07_drone), sizeof(patch_08_stab), sizeof(patch_09_hat),
-    sizeof(patch_10_kick),
-};
+// The lookup tables (g_factory_patches[], g_factory_patch_sizes[],
+// g_factory_patch_names[], g_factory_patch_categories[],
+// FACTORY_PATCH_COUNT) are now auto-generated in patches.h by build.sh.
+// No manual editing needed when patches are added or removed.
 #endif
 
 // =========================================================================
@@ -1351,6 +1341,9 @@ extern "C" {
 // appear below; C++ requires them to be in scope at the call site.
 EMSCRIPTEN_KEEPALIVE void obxd_set_factory_patch(int instance_id, int patch_id);
 EMSCRIPTEN_KEEPALIVE void obxd_set_polyphony(int instance_id, int voice_count);
+EMSCRIPTEN_KEEPALIVE int obxd_get_factory_patch_count(void);
+EMSCRIPTEN_KEEPALIVE const char* obxd_get_factory_patch_name(int patch_id);
+EMSCRIPTEN_KEEPALIVE const char* obxd_get_factory_patch_category(int patch_id);
 
 // Creates all 10 SynthEngine instances, applies the OB-Xf init patch to
 // each, and seeds default polyphony (instance 0 polyphonic 8 voices, rest
@@ -1636,7 +1629,11 @@ const char* obxd_get_patch_name(int instance_id) {
 EMSCRIPTEN_KEEPALIVE
 void obxd_set_factory_patch(int instance_id, int patch_id) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
+#if HAS_FACTORY_FXP
+    if (patch_id < 0 || patch_id >= FACTORY_PATCH_COUNT) return;
+#else
     if (patch_id < 0 || patch_id >= INSTANCE_COUNT) return;
+#endif
     recreate_engine(instance_id);
     apply_defaults_for_instance(instance_id);
 
@@ -1651,6 +1648,43 @@ void obxd_set_factory_patch(int instance_id, int patch_id) {
         "Init Keys", "Init Drone", "Init Stab", "Init Hat", "Init Kick",
     };
     set_patch_name(instance_id, kInitNames[patch_id]);
+#endif
+}
+
+// Return the total number of factory patches embedded in the WASM binary.
+EMSCRIPTEN_KEEPALIVE
+int obxd_get_factory_patch_count(void) {
+#if HAS_FACTORY_FXP
+    return FACTORY_PATCH_COUNT;
+#else
+    return INSTANCE_COUNT;
+#endif
+}
+
+// Return the program name of factory patch at index, or nullptr if out of range.
+EMSCRIPTEN_KEEPALIVE
+const char* obxd_get_factory_patch_name(int patch_id) {
+#if HAS_FACTORY_FXP
+    if (patch_id < 0 || patch_id >= FACTORY_PATCH_COUNT) return nullptr;
+    return g_factory_patch_names[patch_id];
+#else
+    static const char* const kInitNames[INSTANCE_COUNT] = {
+        "Init Pad", "Init Bass", "Init Lead", "Init Pluck", "Init Strings",
+        "Init Keys", "Init Drone", "Init Stab", "Init Hat", "Init Kick",
+    };
+    if (patch_id < 0 || patch_id >= INSTANCE_COUNT) return nullptr;
+    return kInitNames[patch_id];
+#endif
+}
+
+// Return the category name of factory patch at index, or nullptr if out of range.
+EMSCRIPTEN_KEEPALIVE
+const char* obxd_get_factory_patch_category(int patch_id) {
+#if HAS_FACTORY_FXP
+    if (patch_id < 0 || patch_id >= FACTORY_PATCH_COUNT) return nullptr;
+    return g_factory_patch_categories[patch_id];
+#else
+    return "Init";
 #endif
 }
 

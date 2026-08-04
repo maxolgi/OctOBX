@@ -168,9 +168,10 @@ async function restoreAppStateAfterAWP(): Promise<boolean> {
         //    params with the user's tweaks). For global drum params
         //    (Volume/Tune/POLYPHONY/etc.) _obxd_set_drum_layer_param
         //    routes live to instance 9, clobbering the structural state.
-        // 4. Per-instance settings + routing — restoreSynthAfterAWP also
-        //    calls setObxdInstancePolyphony(9, saved), re-clobbering.
-        // 5. reassertDrumInstanceStructural MUST run LAST, after all four
+        // 4. Per-instance settings + routing (power, bend range, channel,
+        //    MPE — no longer includes polyphony, which is now solely
+        //    controlled via the editor's polyphonyMenu / legacy idx 3).
+        // 5. reassertDrumInstanceStructural MUST run LAST, after all
         //    clobber sites above, so polyphony=32 / osc mutes / amp-env
         //    defaults are the final writes. Without this, polyphony gets
         //    pinned to 1 (from saved idx 3 = 0.0) and Motherboard's PCM
@@ -209,11 +210,10 @@ async function restoreAppStateAfterAWP(): Promise<boolean> {
         // bulk-restore paths above. Both restoreAllSynthParams (replays
         // instance 9 idx 3 = VOICE_COUNT with the saved 0.0 → polyphony 1)
         // and restoreAllDrumParams (replays idx 3 per pad/layer via the
-        // global-routing path in obxd_set_drum_layer_param) and
-        // restoreSynthAfterAWP (calls setObxdInstancePolyphony(9, saved))
-        // run before this line and would otherwise leave polyphony pinned
-        // to 1, which silently breaks layer stacking (only one voice per
-        // pad hit regardless of pcmLayerCount).
+        // global-routing path in obxd_set_drum_layer_param) run before
+        // this line and would otherwise leave polyphony pinned to 1,
+        // which silently breaks layer stacking (only one voice per pad
+        // hit regardless of pcmLayerCount).
         await reassertDrumInstanceStructural();
 
         console.log("[app-state] Full restore complete");

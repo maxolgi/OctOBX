@@ -16,40 +16,132 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Conditionally generate wasm/obxd/patches.h from wasm/obxd/patches/*.fxp.
-# When no .fxp files are present (the default), patches.h is removed and the
-# C side falls back to its programmatic factory table (see
-# g_factory_programs in wasm/obxd/main_obxd.cpp). When .fxp files ARE
-# present, xxd -i emits a `static const unsigned char patch_<name>[]` for
-# each; main_obxd.cpp's #if __has_include("patches.h") guard picks them up.
+# Copy all .fxp patches from the OB-Xf submodule into wasm/obxd/patches/,
+# flattened with category prefix and zero-padded numbering for stable sort:
+#   Basses_001_Acid Bass.fxp, Basses_002_..., Winds_017_...
+# This runs every build so new patches in the submodule propagate automatically.
+sync_patches() {
+    local src_dir="third_party/OB-Xf/assets/installer/Surge Synth Team/OB-Xf/Patches"
+    local dst_dir="wasm/obxd/patches"
+    mkdir -p "$dst_dir"
+    rm -f "$dst_dir"/*.fxp
+    if [ ! -d "$src_dir" ]; then
+        echo "  (OB-Xf submodule not initialized — skipping patch sync)"
+        return 0
+    fi
+    for category_dir in "$src_dir"/*/; do
+        local category
+        category=$(basename "$category_dir")
+        local idx=1
+        for f in "$category_dir"*.fxp; do
+            [ -f "$f" ] || continue
+            local patch_name
+            patch_name=$(basename "$f" .fxp)
+            local padded_idx
+            padded_idx=$(printf "%03d" "$idx")
+            cp "$f" "$dst_dir/${category}_${padded_idx}_${patch_name}.fxp"
+            idx=$((idx + 1))
+        done
+    done
+    echo "  Synced $(ls "$dst_dir"/*.fxp 2>/dev/null | wc -l) patches from OB-Xf submodule"
+}
+
+# Generate wasm/obxd/patches.h from wasm/obxd/patches/*.fxp.
+# Each .fxp becomes a byte array; the lookup tables (pointers, sizes, names,
+# categories) are auto-generated so main_obxd.cpp never needs manual editing
+# when patches are added or removed.
 generate_patches_h() {
     local patch_dir="wasm/obxd/patches"
-    # Always start from a clean state — a stale patches.h from a previous
-    # build with .fxp files would silently override the programmatic
-    # fallback even after the files were removed.
     rm -f wasm/obxd/patches.h
     if [ ! -d "$patch_dir" ] || ! ls "$patch_dir"/*.fxp >/dev/null 2>&1; then
         echo "  (no .fxp patches found in $patch_dir — using programmatic factory patches)"
         return 0
     fi
+
     local count=0
+    local ptr_entries=""
+    local size_entries=""
+    local name_entries=""
+    local cat_entries=""
+
     for f in "$patch_dir"/*.fxp; do
-        local name
-        name=$(basename "$f" .fxp)
-        # xxd -i emits two symbols per file: `unsigned char <sanitized_path>[] = {...}`
-        # and `unsigned int <sanitized_path>_len = N`. The sanitized path
-        # replaces every non-alphanumeric char with `_`, so it isn't a stable
-        # identifier we can match on — rewrite the whole array decl to our
-        # chosen `patch_<name>` symbol and drop the _len line (the C side
-        # uses sizeof() on the array instead).
+        local basename_noext
+        basename_noext=$(basename "$f" .fxp)
+        # Sanitize basename to a valid C identifier for the array symbol.
+        local sym_name
+        sym_name=$(echo "$basename_noext" | tr -c 'a-zA-Z0-9' '_')
+        local sym="patch_${sym_name}"
+
+        # xxd -i emits `unsigned char <path>[] = {...}` and `<path>_len = N`.
+        # Rename the array to our `patch_<sanitized>` symbol, drop _len.
         xxd -i "$f" \
-            | sed -e "s/^unsigned char [a-zA-Z0-9_]*\[\]/static const unsigned char patch_${name}[]/" \
+            | sed -e "s/^unsigned char [a-zA-Z0-9_]*\[\]/static const unsigned char ${sym}[]/" \
             | grep -v "_len = " \
             >> wasm/obxd/patches.h
         echo "" >> wasm/obxd/patches.h
+
+        # Extract the 28-byte program name from offset 0x1C in the .fxp.
+        # Fall back to the filename if extraction fails.
+        local prog_name
+        prog_name=$(dd if="$f" bs=1 skip=28 count=28 2>/dev/null | tr -d '\0' | sed 's/"/\\"/g')
+        [ -z "$prog_name" ] && prog_name="$basename_noext"
+
+        # Extract the category from the filename prefix (before first _NNN_).
+        local category
+        category=$(echo "$basename_noext" | sed 's/_[0-9]*_.*//')
+
+        ptr_entries="${ptr_entries}    ${sym},\n"
+        size_entries="${size_entries}    sizeof(${sym}),\n"
+        name_entries="${name_entries}    \"${prog_name}\",\n"
+        cat_entries="${cat_entries}    \"${category}\",\n"
+
         count=$((count + 1))
     done
+
+    # Append the auto-generated lookup tables.
+    {
+        echo ""
+        echo "#define FACTORY_PATCH_COUNT ${count}"
+        echo ""
+        echo "static const unsigned char* const g_factory_patches[] = {"
+        echo -e "$ptr_entries"
+        echo "};"
+        echo ""
+        echo "static const unsigned g_factory_patch_sizes[] = {"
+        echo -e "$size_entries"
+        echo "};"
+        echo ""
+        echo "static const char* const g_factory_patch_names[] = {"
+        echo -e "$name_entries"
+        echo "};"
+        echo ""
+        echo "static const char* const g_factory_patch_categories[] = {"
+        echo -e "$cat_entries"
+        echo "};"
+    } >> wasm/obxd/patches.h
+
     echo "  Generated patches.h from $count .fxp file(s)"
+
+    # Also generate a TS-side catalog for the UI patch browser dropdown.
+    # This lets the UI render the full categorized list at module load
+    # time without waiting for async worklet RPCs.
+    {
+        echo "// AUTO-GENERATED by build.sh — do not edit by hand."
+        echo "export interface FactoryPatch { name: string; category: string; }"
+        echo "export const FACTORY_PATCHES: FactoryPatch[] = ["
+        for f in "$patch_dir"/*.fxp; do
+            local basename_noext
+            basename_noext=$(basename "$f" .fxp)
+            local prog_name
+            prog_name=$(dd if="$f" bs=1 skip=28 count=28 2>/dev/null | tr -d '\0' | sed 's/"/\\"/g')
+            [ -z "$prog_name" ] && prog_name="$basename_noext"
+            local category
+            category=$(echo "$basename_noext" | sed 's/_[0-9]*_.*//')
+            echo "  { name: \"${prog_name}\", category: \"${category}\" },"
+        done
+        echo "];"
+    } > src/patch-catalog.ts
+    echo "  Generated src/patch-catalog.ts"
 }
 
 case "${1:-all}" in
@@ -62,6 +154,7 @@ case "${1:-all}" in
         ;;
     synth)
         echo "=== Building Obxd synth WASM module ==="
+        sync_patches
         generate_patches_h
         make -C wasm/obxd -f Makefile clean
         make -C wasm/obxd -f Makefile
@@ -92,6 +185,7 @@ case "${1:-all}" in
         make -C wasm -f Makefile
         echo ""
         echo "=== Building Obxd synth WASM module ==="
+        sync_patches
         generate_patches_h
         make -C wasm/obxd -f Makefile
         cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
