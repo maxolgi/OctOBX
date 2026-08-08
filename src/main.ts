@@ -18,6 +18,9 @@ import { HardwareMidiInput } from "./midi-input";
 import { setupStatePersistence } from "./state-persistence";
 import { setupObxdRack } from "./obxd-rack";
 import { mountDrumModule } from "./drum-rack";
+import { mountMixer } from "./mixer";
+import { getObxdSelectedInstance, isObxdReady } from "./obxd-audio";
+import { syncObxdControlsFromEngine } from "./obxd-synth-ui";
 import { loadAppState, registerAWPReadyCallback } from "./app-state";
 import type { OctopusWasmModule } from "./octopus-types";
 
@@ -89,7 +92,7 @@ async function main() {
     console.log("[octobx] All systems go");
 }
 
-function switchPanel(view: "classic" | "modern" | "synth" | "drums") {
+function switchPanel(view: "classic" | "modern" | "synth" | "drums" | "mixer") {
     if (!wasmModule) return;
     if (activePanelCleanup) { activePanelCleanup(); activePanelCleanup = null; }
 
@@ -97,36 +100,53 @@ function switchPanel(view: "classic" | "modern" | "synth" | "drums") {
     const modernEl = document.getElementById("view-modern")!;
     const obxdEl = document.getElementById("obxd-panel")!;
     const drumEl = document.getElementById("drum-panel")!;
+    const mixerEl = document.getElementById("mixer-panel")!;
 
     if (view === "synth") {
         classicEl.style.display = "none";
         modernEl.style.display = "none";
         obxdEl.style.display = "";
         drumEl.style.display = "none";
+        mixerEl.style.display = "none";
+        // Re-seed the editor knobs from the engine so changes made in the
+        // Mixer view (volume faders) are reflected here. No-op before the
+        // audio worklet is up.
+        if (isObxdReady()) void syncObxdControlsFromEngine(getObxdSelectedInstance());
         window.scrollTo(0, 0);
     } else if (view === "classic") {
         classicEl.style.display = "";
         modernEl.style.display = "none";
         obxdEl.style.display = "none";
         drumEl.style.display = "none";
+        mixerEl.style.display = "none";
         activePanelCleanup = buildClassicPanel(wasmModule);
     } else if (view === "modern") {
         classicEl.style.display = "none";
         modernEl.style.display = "";
         obxdEl.style.display = "none";
         drumEl.style.display = "none";
+        mixerEl.style.display = "none";
         activePanelCleanup = startOctopusPanel(wasmModule);
+    } else if (view === "mixer") {
+        classicEl.style.display = "none";
+        modernEl.style.display = "none";
+        obxdEl.style.display = "none";
+        drumEl.style.display = "none";
+        mixerEl.style.display = "";
+        activePanelCleanup = mountMixer(mixerEl);
+        window.scrollTo(0, 0);
     } else {
         classicEl.style.display = "none";
         modernEl.style.display = "none";
         obxdEl.style.display = "none";
         drumEl.style.display = "";
+        mixerEl.style.display = "none";
         mountDrumModule(drumEl).catch((e: unknown) => console.warn("[drum] mount failed", e));
         window.scrollTo(0, 0);
     }
 }
 
-const VIEW_ORDER = ["classic", "modern", "synth", "drums"] as const;
+const VIEW_ORDER = ["classic", "modern", "synth", "drums", "mixer"] as const;
 let currentViewIdx = 0;
 
 function setupViewToggle() {

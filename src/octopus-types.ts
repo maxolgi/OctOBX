@@ -52,7 +52,7 @@ declare global {
         OctopusModuleFactory?: (moduleOverrides?: object) => Promise<OctopusWasmModule>;
         ObxdModuleFactory?: (moduleOverrides?: object) => Promise<ObxdWasmModule>;
         __module?: OctopusWasmModule;
-        __obxd?: { ctx: AudioContext; node: AudioWorkletNode };
+        __obxd?: { ctx: AudioContext; node: AudioWorkletNode; masterGain: GainNode; masterAnalyser: AnalyserNode };
         webkitAudioContext?: typeof AudioContext;
     }
 }

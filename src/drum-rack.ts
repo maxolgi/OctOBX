@@ -15,7 +15,8 @@ import {
     reassertDrumInstanceStructural,
     DRUM_INSTANCE,
 } from "./drum-audio";
-import { setObxdInstanceParam } from "./obxd-audio";
+import { setObxdInstanceParam, getObxdInstanceMeters, isObxdReady } from "./obxd-audio";
+import { createVuMeter } from "./mixer";
 import type { ObxdParamTarget } from "./obxd-synth-ui";
 
 // --- Module state ---------------------------------------------------------
@@ -29,6 +30,8 @@ let mountedContainer: HTMLElement | null = null;
 
 // DOM refs populated by buildUI().
 let statusEl: HTMLSpanElement;
+let drumMeterInterval: ReturnType<typeof setInterval> | null = null;
+let drumMeter: ReturnType<typeof createVuMeter> | null = null;
 let kitSelectEl: HTMLSelectElement;
 let layerBtnsEl: HTMLDivElement;
 let editorEl: HTMLDivElement;
@@ -679,9 +682,21 @@ function buildUI(container: HTMLElement): void {
     statusEl.className = "drum-status";
     statusEl.textContent = "Initializing...";
 
+    const meterLabel = document.createElement("span");
+    meterLabel.className = "drum-status";
+    meterLabel.textContent = "Level";
+    drumMeter = createVuMeter();
+    // Make the meter a bit shorter for the header row (it's 160px tall by default)
+    drumMeter.element.style.height = "28px";
+    drumMeter.element.style.width = "120px";
+    drumMeter.element.style.display = "inline-block";
+    drumMeter.element.style.verticalAlign = "middle";
+
     header.appendChild(kitSelectEl);
     header.appendChild(loadBtn);
     header.appendChild(statusEl);
+    header.appendChild(meterLabel);
+    header.appendChild(drumMeter.element);
 
     // 2. Pad bank: 8 large buttons in a row.
     const padsLabel = sectionLabel("Pads");
@@ -834,6 +849,16 @@ function buildUI(container: HTMLElement): void {
         buildGroupSection("LFO1", findGroup("LFO1").knobs, false),
         buildGroupSection("LFO2", findGroup("LFO2").knobs, false),
     ));
+
+    // Start the drum-level meter loop (reads the per-instance RMS array the
+    // global rack loop already refreshes at ~30Hz — never pings the worklet).
+    if (drumMeterInterval) clearInterval(drumMeterInterval);
+    drumMeterInterval = setInterval(() => {
+        if (!drumMeter) return;
+        if (!isObxdReady()) { drumMeter.setLevel(0); return; }
+        const m = getObxdInstanceMeters();
+        drumMeter.setLevel(m[DRUM_INSTANCE] || 0);
+    }, 33);
 }
 
 function sectionLabel(text: string): HTMLDivElement {

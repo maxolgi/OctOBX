@@ -10,7 +10,7 @@
  * AudioWorklet initializes (on first PLAY).
  */
 
-import { dumpAllSynthParams, restoreAllSynthParams, dumpAllDrumParams, restoreAllDrumParams } from "./obxd-audio";
+import { dumpAllSynthParams, restoreAllSynthParams, dumpAllDrumParams, restoreAllDrumParams, isObxdReady, syncInstanceVolumes } from "./obxd-audio";
 import {
     getSynthInstanceState,
     restoreSynthAfterAWP,
@@ -117,6 +117,9 @@ export function loadAppState(): boolean {
             cachedState = null;
             return false;
         }
+        // Fill the volume variable at page load so the mixer faders show the
+        // correct values whenever the Mixer is opened — no PLAY required.
+        if (cachedState.synth?.params) syncInstanceVolumes(cachedState.synth.params);
         console.log("[app-state] Loaded from localStorage");
         return true;
     } catch (e) {

@@ -24,6 +24,13 @@ let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let moduleAdded = false;
 
+// Master bus nodes — inserted between the worklet output and the destination
+// so a master fader (GainNode) and a master VU meter (AnalyserNode) can ride
+// the whole mix. workletNode → masterGain → masterAnalyser → destination.
+let masterGain: GainNode | null = null;
+let masterAnalyser: AnalyserNode | null = null;
+const DEFAULT_MASTER_GAIN = 0.85;
+
 // UI-edited instance (0..9). Defaults to 0. Per-instance param APIs do
 // NOT consult this — callers pass the id explicitly. Only the rack /
 // knob-grid read it back via getObxdSelectedInstance() so a knob drag
@@ -34,6 +41,16 @@ let selectedInstance = 0;
 // installed in ensureRouter(). Stays zero until the first pong arrives.
 let lastMeters = new Float32Array(10);
 let lastVoiceActivity = new Uint32Array(10);
+
+// Shared source of truth for per-instance VOLUME (legacy param idx 2).
+// Both the mixer faders and the synth-editor volume knob read AND write
+// this, so the two views mirror each other without engine round-trips.
+// Every write path updates it: the init default, the bulk restore
+// (restoreAllSynthParams), individual knob/fader changes
+// (setObxdInstanceParam), and patch-load read-back (getObxdInstanceParam).
+const VOLUME_PARAM_IDX = 2;
+const DEFAULT_VOLUME = 0.4 * 0.7;  // matches the worklet's init gain (tail.js)
+const instanceVolumes = new Float32Array(10).fill(DEFAULT_VOLUME);
 
 /*
  * One-shot reply router for worklet messages that need an async response
@@ -166,12 +183,22 @@ export async function setupObxdAudio(): Promise<void> {
         outputChannelCount: [2],
         processorOptions: { wasmBinary, midiSab, midiSynthRingOffset, midiSynthHeadOffset, midiSynthTailOffset },
     });
-    workletNode.connect(audioContext.destination);
+    // Master bus: worklet → masterGain → masterAnalyser → destination.
+    // The GainNode is the master fader; the AnalyserNode feeds the master VU.
+    masterGain = audioContext.createGain();
+    masterGain.gain.value = DEFAULT_MASTER_GAIN;
+    masterAnalyser = audioContext.createAnalyser();
+    masterAnalyser.fftSize = 256;
+    workletNode.connect(masterGain);
+    masterGain.connect(masterAnalyser);
+    masterAnalyser.connect(audioContext.destination);
 
     // Expose for debugging (analyser taps, state inspection). Remove before shipping.
     window.__obxd = {
         ctx: audioContext,
         node: workletNode,
+        masterGain,
+        masterAnalyser,
     };
 
     // Await the worklet's `{type:'ready'}` message before resolving. The
@@ -224,6 +251,8 @@ export function teardownObxdAudio(): void {
         workletNode.disconnect();
         workletNode = null;
     }
+    if (masterGain) { masterGain.disconnect(); masterGain = null; }
+    if (masterAnalyser) { masterAnalyser.disconnect(); masterAnalyser = null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +340,7 @@ export async function loadObxdInstanceFxp(
  * apply_param(); unknown indices no-op.
  */
 export function setObxdInstanceParam(id: number, idx: number, value01: number): void {
+    if (idx === VOLUME_PARAM_IDX) instanceVolumes[id] = value01;
     workletNode?.port.postMessage({ type: "set_param", instance_id: id, idx, value: value01 });
 }
 
@@ -391,7 +421,25 @@ export async function getObxdInstanceParam(id: number, idx: number): Promise<num
     port.postMessage({ type: "get_param", instance_id: id, idx });
     const raw = await replyPromise;
     if (!raw) return -1;
-    return Number((raw as { value?: number }).value ?? -1);
+    const v = Number((raw as { value?: number }).value ?? -1);
+    return v;
+}
+
+/* Shared per-instance VOLUME cache — the single source of truth both the
+ * mixer faders and the synth-editor knob read/write. */
+export function getInstanceVolumes(): Float32Array {
+    return instanceVolumes;
+}
+
+/* Fill the VOLUME cache from a flat params[1080] array (108 per instance,
+ * volume at legacy idx 2). Synchronous, no engine round-trip. Called at
+ * the TOP of restore (before the slow drum load) so the mixer faders are
+ * correct the instant the engine boots. */
+export function syncInstanceVolumes(params: number[]): void {
+    for (let i = 0; i < 10; i++) {
+        const v = params[i * 108 + VOLUME_PARAM_IDX];
+        if (typeof v === "number" && v >= 0) instanceVolumes[i] = v;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -415,6 +463,29 @@ export function getObxdInstanceMeters(): Float32Array {
 /* Last received per-instance voice-activity bitmasks (length 10, bit i = voice i sounding). */
 export function getObxdInstanceVoiceActivity(): Uint32Array {
     return lastVoiceActivity;
+}
+
+/*
+ * Master bus controls. The master GainNode sits between the worklet and the
+ * destination; setObxdMasterGain ramps it smoothly to avoid zipper noise.
+ * getObxdMasterLevel returns the post-fader RMS from the AnalyserNode.
+ */
+export function setObxdMasterGain(v: number): void {
+    if (!masterGain || !audioContext) return;
+    const clamped = v < 0 ? 0 : v > 1 ? 1 : v;
+    masterGain.gain.setTargetAtTime(clamped, audioContext.currentTime, 0.01);
+}
+
+let masterLevelBuf = new Float32Array(256);
+export function getObxdMasterLevel(): number {
+    if (!masterAnalyser) return 0;
+    if (masterLevelBuf.length !== masterAnalyser.fftSize) {
+        masterLevelBuf = new Float32Array(masterAnalyser.fftSize);
+    }
+    masterAnalyser.getFloatTimeDomainData(masterLevelBuf);
+    let sum = 0;
+    for (let i = 0; i < masterLevelBuf.length; i++) sum += masterLevelBuf[i] * masterLevelBuf[i];
+    return Math.sqrt(sum / masterLevelBuf.length);
 }
 
 /* Query the program name currently loaded on a specific instance. */

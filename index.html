@@ -115,7 +115,7 @@
         }
         .transport-playing { background: #1a3a1a; color: #0f0; }
         .transport-stopped { background: #3a1a1a; color: #f00; }
-        #oct-midi-output, #oct-midi-input {
+        #oct-midi-output, #oct-midi-input, #oct-project-selector {
             background: #1a1a1a;
             color: var(--text);
             border: 1px solid var(--border);
@@ -471,6 +471,8 @@
     <button id="oct-play">PLAY</button>
     <button id="oct-stop">STOP</button>
     <button id="oct-save">SAVE</button>
+    <button id="oct-save-as">SAVE AS</button>
+    <select id="oct-project-selector" title="Project"></select>
     <button id="oct-load">LOAD</button>
     <span>BPM:</span>
     <input id="oct-tempo" type="number" min="10" max="199" value="120">
@@ -485,6 +487,7 @@
         <button class="view-btn" data-view="modern">Modern</button>
         <button class="view-btn" data-view="synth">Synth</button>
         <button class="view-btn" data-view="drums">Drums</button>
+        <button class="view-btn" data-view="mixer">Mixer</button>
     </div>
 </div>
 
@@ -493,6 +496,8 @@
     <div id="view-modern" style="display:none"></div>
 
     <div id="drum-panel" style="display:none"></div>
+
+    <div id="mixer-panel" style="display:none"></div>
 
     <div id="obxd-panel" class="obxd-panel">
         <div class="obxd-panel-header">
