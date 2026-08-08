@@ -157,6 +157,17 @@ export function registerAWPReadyCallback(): void {
     onAWPReady(restoreAppStateAfterAWP);
 }
 
+/*
+ * Reload cached state from localStorage and, if the AudioWorklet is
+ * running, apply it immediately. Called after a project switch.
+ */
+export async function reloadAndRestoreAppState(): Promise<void> {
+    loadAppState();
+    if (isObxdReady()) {
+        await restoreAppStateAfterAWP();
+    }
+}
+
 async function restoreAppStateAfterAWP(): Promise<boolean> {
     if (!cachedState) return false;
     const s = cachedState;

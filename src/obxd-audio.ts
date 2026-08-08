@@ -231,9 +231,16 @@ export async function setupObxdAudio(): Promise<void> {
                 // is safe too, but we wait for ready so the router doesn't
                 // intercept the ready message by accident.)
                 ensureRouter();
-                // Send default MIDI routing: channels 1-10 → instances 0-9
-                const defaultRouting = new Array(17).fill(-1);
-                for (let i = 0; i < 10; i++) defaultRouting[i + 1] = i;
+                // Send default MIDI routing: channels 1-10 → instances 0-9.
+                // Each entry is a BITMASK (bit i = instance i), matching the
+                // format the processor's process() loop expects and the one
+                // used by syncRoutingToAudioWorklet() in obxd-bridge.ts. Using
+                // single instance IDs here (0,1,2…) was a latent bug that only
+                // surfaced on machines without saved localStorage state — the
+                // restore path calls syncRoutingToAudioWorklet which overwrote
+                // it with correct bitmasks, masking the bug.
+                const defaultRouting = new Array(17).fill(0);
+                for (let i = 0; i < 10; i++) defaultRouting[i + 1] = (1 << i);
                 sendObxdMidiRouting(defaultRouting);
                 resolve();
             } else if (msg.type === "error") {

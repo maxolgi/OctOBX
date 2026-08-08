@@ -112,7 +112,7 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
 
     function bindKey(el: HTMLElement, key: number) {
         if (!el) return;
-        el.oncontextmenu = (e) => { e.preventDefault(); return false; };
+        el.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); return false; };
         el.onmousedown = (e) => {
             if (e.ctrlKey || e.metaKey || e.button === 2) {
                 e.preventDefault();
@@ -132,7 +132,7 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
 
     function bindStepPad(el: HTMLElement, key: number) {
         if (!el) return;
-        el.oncontextmenu = (e) => { e.preventDefault(); return false; };
+        el.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); return false; };
         el.onmousedown = (e) => {
             if (e.ctrlKey || e.metaKey || e.button === 2) {
                 e.preventDefault();
