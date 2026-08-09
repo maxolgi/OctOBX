@@ -438,6 +438,13 @@ export function getInstanceVolumes(): Float32Array {
     return instanceVolumes;
 }
 
+/* Write one instance's volume into the cache (used by the synth editor to
+ * reconcile after a .fxp patch load changes the engine without going
+ * through setObxdInstanceParam). */
+export function setInstanceVolume(id: number, v: number): void {
+    if (id >= 0 && id < 10) instanceVolumes[id] = v;
+}
+
 /* Fill the VOLUME cache from a flat params[1080] array (108 per instance,
  * volume at legacy idx 2). Synchronous, no engine round-trip. Called at
  * the TOP of restore (before the slow drum load) so the mixer faders are

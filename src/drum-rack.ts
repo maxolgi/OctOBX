@@ -15,7 +15,7 @@ import {
     reassertDrumInstanceStructural,
     DRUM_INSTANCE,
 } from "./drum-audio";
-import { setObxdInstanceParam, getObxdInstanceMeters, isObxdReady } from "./obxd-audio";
+import { setObxdInstanceParam, getObxdInstanceMeters, isObxdReady, getInstanceVolumes } from "./obxd-audio";
 import { createVuMeter } from "./mixer";
 import type { ObxdParamTarget } from "./obxd-synth-ui";
 
@@ -477,7 +477,10 @@ export function preloadDrumKit(): Promise<void> {
 }
 
 export async function mountDrumModule(container: HTMLElement): Promise<void> {
-    if (mountedContainer === container) return;
+    if (mountedContainer === container) {
+        syncEditor();
+        return;
+    }
     while (container.firstChild) container.removeChild(container.firstChild);
     ensureStyle();
     buildUI(container);
@@ -1124,12 +1127,19 @@ function syncEditor(): void {
     syncKnobStrips().catch((e) => console.warn("[drum] knob sync failed", e));
 }
 
-// Sync the per-layer knob strip values from the per-layer param store. Global
-// knobs are fire-and-forget (no read-back), so they are intentionally skipped.
+// Sync the per-layer knob strip values from the per-layer param store, and
+// the global Volume knob from the shared variable (same source as the mixer
+// fader). Other global knobs remain fire-and-forget (no read-back).
 async function syncKnobStrips(): Promise<void> {
     for (const kh of layerStripKnobs) {
         const v = kh.customGet ? kh.customGet() : await drumTarget.get(kh.idx);
         if (v >= 0) kh.setValue(v);
+    }
+    // Global Volume knob: read from the shared variable so it matches the
+    // mixer fader (the drum rack never synced this before — it was stuck at
+    // its hardcoded default of 0.5).
+    for (const kh of globalStripKnobs) {
+        if (kh.idx === IDX_VOLUME) kh.setValue(getInstanceVolumes()[9]);
     }
 }
 

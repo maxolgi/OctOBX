@@ -43,6 +43,8 @@ import {
     setObxdInstanceMatrixRow,
     clearObxdInstanceMatrixRow,
     getObxdInstanceVoiceActivity,
+    getInstanceVolumes,
+    setInstanceVolume,
 } from "./obxd-audio";
 import {
     obxfControls,
@@ -1078,11 +1080,23 @@ export async function syncObxdControlsFromEngine(instanceId: number): Promise<vo
     if (cachedControls.length === 0) return;
     if (!isObxdReady()) return;
 
+    // Instant: set the Volume knob from the shared variable (same source as
+    // the mixer fader) so there's no flash of a stale default while the
+    // async engine reads below complete.
+    const volCtl = cachedControls.find((c) => c.legacyIdx === 2);
+    if (volCtl && volCtl.valueEl.setValue) {
+        volCtl.valueEl.setValue(getInstanceVolumes()[instanceId]);
+    }
+
     await Promise.all(cachedControls.map(async (c) => {
         const v = await getObxdInstanceParam(instanceId, c.legacyIdx);
         if (v >= 0) {
             c.lastValue = v;
             if (c.valueEl.setValue) c.valueEl.setValue(v);
+            // Reconcile the shared variable for Volume so a .fxp patch load
+            // (which changes the engine without going through
+            // setObxdInstanceParam) keeps the mixer fader in sync too.
+            if (c.legacyIdx === 2) setInstanceVolume(instanceId, v);
         }
     }));
 
