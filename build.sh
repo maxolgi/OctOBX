@@ -64,6 +64,11 @@ generate_patches_h() {
     local name_entries=""
     local cat_entries=""
 
+    # Sanitized names can collide ("A-B" and "A_B" both -> "patch_A_B"),
+    # which would emit duplicate array definitions and break the compile.
+    # Uniquify with a _2, _3, ... suffix on collision.
+    declare -A seen_syms=()
+
     for f in "$patch_dir"/*.fxp; do
         local basename_noext
         basename_noext=$(basename "$f" .fxp)
@@ -71,6 +76,14 @@ generate_patches_h() {
         local sym_name
         sym_name=$(echo "$basename_noext" | tr -c 'a-zA-Z0-9' '_')
         local sym="patch_${sym_name}"
+        local final_sym="$sym"
+        local n=2
+        while [[ -n "${seen_syms[$final_sym]:-}" ]]; do
+            final_sym="${sym}_${n}"
+            n=$((n + 1))
+        done
+        seen_syms[$final_sym]=1
+        sym="$final_sym"
 
         # xxd -i emits `unsigned char <path>[] = {...}` and `<path>_len = N`.
         # Rename the array to our `patch_<sanitized>` symbol, drop _len.
@@ -168,8 +181,13 @@ case "${1:-all}" in
         # `self` or `location` (it defines globalThis only), but emcc's
         # worker-env output references both. Aliasing self to globalThis and
         # synthesizing a minimal location lets the emcc output run unchanged.
+        #
+        # Splice the AWP task queue between the emcc output and the processor
+        # tail (shim -> emcc JS -> task queue -> tail): the tail references
+        # the AwpTaskQueue binding, and everything ships as one classic
+        # script, so the queue must ride along in the same concatenation.
         cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
-        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
+        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
         rm wasm/build/_awp_shim.js
         echo "=== Synth build complete ==="
         echo "Output: wasm/build/obxd_wasm.{js,wasm} + wasm/build/obxd-processor.js (combined)"
@@ -189,7 +207,7 @@ case "${1:-all}" in
         generate_patches_h
         make -C wasm/obxd -f Makefile
         cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
-        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
+        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
         rm wasm/build/_awp_shim.js
         echo ""
         echo "=== Building OctOBX TypeScript app ==="

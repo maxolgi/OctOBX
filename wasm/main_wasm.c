@@ -65,6 +65,32 @@ static void *sequencer_thread_func(void *arg) {
         long delta_ns = (next.tv_sec - now.tv_sec) * 1000000000L
                       + (next.tv_nsec - now.tv_nsec);
 
+        /*
+         * Late recovery: if we are more than a full tick past the deadline
+         * (background-tab throttling stalls this worker for whole seconds),
+         * do NOT replay the missed ticks back-to-back — that floods the MIDI
+         * ring with clock bursts and machine-guns the sequencer. Skip the
+         * missed deadlines instead: advance `next` by whole ticks until it
+         * is back in the future, then continue the loop, which sleeps until
+         * the re-anchored deadline. Musical time jumps forward; phase is
+         * preserved relative to the new now.
+         */
+        if (delta_ns < -add_ns) {
+            long skipped = 0;
+            while (delta_ns < 0) {
+                next.tv_sec  += (time_t)(add_ns / 1000000000L);
+                next.tv_nsec += add_ns % 1000000000L;
+                if (next.tv_nsec >= 1000000000L) {
+                    next.tv_sec++;
+                    next.tv_nsec -= 1000000000L;
+                }
+                delta_ns += add_ns;
+                skipped++;
+            }
+            fprintf(stderr, "sequencer: late by >= 1 tick; skipped %ld tick(s)\n", skipped);
+            continue;   /* loop re-reads g_tick_ns; sleeps until new deadline */
+        }
+
         if (delta_ns > 1000000) {
             struct timespec rel;
             rel.tv_sec = delta_ns / 1000000000L;

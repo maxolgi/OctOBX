@@ -62,6 +62,9 @@ static pthread_mutex_t midi_ring_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t midi_synth_ring[MIDI_SYNTH_RING_SIZE];
 static volatile int midi_synth_ring_head = 0;
 static volatile int midi_synth_ring_tail = 0;
+/* Dropped-event counter for the synth ring (drop-newest policy). Read by
+ * JS telemetry via wasm_get_midi_synth_dropped_count(). */
+static volatile uint32_t midi_synth_dropped_count = 0;
 
 static void midi_ring_push(uint8_t status, uint8_t data1, uint8_t data2, uint8_t channel) {
     pthread_mutex_lock(&midi_ring_mutex);
@@ -78,20 +81,29 @@ static void midi_ring_push(uint8_t status, uint8_t data1, uint8_t data2, uint8_t
     midi_ring_tail = next;
     pthread_mutex_unlock(&midi_ring_mutex);
 
-    /* Also push to the synth ring buffer (lock-free, read by AudioWorklet) */
+    /* Also push to the synth ring buffer (lock-free SPSC, read by AudioWorklet).
+     *
+     * SPSC discipline: ONLY the producer writes tail, ONLY the consumer (the
+     * AudioWorklet's process()) writes head. The old overflow path advanced
+     * head from the producer side — a second head writer racing the consumer,
+     * exactly when the ring is already overloaded. Now a full ring drops the
+     * NEWEST event and counts it; the consumer drains at audio-quantum rate
+     * and the 60Hz main-thread drain keeps the primary ring flowing, so the
+     * synth ring recovers within a quantum. */
     {
         int stail = __atomic_load_n(&midi_synth_ring_tail, __ATOMIC_RELAXED);
         int snext = (stail + 1) & MIDI_SYNTH_RING_MASK;
         int shead = __atomic_load_n(&midi_synth_ring_head, __ATOMIC_ACQUIRE);
         if (snext == shead) {
-            /* Overflow — advance head (overwrite oldest) */
-            __atomic_store_n(&midi_synth_ring_head, (shead + 1) & MIDI_SYNTH_RING_MASK, __ATOMIC_RELEASE);
+            /* Full — drop newest; NEVER advance head from the producer. */
+            __atomic_fetch_add(&midi_synth_dropped_count, 1u, __ATOMIC_RELAXED);
+        } else {
+            midi_synth_ring[stail] = (uint32_t)status
+                                   | ((uint32_t)data1 << 8)
+                                   | ((uint32_t)data2 << 16)
+                                   | ((uint32_t)channel << 24);
+            __atomic_store_n(&midi_synth_ring_tail, snext, __ATOMIC_RELEASE);
         }
-        midi_synth_ring[stail] = (uint32_t)status
-                               | ((uint32_t)data1 << 8)
-                               | ((uint32_t)data2 << 16)
-                               | ((uint32_t)channel << 24);
-        __atomic_store_n(&midi_synth_ring_tail, snext, __ATOMIC_RELEASE);
     }
 }
 
@@ -161,6 +173,12 @@ int* EMSCRIPTEN_KEEPALIVE get_midi_synth_ring_tail_ptr(void) {
 
 uint32_t EMSCRIPTEN_KEEPALIVE wasm_get_midi_dropped_count(void) {
     return midi_dropped_count;
+}
+
+uint32_t EMSCRIPTEN_KEEPALIVE wasm_get_midi_synth_dropped_count(void) {
+    /* Atomic load — the sequencer pthread increments this; a plain read
+     * would be a formal C11 data race (benign on wasm32, but free to fix). */
+    return __atomic_load_n(&midi_synth_dropped_count, __ATOMIC_RELAXED);
 }
 
 /* ============================================================ */

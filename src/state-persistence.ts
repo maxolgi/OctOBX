@@ -5,7 +5,16 @@
  * Emscripten's MEMFS. IDBFS is mounted at /persistent so the file
  * persists across page reloads via IndexedDB (see octopus-module.ts).
  *
- * SAVE: saves to the active project slot (localStorage + IDBFS).
+ * Storage split for projects:
+ *   - Payloads (Octopus binary + app-state JSON) live in IndexedDB via
+ *     idb-projects.ts — binary stored natively as Uint8Array (no base64,
+ *     no ~5 MB localStorage quota ceiling).
+ *   - localStorage keeps ONLY the small project index (octobx:project_index)
+ *     and the active-project name (octobx:active_project).
+ *   - Legacy localStorage payloads (octobx:project:<name>) are migrated to
+ *     IndexedDB once at startup by migrateLegacyProjects().
+ *
+ * SAVE: saves to the active project slot (IndexedDB + IDBFS).
  * SAVE AS: prompts for a name, creates a new project.
  * Project dropdown: switch between saved projects (confirm dialog).
  * LOAD: file picker imports a .bin into MEMFS + syncs to IDBFS.
@@ -19,43 +28,24 @@ import {
     saveMidiLearnBindings,
 } from "./obxf-midi-learn-integration";
 import { saveAppState, clearAppState, downloadAppStateJson, reloadAndRestoreAppState } from "./app-state";
+import {
+    idbSaveProject,
+    idbLoadProject,
+    idbDeleteProject,
+    idbHasProject,
+    migrateLegacyProjects,
+} from "./idb-projects";
 
 const STATE_PATH = "/persistent/octopus_state.bin";
 
 // ---- localStorage keys for project management ----
+// Only the (small) index + active name live here; payloads live in
+// IndexedDB (see idb-projects.ts).
 const PROJECT_INDEX_KEY = "octobx:project_index";
 const ACTIVE_PROJECT_KEY = "octobx:active_project";
 
-function projectKey(name: string): string {
-    return `octobx:project:${name}`;
-}
-
-interface ProjectData {
-    octopus_state: string;       // base64-encoded binary
-    app_state: string;           // raw JSON string (same as octobx:app_state:v1)
-    saved_at: string;            // ISO timestamp
-}
-
 function ensurePersistentDir(module: OctopusWasmModule): void {
     try { module.FS.mkdir("/persistent"); } catch { /* already exists */ }
-}
-
-// ---- Base64 helpers for binary state ----
-
-function bytesToBase64(bytes: Uint8Array): string {
-    let binary = "";
-    const chunk = 8192;
-    for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
-    }
-    return btoa(binary);
-}
-
-function base64ToBytes(b64: string): Uint8Array {
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
 }
 
 // ---- Project index management ----
@@ -96,11 +86,10 @@ async function saveProjectData(module: OctopusWasmModule, name: string): Promise
     module._wasm_save_state();
     await saveAppState();
 
-    // Read Octopus binary from MEMFS
-    let octopusB64 = "";
+    // Read Octopus binary from MEMFS (stored as raw bytes in IDB — no base64)
+    let octopusBytes: Uint8Array | null = null;
     try {
-        const data = module.FS.readFile(STATE_PATH);
-        octopusB64 = bytesToBase64(data);
+        octopusBytes = module.FS.readFile(STATE_PATH);
     } catch {
         console.warn("[project] No Octopus binary to save");
     }
@@ -108,13 +97,7 @@ async function saveProjectData(module: OctopusWasmModule, name: string): Promise
     // Read app state JSON
     const appStateJson = localStorage.getItem("octobx:app_state:v1") || "{}";
 
-    const project: ProjectData = {
-        octopus_state: octopusB64,
-        app_state: appStateJson,
-        saved_at: new Date().toISOString(),
-    };
-
-    localStorage.setItem(projectKey(name), JSON.stringify(project));
+    await idbSaveProject(name, octopusBytes, appStateJson);
 
     // Update index
     const list = getProjectList();
@@ -126,27 +109,24 @@ async function saveProjectData(module: OctopusWasmModule, name: string): Promise
     setActiveProject(name);
     refreshProjectSelector();
 
-    console.log(`[project] Saved "${name}" (${octopusB64.length > 0 ? Math.round(octopusB64.length * 3 / 4) + " bytes binary" : "no binary"})`);
+    console.log(`[project] Saved "${name}" (${octopusBytes ? octopusBytes.length + " bytes binary" : "no binary"})`);
 }
 
 /*
  * Load a project: deserialize, write to working state, reload engine.
  */
 async function loadProjectData(module: OctopusWasmModule, name: string): Promise<void> {
-    const raw = localStorage.getItem(projectKey(name));
-    if (!raw) {
+    const project = await idbLoadProject(name);
+    if (!project) {
         console.warn(`[project] Project "${name}" not found`);
         return;
     }
 
-    const project = JSON.parse(raw) as ProjectData;
-
     // Write Octopus binary to MEMFS + reload engine
-    if (project.octopus_state) {
+    if (project.octopusState) {
         try {
-            const bytes = base64ToBytes(project.octopus_state);
             ensurePersistentDir(module);
-            module.FS.writeFile(STATE_PATH, bytes);
+            module.FS.writeFile(STATE_PATH, project.octopusState);
             module._wasm_load_state();
             syncIdbfs(module);
         } catch (e) {
@@ -155,8 +135,8 @@ async function loadProjectData(module: OctopusWasmModule, name: string): Promise
     }
 
     // Write app state to working localStorage key
-    if (project.app_state && project.app_state !== "{}") {
-        localStorage.setItem("octobx:app_state:v1", project.app_state);
+    if (project.appStateJson && project.appStateJson !== "{}") {
+        localStorage.setItem("octobx:app_state:v1", project.appStateJson);
     }
 
     setActiveProject(name);
@@ -177,6 +157,17 @@ function syncIdbfs(module: OctopusWasmModule): void {
             if (err) console.error("[octobx] IDBFS sync failed:", err);
         });
     } catch { /* IDBFS not mounted */ }
+}
+
+/*
+ * User-visible failure signal for the fire-and-forget project operations.
+ * IndexedDB errors (quota, blocked upgrade, private-mode rejection) would
+ * otherwise surface only as unhandled promise rejections — the user would
+ * believe the project saved. Callers that already try/catch (project switch)
+ * report inline; SAVE / SAVE AS / Duplicate / Delete route through this.
+ */
+function reportProjectError(op: string, err: unknown): void {
+    console.error(`[project] ${op} failed (changes NOT saved):`, err);
 }
 
 /*
@@ -237,6 +228,12 @@ function getPreviousSelection(): string {
 let selectionOverride: string | null = null;
 
 export function setupStatePersistence(module: OctopusWasmModule) {
+    // One-time migration: move legacy localStorage payloads into IndexedDB.
+    // Fire-and-forget — failures are logged inside, never block startup.
+    void migrateLegacyProjects().then((n) => {
+        if (n > 0) console.log(`[project] Migrated ${n} project(s) from localStorage to IndexedDB`);
+    });
+
     loadMidiLearnBindings();
 
     // Initialize project index with Default if empty
@@ -252,12 +249,16 @@ export function setupStatePersistence(module: OctopusWasmModule) {
 
     // SAVE — saves to the active project slot
     saveBtn?.addEventListener("click", async (e) => {
-        const active = getActiveProject();
-        await saveProjectData(module, active);
-        saveMidiLearnBindings();
-        if (e.shiftKey) {
-            downloadStateFile(module);
-            downloadAppStateJson();
+        try {
+            const active = getActiveProject();
+            await saveProjectData(module, active);
+            saveMidiLearnBindings();
+            if (e.shiftKey) {
+                downloadStateFile(module);
+                downloadAppStateJson();
+            }
+        } catch (err) {
+            reportProjectError("Save", err);
         }
     });
 
@@ -266,8 +267,12 @@ export function setupStatePersistence(module: OctopusWasmModule) {
         const name = window.prompt("Save project as:", getActiveProject());
         if (!name || !name.trim()) return;
         const trimmed = name.trim();
-        await saveProjectData(module, trimmed);
-        saveMidiLearnBindings();
+        try {
+            await saveProjectData(module, trimmed);
+            saveMidiLearnBindings();
+        } catch (err) {
+            reportProjectError("Save As", err);
+        }
     });
 
     // Project selector — confirm before switching
@@ -340,19 +345,20 @@ export function setupStatePersistence(module: OctopusWasmModule) {
 
 // ---- Project management helpers ----
 
-function duplicateProject(module: OctopusWasmModule): void {
+async function duplicateProject(module: OctopusWasmModule): Promise<void> {
     const active = getActiveProject();
     const name = window.prompt(`Duplicate "${active}" as:`, active + " copy");
     if (!name || !name.trim()) return;
     const trimmed = name.trim();
 
-    // Copy the raw project data
-    const raw = localStorage.getItem(projectKey(active));
-    if (!raw) {
+    // Copy the project payload from IndexedDB
+    if (!(await idbHasProject(active))) {
         console.warn(`[project] Cannot duplicate — "${active}" has no saved data`);
         return;
     }
-    localStorage.setItem(projectKey(trimmed), raw);
+    const src = await idbLoadProject(active);
+    if (!src) return; // vanished between the check and the read (unlikely)
+    await idbSaveProject(trimmed, src.octopusState, src.appStateJson);
 
     const list = getProjectList();
     if (!list.includes(trimmed)) {
@@ -363,7 +369,7 @@ function duplicateProject(module: OctopusWasmModule): void {
     console.log(`[project] Duplicated "${active}" → "${trimmed}"`);
 }
 
-function deleteProject(): void {
+async function deleteProject(): Promise<void> {
     const active = getActiveProject();
     const list = getProjectList();
     if (list.length <= 1) {
@@ -372,7 +378,7 @@ function deleteProject(): void {
     }
     if (!window.confirm(`Delete project "${active}"?\nThis cannot be undone.`)) return;
 
-    localStorage.removeItem(projectKey(active));
+    await idbDeleteProject(active);
     const newList = list.filter(n => n !== active);
     setProjectList(newList);
 
@@ -409,18 +415,27 @@ function setupContextMenu(module: OctopusWasmModule, fileInput: HTMLInputElement
         closeMenu();
 
         const items: MenuItem[] = [
-            { label: "Save Project", action: async () => { await saveProjectData(module, getActiveProject()); saveMidiLearnBindings(); } },
+            { label: "Save Project", action: async () => {
+                try {
+                    await saveProjectData(module, getActiveProject());
+                    saveMidiLearnBindings();
+                } catch (err) { reportProjectError("Save", err); }
+            } },
             { label: "Save As...", action: async () => {
                 const name = window.prompt("Save project as:", getActiveProject());
-                if (name?.trim()) { await saveProjectData(module, name.trim()); saveMidiLearnBindings(); }
+                if (!name?.trim()) return;
+                try {
+                    await saveProjectData(module, name.trim());
+                    saveMidiLearnBindings();
+                } catch (err) { reportProjectError("Save As", err); }
             }},
             { separator: true, label: "" },
             { label: "Export Octopus (.bin)", action: () => { module._wasm_save_state(); downloadStateFile(module); } },
             { label: "Export State (.json)", action: () => downloadAppStateJson() },
             { label: "Import State...", action: () => fileInput.click() },
             { separator: true, label: "" },
-            { label: "Duplicate Project", action: () => duplicateProject(module) },
-            { label: "Delete Project", action: () => deleteProject(), danger: true },
+            { label: "Duplicate Project", action: () => { void duplicateProject(module).catch((err) => reportProjectError("Duplicate", err)); } },
+            { label: "Delete Project", action: () => { void deleteProject().catch((err) => reportProjectError("Delete", err)); }, danger: true },
             { separator: true, label: "" },
             { label: "Clear All (Recovery)", action: () => {
                 if (!window.confirm("Clear ALL state? This wipes the Octopus sequencer + synth/drum params.")) return;

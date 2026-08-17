@@ -22,6 +22,19 @@
  * it via the same _get_buf_l_ptr / _get_buf_r_ptr that the cached HEAPF32
  * views already point at.
  *
+ * Heavy/deferred execution: every mutating port message (params, gains,
+ * fxp/PCM loads, bulk restores) is converted to a closure and pushed onto
+ * the AwpTaskQueue (from src/awp-task-queue.js, concatenated above us in
+ * this same classic script). process() drains it once per 128-sample
+ * quantum with a budget of at most ONE heavy task (load_fxp, factory
+ * patch, PCM load/clear) so those operations spread across frames
+ * instead of blowing the ~2.9ms render deadline. Strict FIFO keeps a
+ * set_param enqueued after a load_fxp applying AFTER it. Reply messages
+ * (fxp_loaded, param_value, patch_name, the bulk dump/restored acks) are
+ * posted from INSIDE the queued tasks so replies stay ordered relative
+ * to the work. Only 'midi' (pendingMidi array) and 'ping' (30Hz liveness
+ * / meter read) bypass the queue.
+ *
  * IMPORTANT: This file is plain JS (not an ES module, not TypeScript) so it
  * can be loaded via AudioWorklet.addModule() which expects a classic script.
  */
@@ -37,6 +50,8 @@ let initPromise = null;
 let bufLPtr = 0;
 let bufRPtr = 0;
 let pendingMidi = [];   // queued via port.onmessage, drained in process()
+
+const taskQueue = new AwpTaskQueue();   // from src/awp-task-queue.js (concatenated above us)
 
 // SAB-based MIDI ring buffer (direct from Octopus sequencer, no main thread)
 let midiSabRing = null;      // Uint32Array view over SAB
@@ -200,57 +215,79 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     pendingMidi.push(msg);
                     break;
                 case 'set_routing':
-                    if (msg.routing && Array.isArray(msg.routing)) {
-                        midiRouting = msg.routing.slice();
-                    }
+                    taskQueue.push(() => {
+                        if (msg.routing && Array.isArray(msg.routing)) {
+                            midiRouting = msg.routing.slice();
+                        }
+                    });
                     break;
                 case 'set_active':
-                    if (wasmModule) wasmModule._obxd_set_active(id, msg.active ? 1 : 0);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_active(id, msg.active ? 1 : 0);
+                    });
                     break;
                 case 'set_polyphony':
-                    if (wasmModule) wasmModule._obxd_set_polyphony(id, msg.voice_count | 0);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_polyphony(id, msg.voice_count | 0);
+                    });
                     break;
                 case 'set_mpe':
                     // Per-instance MPE flag (T9). Stored on the C side in
                     // g_mpe_enabled[id]; the engine is channel-aware but the
                     // actual per-channel dispatch arrives in T20. For now
                     // obxd_midi_in still passes channel=0 regardless.
-                    if (wasmModule) wasmModule._obxd_set_mpe(id, msg.enabled ? 1 : 0);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_mpe(id, msg.enabled ? 1 : 0);
+                    });
                     break;
                 case 'set_mod_wheel':
                     // Fix 2: reserved CC 1 direct routing. value is 0..1.
-                    if (wasmModule) wasmModule._obxd_set_mod_wheel(id, +msg.value);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_mod_wheel(id, +msg.value);
+                    });
                     break;
                 case 'set_sustain':
                     // Fix 2: reserved CC 64 direct routing. enabled is 0/1.
-                    if (wasmModule) wasmModule._obxd_set_sustain(id, msg.enabled ? 1 : 0);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_sustain(id, msg.enabled ? 1 : 0);
+                    });
                     break;
                 case 'set_mpe_glide_range':
-                    if (wasmModule) wasmModule._obxd_set_mpe_glide_range(id, msg.semitones | 0);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_mpe_glide_range(id, msg.semitones | 0);
+                    });
                     break;
                 case 'set_matrix_row':
-                    if (wasmModule && typeof msg.row === 'number'
-                            && typeof msg.src === 'string' && typeof msg.tgt === 'string'
-                            && typeof msg.depth === 'number') {
-                        wasmModule._obxd_set_matrix_row(id, msg.row | 0, msg.src, msg.tgt, +msg.depth);
-                    }
+                    taskQueue.push(() => {
+                        if (wasmModule && typeof msg.row === 'number'
+                                && typeof msg.src === 'string' && typeof msg.tgt === 'string'
+                                && typeof msg.depth === 'number') {
+                            wasmModule._obxd_set_matrix_row(id, msg.row | 0, msg.src, msg.tgt, +msg.depth);
+                        }
+                    });
                     break;
                 case 'clear_matrix_row':
-                    if (wasmModule && typeof msg.row === 'number') {
-                        wasmModule._obxd_clear_matrix_row(id, msg.row | 0);
-                    }
+                    taskQueue.push(() => {
+                        if (wasmModule && typeof msg.row === 'number') {
+                            wasmModule._obxd_clear_matrix_row(id, msg.row | 0);
+                        }
+                    });
                     break;
                 case 'set_param':
                     // idx is a ParamsEnum.h value; value is 0..1. Forwarded
                     // directly to the engine. Useful for runtime patch tweaks.
-                    if (wasmModule && typeof msg.idx === 'number' && typeof msg.value === 'number') {
-                        wasmModule._obxd_set_param(id, msg.idx | 0, +msg.value);
-                    }
+                    taskQueue.push(() => {
+                        if (wasmModule && typeof msg.idx === 'number' && typeof msg.value === 'number') {
+                            wasmModule._obxd_set_param(id, msg.idx | 0, +msg.value);
+                        }
+                    });
                     break;
                 case 'gain':
                     // UI sends 0..1; we scale down so the slider's max isn't
                     // deafening (engine's processVolume maps 0..1 -> 0..0.30).
-                    if (wasmModule) wasmModule._obxd_set_gain(id, Math.max(0, Math.min(1, +msg.value)) * 0.4);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_gain(id, Math.max(0, Math.min(1, +msg.value)) * 0.4);
+                    });
                     break;
                 case 'load_fxp': {
                     // Phase 4 — load a VST2 preset file into one instance.
@@ -260,140 +297,198 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     // FS — emcc was built with -sFORCE_FILESYSTEM=0), then
                     // hand the pointer to the C loader. Reply with the
                     // parsed patch name (or an error code) so the UI can
-                    // update its label.
+                    // update its label. HEAVY: _malloc + XML parse can blow
+                    // the render quantum — deferred, one per drain.
                     const bytes = msg.bytes;
-                    if (!wasmModule || !bytes || !bytes.length) {
-                        this.port.postMessage({ type: 'fxp_loaded', instance_id: msg.instance_id, success: false, rc: -1, name: '' });
-                        break;
-                    }
-                    let rc = -1, name = '';
-                    try {
-                        const ptr = wasmModule._malloc(bytes.length);
-                        if (!ptr) throw new Error('_malloc returned 0');
-                        wasmModule.HEAPU8.set(bytes, ptr);
-                        rc = wasmModule._obxd_load_fxp(id, ptr, bytes.length);
-                        wasmModule._free(ptr);
-                        name = wasmModule.UTF8ToString(wasmModule._obxd_get_patch_name(id)) || '';
-                    } catch (e) {
-                        console.error('[obxd-processor] load_fxp threw:', e && e.message);
-                        rc = -128;
-                    }
-                    this.port.postMessage({
-                        type: 'fxp_loaded',
-                        instance_id: msg.instance_id,
-                        success: rc === 0,
-                        rc,
-                        name,
-                    });
+                    taskQueue.push(() => {
+                        if (!wasmModule || !bytes || !bytes.length) {
+                            this.port.postMessage({ type: 'fxp_loaded', instance_id: msg.instance_id, success: false, rc: -1, name: '' });
+                            return;
+                        }
+                        let rc = -1, name = '';
+                        try {
+                            const ptr = wasmModule._malloc(bytes.length);
+                            if (!ptr) throw new Error('_malloc returned 0');
+                            wasmModule.HEAPU8.set(bytes, ptr);
+                            rc = wasmModule._obxd_load_fxp(id, ptr, bytes.length);
+                            wasmModule._free(ptr);
+                            name = wasmModule.UTF8ToString(wasmModule._obxd_get_patch_name(id)) || '';
+                        } catch (e) {
+                            console.error('[obxd-processor] load_fxp threw:', e && e.message);
+                            rc = -128;
+                        }
+                        this.port.postMessage({
+                            type: 'fxp_loaded',
+                            instance_id: msg.instance_id,
+                            success: rc === 0,
+                            rc,
+                            name,
+                        });
+                    }, true);
                     break;
                 }
                 case 'set_factory_patch':
-                    if (wasmModule) wasmModule._obxd_set_factory_patch(id, msg.patch_id | 0);
+                    // HEAVY: deletes + recreates a SynthEngine (32-voice
+                    // array) on the C side.
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_factory_patch(id, msg.patch_id | 0);
+                    }, true);
                     break;
                 case 'panic':
-                    if (wasmModule) wasmModule._obxd_panic(id);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_panic(id);
+                    });
                     break;
                 case 'panic_all':
-                    if (wasmModule) wasmModule._obxd_panic_all();
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_panic_all();
+                    });
                     break;
                 case 'reset_patch':
-                    if (wasmModule) wasmModule._obxd_reset_patch(id);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_reset_patch(id);
+                    });
                     break;
                 case 'get_param':
-                    if (wasmModule && typeof msg.idx === 'number') {
-                        const v = wasmModule._obxd_get_param(id, msg.idx | 0);
-                        this.port.postMessage({ type: 'param_value', instance_id: msg.instance_id, idx: msg.idx | 0, value: v });
-                    }
+                    taskQueue.push(() => {
+                        if (wasmModule && typeof msg.idx === 'number') {
+                            const v = wasmModule._obxd_get_param(id, msg.idx | 0);
+                            this.port.postMessage({ type: 'param_value', instance_id: msg.instance_id, idx: msg.idx | 0, value: v });
+                        }
+                    });
                     break;
                 // Bulk param dump/restore for state persistence (save/load).
                 // Single round-trip for all 10 instances × 108 params.
                 case 'dump_all_params': {
-                    const total = INSTANCE_COUNT * 108;
-                    const params = new Array(total);
-                    if (wasmModule) {
-                        for (let i = 0; i < INSTANCE_COUNT; i++) {
-                            const base = i * 108;
-                            for (let p = 0; p < 80; p++)
-                                params[base + p] = wasmModule._obxd_get_param(i, p);
-                            for (let n = 0; n < 28; n++)
-                                params[base + 80 + n] = wasmModule._obxd_get_param(i, 200 + n);
+                    taskQueue.push(() => {
+                        const total = INSTANCE_COUNT * 108;
+                        const params = new Array(total);
+                        if (wasmModule) {
+                            for (let i = 0; i < INSTANCE_COUNT; i++) {
+                                const base = i * 108;
+                                for (let p = 0; p < 80; p++)
+                                    params[base + p] = wasmModule._obxd_get_param(i, p);
+                                for (let n = 0; n < 28; n++)
+                                    params[base + 80 + n] = wasmModule._obxd_get_param(i, 200 + n);
+                            }
+                        } else {
+                            params.fill(0);
                         }
-                    } else {
-                        params.fill(0);
-                    }
-                    this.port.postMessage({ type: 'all_params_dumped', params });
+                        this.port.postMessage({ type: 'all_params_dumped', params });
+                    });
                     break;
                 }
                 case 'restore_all_params': {
-                    if (wasmModule && Array.isArray(msg.params)) {
-                        const params = msg.params;
-                        for (let i = 0; i < INSTANCE_COUNT; i++) {
-                            const base = i * 108;
-                            for (let p = 0; p < 80; p++)
+                    if (!wasmModule || !Array.isArray(msg.params)) {
+                        // preserve current behavior shape: still post the reply
+                        this.port.postMessage({ type: 'all_params_restored' });
+                        break;
+                    }
+                    const params = msg.params;
+                    // Instance 9 is the drum instance; its structural params (VOICE_COUNT=3,
+                    // OSC1MIX=40, OSC2MIX=41, NOISEMIX=42, LATK=51, LREL=54) are owned by
+                    // initDrumMode/reassertDrumInstanceStructural — restoring stale mirror
+                    // values here pinned polyphony to 1 and unmuted the oscillators.
+                    // Skip exactly these six for instance 9 only; instances 0..8 replay all.
+                    const DRUM_STRUCTURAL_SKIP = new Set([3, 40, 41, 42, 51, 54]);
+                    // 10 per-instance LIGHT chunks keep each quantum's setter
+                    // burst bounded; the FIFO queue applies them in order and
+                    // the reply lands only after the last chunk ran.
+                    for (let i = 0; i < INSTANCE_COUNT; i++) {
+                        const base = i * 108;
+                        taskQueue.push(() => {
+                            for (let p = 0; p < 80; p++) {
+                                if (i === 9 && DRUM_STRUCTURAL_SKIP.has(p)) continue;
                                 wasmModule._obxd_set_param(i, p, +params[base + p]);
+                            }
                             for (let n = 0; n < 28; n++)
                                 wasmModule._obxd_set_param(i, 200 + n, +params[base + 80 + n]);
-                        }
+                        });
                     }
-                    this.port.postMessage({ type: 'all_params_restored' });
+                    taskQueue.push(() => {
+                        this.port.postMessage({ type: 'all_params_restored' });
+                    });
                     break;
                 }
                 // Bulk drum layer param dump/restore (state persistence).
                 // Dumps 8 pads × 4 layers × 108 params (80 legacy + 28 new).
                 case 'dump_drum_params': {
-                    const dtotal = 8 * 4 * 108;
-                    const dparams = new Array(dtotal);
-                    if (wasmModule) {
-                        for (let dpad = 0; dpad < 8; dpad++) {
-                            for (let dlayer = 0; dlayer < 4; dlayer++) {
-                                const dbase = dpad * 432 + dlayer * 108;
-                                for (let dp = 0; dp < 80; dp++)
-                                    dparams[dbase + dp] = wasmModule._obxd_get_drum_layer_param(dpad, dlayer, dp);
-                                for (let dn = 0; dn < 28; dn++)
-                                    dparams[dbase + 80 + dn] = wasmModule._obxd_get_drum_layer_param(dpad, dlayer, 200 + dn);
+                    taskQueue.push(() => {
+                        const dtotal = 8 * 4 * 108;
+                        const dparams = new Array(dtotal);
+                        if (wasmModule) {
+                            for (let dpad = 0; dpad < 8; dpad++) {
+                                for (let dlayer = 0; dlayer < 4; dlayer++) {
+                                    const dbase = dpad * 432 + dlayer * 108;
+                                    for (let dp = 0; dp < 80; dp++) {
+                                        // Drum globals are dumped via the synth-params path
+                                        // (instance 9) — emitting them here would duplicate
+                                        // state that must not be restored per-layer. Write 0
+                                        // into skipped slots so the length stays 8*4*108.
+                                        if (wasmModule._obxd_is_global_drum_param(dp)) { dparams[dbase + dp] = 0; continue; }
+                                        dparams[dbase + dp] = wasmModule._obxd_get_drum_layer_param(dpad, dlayer, dp);
+                                    }
+                                    for (let dn = 0; dn < 28; dn++)
+                                        dparams[dbase + 80 + dn] = wasmModule._obxd_get_drum_layer_param(dpad, dlayer, 200 + dn);
+                                }
                             }
+                        } else {
+                            dparams.fill(0);
                         }
-                    } else {
-                        dparams.fill(0);
-                    }
-                    this.port.postMessage({ type: 'drum_params_dumped', params: dparams });
+                        this.port.postMessage({ type: 'drum_params_dumped', params: dparams });
+                    });
                     break;
                 }
                 case 'restore_drum_params': {
-                    if (wasmModule && Array.isArray(msg.params)) {
-                        const dparams = msg.params;
-                        for (let dpad = 0; dpad < 8; dpad++) {
+                    if (!wasmModule || !Array.isArray(msg.params)) {
+                        // preserve current behavior shape: still post the reply
+                        this.port.postMessage({ type: 'drum_params_restored' });
+                        break;
+                    }
+                    const dparams = msg.params;
+                    // 8 per-pad LIGHT chunks (each: 4 layers × 108 slots),
+                    // reply posted only after the last chunk ran.
+                    for (let dpad = 0; dpad < 8; dpad++) {
+                        taskQueue.push(() => {
                             for (let dlayer = 0; dlayer < 4; dlayer++) {
                                 const dbase = dpad * 432 + dlayer * 108;
-                                for (let dp = 0; dp < 80; dp++)
+                                for (let dp = 0; dp < 80; dp++) {
+                                    if (wasmModule._obxd_is_global_drum_param(dp)) continue;
                                     wasmModule._obxd_set_drum_layer_param(dpad, dlayer, dp, +dparams[dbase + dp]);
+                                }
                                 for (let dn = 0; dn < 28; dn++)
                                     wasmModule._obxd_set_drum_layer_param(dpad, dlayer, 200 + dn, +dparams[dbase + 80 + dn]);
                             }
-                        }
+                        });
                     }
-                    this.port.postMessage({ type: 'drum_params_restored' });
+                    taskQueue.push(() => { this.port.postMessage({ type: 'drum_params_restored' }); });
                     break;
                 }
                 // OctOBX PCM — per-drum-layer full-param get/set (mirrors get_param / set_param).
                 case 'set_drum_layer_param':
-                    if (wasmModule && typeof msg.idx === 'number' && typeof msg.value === 'number') {
-                        wasmModule._obxd_set_drum_layer_param(msg.pad | 0, msg.layer | 0, msg.idx | 0, +msg.value);
-                    }
+                    taskQueue.push(() => {
+                        if (wasmModule && typeof msg.idx === 'number' && typeof msg.value === 'number') {
+                            wasmModule._obxd_set_drum_layer_param(msg.pad | 0, msg.layer | 0, msg.idx | 0, +msg.value);
+                        }
+                    });
                     break;
                 case 'get_drum_layer_param':
-                    if (wasmModule && typeof msg.idx === 'number') {
-                        const val = wasmModule._obxd_get_drum_layer_param(msg.pad | 0, msg.layer | 0, msg.idx | 0);
-                        this.port.postMessage({ type: 'drum_layer_param_value', instance_id: msg.instance_id, pad: msg.pad | 0, layer: msg.layer | 0, idx: msg.idx | 0, value: val });
-                    }
+                    taskQueue.push(() => {
+                        if (wasmModule && typeof msg.idx === 'number') {
+                            const val = wasmModule._obxd_get_drum_layer_param(msg.pad | 0, msg.layer | 0, msg.idx | 0);
+                            this.port.postMessage({ type: 'drum_layer_param_value', instance_id: msg.instance_id, pad: msg.pad | 0, layer: msg.layer | 0, idx: msg.idx | 0, value: val });
+                        }
+                    });
                     break;
                 case 'get_patch_name': {
-                    let name = '';
-                    if (wasmModule) {
-                        try { name = wasmModule.UTF8ToString(wasmModule._obxd_get_patch_name(id)) || ''; }
-                        catch (e) { name = ''; }
-                    }
-                    this.port.postMessage({ type: 'patch_name', instance_id: msg.instance_id, name });
+                    taskQueue.push(() => {
+                        let name = '';
+                        if (wasmModule) {
+                            try { name = wasmModule.UTF8ToString(wasmModule._obxd_get_patch_name(id)) || ''; }
+                            catch (e) { name = ''; }
+                        }
+                        this.port.postMessage({ type: 'patch_name', instance_id: msg.instance_id, name });
+                    });
                     break;
                 }
                 case 'ping': {
@@ -421,31 +516,46 @@ class ObxdProcessor extends AudioWorkletProcessor {
                 // OctOBX PCM
                 case 'load_pcm': {
                     // msg = {instance_id, pad, layer, pcmL: Float32Array, frames}
+                    // HEAVY: _malloc + a large HEAPF32.set can blow the
+                    // render quantum — deferred, one per drain.
                     const pcmL = msg.pcmL;
-                    if (!wasmModule || !pcmL || !pcmL.length) break;
-                    const size = msg.frames * 4;
-                    const ptr = wasmModule._malloc(size);
-                    wasmModule.HEAPF32.set(pcmL, ptr >> 2);
-                    wasmModule._obxd_load_pcm(id, msg.pad | 0, msg.layer | 0, ptr, msg.frames | 0);
-                    // WASM takes ownership of the pointer — do NOT free
+                    taskQueue.push(() => {
+                        if (!wasmModule || !pcmL || !pcmL.length) return;
+                        const size = msg.frames * 4;
+                        const ptr = wasmModule._malloc(size);
+                        wasmModule.HEAPF32.set(pcmL, ptr >> 2);
+                        wasmModule._obxd_load_pcm(id, msg.pad | 0, msg.layer | 0, ptr, msg.frames | 0);
+                        // WASM takes ownership of the pointer — do NOT free
+                    }, true);
                     break;
                 }
                 case 'set_pcm_layer':
-                    if (wasmModule) wasmModule._obxd_set_pcm_layer(id, msg.pad | 0, msg.layer | 0,
-                        +msg.gain, +msg.cutoff, +msg.res, +msg.mode,
-                        +msg.aA, +msg.aD, +msg.aS, +msg.aR, +msg.pan, +msg.pitch);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_pcm_layer(id, msg.pad | 0, msg.layer | 0,
+                            +msg.gain, +msg.cutoff, +msg.res, +msg.mode,
+                            +msg.aA, +msg.aD, +msg.aS, +msg.aR, +msg.pan, +msg.pitch);
+                    });
                     break;
                 case 'set_pcm_note_map':
-                    if (wasmModule) wasmModule._obxd_set_pcm_note_map(id, msg.note | 0, msg.pad | 0);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_pcm_note_map(id, msg.note | 0, msg.pad | 0);
+                    });
                     break;
                 case 'set_pcm_layer_count':
-                    if (wasmModule) wasmModule._obxd_set_pcm_layer_count(id, msg.pad | 0, msg.count | 0);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_pcm_layer_count(id, msg.pad | 0, msg.count | 0);
+                    });
                     break;
                 case 'set_pcm_choke':
-                    if (wasmModule) wasmModule._obxd_set_pcm_choke(id, msg.pad | 0, msg.group | 0);
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_set_pcm_choke(id, msg.pad | 0, msg.group | 0);
+                    });
                     break;
                 case 'clear_pcm':
-                    if (wasmModule) wasmModule._obxd_clear_pcm(id);
+                    // HEAVY: frees the per-pad PCM banks.
+                    taskQueue.push(() => {
+                        if (wasmModule) wasmModule._obxd_clear_pcm(id);
+                    }, true);
                     break;
                 default:
                     break;
@@ -508,6 +618,11 @@ class ObxdProcessor extends AudioWorkletProcessor {
             }
             pendingMidi.length = 0;
         }
+
+        // Run deferred port messages (budgeted: light tasks flow freely, at most
+        // `1` heavy task per quantum). Placed before render so param changes
+        // applied here take effect in this quantum.
+        taskQueue.drain(1);
 
         // Renders every active engine, sums into g_master_l/r, applies
         // soft-clip — all inside the C side. The worklet doesn't need to

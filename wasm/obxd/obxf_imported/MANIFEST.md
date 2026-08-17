@@ -12,6 +12,16 @@ All OB-Xf sources are **byte-identical** to the upstream files (verified via
 `md5sum`). Two deliberate stubs (`Utils.h`, `libMTSClient.h`) were added to
 resolve otherwise-unresolvable includes — see §4.
 
+### OctOBX-only divergence: PCM sampler additions
+
+`engine/SynthEngine.h`, `engine/Motherboard.h`, and `engine/Voice.h` carry
+**OctOBX-only PCM sampler additions** (`pcmBank`, `assignPcmLayer`,
+`loadPcmSample`, `clearPcm`, `Voice::pcm*` fields, and the PCM path in
+`setNoteOn`/`ProcessSample`), each marked with `// OctOBX PCM` comments —
+upstream OB-Xf has no PCM code. These three files **intentionally diverge**
+from upstream and are excluded from the byte-identical/checksum guarantee;
+all other copies remain byte-identical.
+
 ---
 
 ## 1. Files copied
@@ -284,6 +294,11 @@ OB-Xf upstream — all 27 unique sources match exactly (the 28th is the
 intentional duplicate of `Constants.h`, also verified identical). The 2 stubs
 (`Utils.h`, `libMTSClient.h`) are NOT verbatim OB-Xf files — they are
 minimal substitutes written for this build (see §4).
+
+Correction: `engine/SynthEngine.h`, `engine/Motherboard.h`, and
+`engine/Voice.h` have since gained OctOBX-only PCM additions (see the
+divergence note above) and are excluded from this guarantee — the remaining
+24 unique sources still match upstream exactly.
 
 ---
 

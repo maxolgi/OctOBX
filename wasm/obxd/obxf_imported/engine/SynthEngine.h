@@ -67,7 +67,11 @@ class SynthEngine
     {
     }
 
-    ~SynthEngine() {}
+    // OctOBX PCM: engine deletion (obxd_init / recreate_engine in
+    // main_obxd.cpp) must release the PCM bank; destructors of members
+    // (incl. synth) run after this body, so quenching voices and freeing
+    // the pcmBank here is safe.
+    ~SynthEngine() { clearPcm(); }
 
     void setPlayHead(float bpm, float retrPos, bool resetPosition)
     {
@@ -586,8 +590,28 @@ class SynthEngine
     void loadPcmSample(int pad, int layer, float* data, int len)
     {
         if (pad < 0 || pad >= 8 || layer < 0 || layer >= 4) return;
-        synth.pcmBank[pad][layer].data = data;
-        synth.pcmBank[pad][layer].len = len;
+        auto& L = synth.pcmBank[pad][layer];
+        // OctOBX PCM: free-on-overwrite. pcmBank owns the previous buffer
+        // (malloc'd by the JS worklet via _malloc). Quench any voices still
+        // playing it first — same pattern as clearPcm() — otherwise
+        // ProcessSample() would dereference freed memory until the amp
+        // envelope tails out.
+        if (L.data)
+        {
+            for (int i = 0; i < MAX_VOICES; i++)
+            {
+                if (synth.voices[i].pcmActive && synth.voices[i].pcmData == L.data)
+                {
+                    synth.voices[i].NoteOff(0.f);
+                    synth.voices[i].pcmActive = false;
+                    synth.voices[i].pcmData = nullptr;
+                    synth.voices[i].pcmLen = 0;
+                }
+            }
+            std::free(L.data);
+        }
+        L.data = data;
+        L.len = len;
     }
     void setPcmLayerParams(int pad, int layer, float gain,
         float cutoff, float res, float mode,

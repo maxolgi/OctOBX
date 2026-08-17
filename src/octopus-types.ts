@@ -28,6 +28,7 @@ export interface OctopusWasmModule {
     _get_midi_batch_events_ptr(): number;
     _get_midi_batch_ts_ptr(): number;
     _wasm_get_midi_dropped_count(): number;
+    _wasm_get_midi_synth_dropped_count(): number;
     _get_midi_synth_ring_ptr(): number;
     _get_midi_synth_ring_head_ptr(): number;
     _get_midi_synth_ring_tail_ptr(): number;

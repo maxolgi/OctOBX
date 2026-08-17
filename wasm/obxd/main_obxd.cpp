@@ -1884,4 +1884,16 @@ float obxd_get_drum_layer_param(int pad, int layer, int idx) {
     return g_drum_layer_params[pad][layer][idx];
 }
 
+// OctOBX PCM: expose is_global_drum_param() to the worklet so the JS bulk
+// dump/restore paths can skip drum-global indices WITHOUT duplicating the
+// C-side list (which would drift when params are reclassified). Returns 1
+// if idx is global/structural (routed live to instance 9 by
+// obxd_set_drum_layer_param), 0 otherwise. idx semantics match the legacy
+// 0..79 space (values >= 200 are NEW-param sentinels, always 0 here).
+EMSCRIPTEN_KEEPALIVE
+int obxd_is_global_drum_param(int idx) {
+    if (idx < 0 || idx >= PARAM_COUNT) return 0;
+    return is_global_drum_param(idx) ? 1 : 0;
+}
+
 }  // extern "C"

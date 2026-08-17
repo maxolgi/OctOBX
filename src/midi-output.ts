@@ -140,6 +140,7 @@ export function drainMidiToHardware(
     let eventsPtr = 0;
     let tsPtr = 0;
     let prevDropped = 0;
+    let prevSynthDropped = 0;
     let frameSinceCheck = 0;
 
     /*
@@ -189,6 +190,17 @@ export function drainMidiToHardware(
             if (dropped !== prevDropped) {
                 console.warn(`[octobx] MIDI ring buffer dropped ${dropped - prevDropped} events (total: ${dropped})`);
                 prevDropped = dropped;
+            }
+            // Same pattern for the SPSC synth ring the AudioWorklet reads
+            // (drop-newest counter added when producer head-writes were removed).
+            const synthDropFn = (module as unknown as { _wasm_get_midi_synth_dropped_count?: () => number })
+                ._wasm_get_midi_synth_dropped_count;
+            if (typeof synthDropFn === "function") {
+                const synthDropped = synthDropFn.call(module);
+                if (synthDropped !== prevSynthDropped) {
+                    console.warn(`[octobx] Synth MIDI ring (AWP) dropped ${synthDropped - prevSynthDropped} events (total: ${synthDropped})`);
+                    prevSynthDropped = synthDropped;
+                }
             }
         }
 

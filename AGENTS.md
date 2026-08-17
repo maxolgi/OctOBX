@@ -357,9 +357,13 @@ AudioWorklet — OB-Xf synth  (obxd_wasm.wasm, separate emcc build)
   headers; the self-signed certs live in `certs/` (gitignored, regenerate per
   machine — see README).
 - **Single drain loop, multiple consumers** — one 60Hz RAF in `midi-output.ts`
-  pulls batches from the WASM ring buffer (`wasm_drain_midi_batch`) and fans
-  them out. Today's consumers are hardware MIDI output and the OB-XD bridge;
-  additional consumers plug in via the `BatchDrainHandler` type in `main.ts`.
+  pulls batches from the WASM ring buffer (`wasm_drain_midi_batch`) and feeds
+  hardware MIDI output when the AudioWorklet is NOT running. When the AWP is
+  up, events are forwarded at audio-quantum rate via `hw_midi` messages
+  (tighter timing) and the RAF drain only prevents overflow; the OB-Xf synth
+  reads the SAB ring directly inside the AudioWorklet
+  (`obxd-processor.tail.js`) — it is NOT a drain-loop consumer. Additional
+  consumers plug in via the `BatchDrainHandler` type in `main.ts`.
 - **Direct MIR access** — JS reads the 170-byte MIR array
   (`unsigned char MIR[2][17][5]`) directly from WASM linear memory via `HEAPU8`.
   No serialization. `VIEWER_show_MIR()` is a no-op in the WASM build.
@@ -431,7 +435,7 @@ sequentially after setting the running status byte.
 
 | File | Role |
 |---|---|
-| `main.ts` | Entry point: SharedArrayBuffer check → load WASM → `engine_init()` → build UI → transport/persistence → hardware MIDI → OB-XD rack → drum module mount. The single 60Hz MIDI drain loop is started before the panel so events flow before any DOM update consumes the frame. Tab key cycles the 4 views (classic → modern → synth → drums); Shift+Tab reverses. Skips when focus is on a form control (`<input>`/`<select>`/`<textarea>`). |
+| `main.ts` | Entry point: SharedArrayBuffer check → load WASM → `engine_init()` → build UI → transport/persistence → hardware MIDI → OB-XD rack → drum module mount. The single 60Hz MIDI drain loop is started before the panel so events flow before any DOM update consumes the frame. Tab key cycles the 5 views (classic → modern → synth → drums → mixer); Shift+Tab reverses. Skips when focus is on a form control (`<input>`/`<select>`/`<textarea>`). |
 | `octopus-types.ts` | TS interface matching the C `EMSCRIPTEN_KEEPALIVE` exports |
 | `octopus-module.ts` | Loads the WASM module (dynamic `<script>`, `locateFile`, IDBFS mount attempt) |
 | `classic-panel.ts` | Faithful port of the Octopus control surface (same DOM/IDs as `web_gui.html`); direct WASM calls instead of WebSocket |
@@ -446,13 +450,18 @@ sequentially after setting the running status byte.
 | `obxd-knob.ts` | Vanilla SVG widget factories (no deps): `createObxdKnob`, `createObxdToggle`, `createTriStateButton`, `createSelector`, `createSlider`, `createButton`. Drag/wheel/double-click (reset) on knobs; bipolar knobs supported. |
 | `obxf-layout.ts` | OB-Xf editor UI layout spec — read-only data module auto-extracted from the OB-Xf source tree (theme.xml + `ObxfEditorLayout.cpp` + `SynthParam.h` + `ParameterList.h`). 173 `ControlSpec` entries (104 parameter-bound + 69 special widgets) across 13 sections, plus `obxfTheme` color tokens and the 1150×576 canvas geometry. See the file header for the explorer provenance + "do not edit by hand" warning. |
 | `obxf-param-mappings.ts` | OB-Xd legacy `ParamsEnum.h` index → OB-Xf `SynthParam::ID` translation table (82 rows; `BENDRANGE` split into `PitchBendUp` + `PitchBendDown` counts twice). Auto-generated from `obxf_imported/state/ObxdImporter.cpp` (the canonical translator) + both `SynthEngine.h` headers. Each row carries the rescale rule and notes any semantic shift / type change / removal. |
+| `obxf-param-format.ts` | SynthParam::ID → display-string formatting/parsing (valueToString/valueFromString port) for knob hover bubbles and type-in. Pure logic, unit-tested. |
 | `obxf-midi-learn.ts` | OB-Xf MIDI-learn **logic** layer (no UI): standalone port of the OB-Xf `MidiHandler`/`MidiMap` state machine. CC→0..1 transforms (`ccTo01`), learn-then-apply same-message path, lag smoother, reserved-CC pre-screening. Framework-free; persistence + UI wiring live in the integration module. |
 | `obxf-midi-learn-integration.ts` | Singleton `ObxfMidiLearnManager` + per-param registry (`SynthParam::ID` → legacy index + transform hints). `processHardwareCC()` is the single entry point `midi-input.ts` calls before forwarding a CC — returns true when consumed by learn. Bindings persist to localStorage; auto-save on every learn/unlearn. |
 | `obxf-midi-learn-ui.ts` | MIDI-learn **overlay** UI: renders the OB-Xf `midiLearnButton` at its layout position (196, 415), paints per-knob `CC{n}` badges above bound controls, toggles the red panel-border learn-mode indicator, click-badge-to-unlearn. |
-| `obxd-processor.tail.js` | Plain JS appended to emcc output to form `obxd-processor.js` for `audioWorklet.addModule()`. Subclasses `AudioWorkletProcessor`. |
+| `obxf-popup.ts` | OB-Xf-themed popup menu singleton — one reusable DOM element in `document.body` (visual tokens from OB-Xf `LookAndFeel.h`) that renders parameter selectors, knob context menus, and the main menu. |
+| `patch-catalog.ts` | AUTO-GENERATED by build.sh from wasm/obxd/patches/*.fxp — the factory-patch name+category catalog the UI patch browser renders at module load. |
+| `mixer.ts` | 10-channel-strip mixer view. Vertical faders drive the legacy VOLUME param (idx 2) via `setObxdInstanceParam`; VU meters read the 30Hz RMS array from `getObxdInstanceMeters()`; master fader + AnalyserNode VU via `setObxdMasterGain`/`getObxdMasterLevel`. Exports `createVuMeter` (reused by drum-rack). |
+| `obxd-processor.tail.js` | Plain JS appended to emcc output to form `obxd-processor.js` for `audioWorklet.addModule()`. Subclasses `AudioWorkletProcessor`. Heavy messages (fxp load, factory patch, PCM load/clear, bulk restores) run through the deferred AWP task queue (`awp-task-queue.js`), budgeted per 128-sample quantum by `process()`. |
 | `obxd-awp-shim.js` | Plain JS prepended to emcc output; polyfills `self`/`location`/`fetch`/`performance` for AudioWorkletGlobalScope. |
 | `transport-sync.ts` | Wires PLAY/STOP/BPM to the Octopus engine + transport indicator. |
-| `state-persistence.ts` | Octopus sequencer state save/load via IDBFS (Emscripten's IndexedDB FS). SAVE triggers `_wasm_save_state` → MEMFS + `FS.syncfs(false)` → IDBFS. Shift+SAVE also downloads .bin + JSON. LOAD imports .bin files. Shift+LOAD clears IDBFS + app state. |
+| `state-persistence.ts` | Octopus sequencer state save/load via IDBFS (Emscripten's IndexedDB FS). SAVE triggers `_wasm_save_state` → MEMFS + `FS.syncfs(false)` → IDBFS. Shift+SAVE also downloads .bin + JSON. LOAD imports .bin files. Shift+LOAD clears IDBFS + app state. Project payloads (binary + app-state JSON) now live in IndexedDB via `idb-projects.ts`; localStorage holds only the index and active-project name. |
+| `idb-projects.ts` | Raw IndexedDB wrapper for project storage (db `octobx`, store `projects`). Projects moved out of localStorage to avoid the ~5MB base64 quota; localStorage keeps only the project index + active name. `migrateLegacyProjects()` does the one-time move. |
 | `app-state.ts` | Synth + drum state persistence. Dumps all synth (10×108) and drum (8×4×108) params from the AWP in bulk, plus per-instance settings and drum kit, to localStorage JSON. Restores after AWP ready via `onAWPReady` callback. |
 | `drum-rack.ts` | Drum module UI: kit selector, 8 pads × 4 layers with dual sample-kit + sample dropdowns (cross-kit sample mixing via `DrumLayer.sourceUrl` + `SAMPLE_CATALOG`), mute/enable toggles, and per-layer knob strips (48 controls: 8 global + 40 per-layer). SVG arc knobs with iOS-style toggle pills and tri-state LFO-routing pills. Layer section has Gain/Pan/Pitch knobs with custom dispatch (bypass `g_drum_layer_params`, update `DrumLayer` TS object + `pushLayer` → `set_pcm_layer`). `syncEditor`/`syncKnobStrips` re-seed knob positions from the worklet mirror on pad/layer switch. |
 | `drum-audio.ts` | Main-thread audio bootstrap for the drum module on OB-Xf instance 9 (32 voices). `loadDrumKit` fetches samples from smpldsnds CDN, decodes via `AudioContext.decodeAudioData`, posts float arrays to the worklet via `obxd_load_pcm`. Per-layer URL resolution via `layerSampleUrl(lyr, kitSource)` (`lyr.sourceUrl ?? kitSource`) supports cross-kit sample mixing. Serialized via `kitLoadChain` promise chain (prevents concurrent loads). `sendLayerParams` pushes per-layer params (gain, filter, amp env, pan, pitch). `seedLayerMirror` seeds `g_drum_layer_params` on load. `pushLayer` re-sends one layer's full param set. |
@@ -549,7 +558,8 @@ via the `__linux__` / `__EMSCRIPTEN__` defines.
 
 **Automated:** `npm test` runs vitest over the pure-logic modules
 (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
-`obxf-param-mappings.ts`) — 67 tests, no browser required.
+`obxf-param-mappings.ts`, `obxf-param-format.ts`, `obxf-dispatch-coverage`,
+`awp-task-queue`) — 113 tests, no browser required.
 
 **Manual:** build the WASM modules, run the dev server, and verify in the
 browser console:
@@ -597,7 +607,8 @@ browser console:
    reassignments.
 5. **Limited automated tests** — vitest covers the pure-logic modules
    (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
-   `obxf-param-mappings.ts`); run with `npm test`. The WASM engine and
+   `obxf-param-mappings.ts`, `obxf-param-format.ts`, `obxf-dispatch-coverage`,
+   `awp-task-queue`); run with `npm test`. The WASM engine and
    browser-integration paths still require manual verification (see Testing).
 
 ## License
