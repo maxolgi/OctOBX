@@ -175,11 +175,32 @@ python3 serve.py
 
 # Option C — nginx. Serves the built dist/ (run ./build.sh app first).
 #            No Node required at runtime. Config snippet below.
+# Option D — Desktop launcher (./build.sh desktop). egui binary with the
+#            dist/ embedded — serves localhost + opens the browser.
 ```
 
 Open the URL you started. With Vite, accept the self-signed cert warning
 (needed because SharedArrayBuffer requires a secure context). With
 `serve.py` on `localhost`, the browser treats it as a secure context already.
+
+#### Desktop launcher (Option D)
+
+`gui/` holds a small egui desktop launcher that embeds the built `dist/`
+into a single self-contained binary (rust-embed), serves it on localhost
+with the COOP/COEP/CORP headers, and opens the browser. Same launcher
+pattern as `octopus_gui` in the native [Octopus](https://github.com/maxolgi/Octopus)
+port. Requires rustup.
+
+```bash
+./build.sh desktop                      # dist/ build + cargo build
+gui/target/release/octobx_gui           # serving auto-starts; click "Open Browser"
+# or with a custom port: octobx_gui --port 8090
+```
+
+`localhost` is a secure context, so Web MIDI and the AudioWorklet work over
+plain HTTP. Windows cross-build: `cargo build --release --target
+x86_64-pc-windows-gnu` (see `gui/README.md`). Rebuild the launcher after
+every app change — `dist/` is embedded at compile time.
 
 #### nginx (Option C)
 

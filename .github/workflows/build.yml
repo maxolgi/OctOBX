@@ -1,0 +1,203 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Fast checks on every push / PR.
+  #    TypeScript (tsc + vitest), param-table freshness, gui lint.
+  #    No emcc / WASM build here — the generated patch catalog needs only the
+  #    synced .fxp files, not a synth compile.
+  # ---------------------------------------------------------------------------
+  check:
+    name: Lint + test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 23
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui
+
+      - name: Install Linux build deps (xxd for patch generation, X11/Wayland for egui)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xxd \
+            libxcb1-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxi-dev libxext-dev libxkbcommon-dev libwayland-dev
+
+      - name: npm install
+        run: npm install
+
+      # src/patch-catalog.ts is gitignored + generated; tsc fails without it.
+      - name: Generate patch catalog (no emcc needed)
+        run: ./build.sh catalog
+
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+
+      - name: vitest
+        run: npm test
+
+      - name: Param tables fresh
+        run: node tools/gen-param-table.mjs --check
+
+      # fmt is advisory (pre-existing diffs). clippy shows lints without
+      # -D warnings so it doesn't error on intentional patterns.
+      - name: cargo fmt --check
+        continue-on-error: true
+        run: cargo fmt --all --manifest-path gui/Cargo.toml -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --manifest-path gui/Cargo.toml --all-targets
+
+  # ---------------------------------------------------------------------------
+  # 2. Full build — ubuntu only. Both WASM modules (Emscripten), the app
+  #    (vite → dist/), and the egui launcher with dist/ embedded at compile
+  #    time. The Windows exe cross-compiles from Linux (x86_64-pc-windows-gnu
+  #    + mingw-w64); no Windows runner needed.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build (linux-x64)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: emsdk-cache
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 23
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui
+
+      - name: Install Linux build deps (xxd, mingw for the Windows exe, egui headers)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential xxd zip mingw-w64 \
+            libxcb1-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxi-dev libxext-dev libxkbcommon-dev libwayland-dev
+
+      - name: emcc version
+        run: emcc --version
+
+      # Full chain: octopus WASM + OB-Xf synth WASM (patches.h, param tables)
+      # + app (tsc + vite → dist/, incl. public/ asset copy).
+      - name: Build everything (WASM + app)
+        run: ./build.sh all
+
+      # 19 behavioral checks over the built synth WASM under Node.
+      - name: Synth WASM checks
+        run: npm run test:wasm
+
+      - name: Build gui launcher (Linux, dist embedded)
+        run: |
+          cargo build --release --manifest-path gui/Cargo.toml
+          strip gui/target/release/octobx_gui
+
+      - name: Cross-build gui launcher (Windows exe, dist embedded)
+        run: cargo build --release --manifest-path gui/Cargo.toml --target x86_64-pc-windows-gnu
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p release
+          cp gui/target/release/octobx_gui release/octobx_gui-linux-x64
+          cp gui/target/x86_64-pc-windows-gnu/release/octobx_gui.exe release/octobx_gui-windows-x64.exe
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: octobx-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 3. Publish a GitHub Release for every successful build.
+  #    - Push to main  → prerelease tagged dev-<short_sha>
+  #    - v* tag push    → stable release tagged <version>, marked "latest"
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish release
+    needs: build
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Stage release assets
+        run: |
+          mkdir -p release
+          cp artifacts/octobx-*/octobx_gui-linux-x64   release/
+          cp artifacts/octobx-*/octobx_gui-windows-x64.exe release/
+
+      - name: Set release metadata
+        id: meta
+        env:
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+        run: |
+          short="${SHA:0:7}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            echo "tag=${REF#refs/tags/}"    >> "$GITHUB_OUTPUT"
+            echo "name=${REF#refs/tags/}"   >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"         >> "$GITHUB_OUTPUT"
+            echo "make_latest=true"         >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=dev-${short}"         >> "$GITHUB_OUTPUT"
+            echo "name=Dev ${short}"        >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"          >> "$GITHUB_OUTPUT"
+            echo "make_latest=false"        >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          make_latest: ${{ steps.meta.outputs.make_latest }}
+          files: release/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

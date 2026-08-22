@@ -1,5 +1,5 @@
 import { defineConfig } from "vite";
-import { readFileSync, existsSync, statSync, createReadStream } from "fs";
+import { readFileSync, existsSync, statSync, createReadStream, readdirSync, copyFileSync, mkdirSync } from "fs";
 import { join, normalize } from "path";
 import { fileURLToPath } from "url";
 
@@ -16,8 +16,25 @@ const MIME: Record<string, string> = {
 
 // Vite only supports one publicDir; this plugin adds public/ as a second
 // static root so OB-Xf SVG assets are served alongside the wasm/build/ files.
+// In dev (configureServer) it serves public/ live; at build time
+// (closeBundle) it copies public/ into dist/ so `vite build` output is
+// complete — without this the OB-Xf editor's SVGs/fonts would 404 in the
+// production bundle.
 function servePublicDir() {
     const pubDir = join(process.cwd(), "public");
+    function copyPublicToDist(outDir: string) {
+        const walk = (dir: string, rel: string) => {
+            for (const entry of readdirSync(dir, { withFileTypes: true })) {
+                const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+                if (entry.isDirectory()) walk(join(dir, entry.name), relPath);
+                else if (entry.isFile()) {
+                    mkdirSync(join(outDir, rel), { recursive: true });
+                    copyFileSync(join(dir, entry.name), join(outDir, relPath));
+                }
+            }
+        };
+        walk(pubDir, "");
+    }
     return {
         name: "serve-public-dir",
         configureServer(server: { middlewares: { use: (fn: any) => void } }) {
@@ -33,6 +50,9 @@ function servePublicDir() {
                 if (req.method === "HEAD") { res.end(); return; }
                 createReadStream(filePath).pipe(res);
             });
+        },
+        closeBundle() {
+            copyPublicToDist(join(process.cwd(), "dist"));
         },
     };
 }

@@ -57,16 +57,23 @@ async function main() {
     setupMobileToggle();
 
     // --- Hardware MIDI port enumeration (async, non-blocking to drain) ---
+    // NOT awaited: requestMIDIAccess() can block indefinitely while the
+    // origin's MIDI permission prompt sits unanswered — that would stall
+    // the rest of boot (synth rack, drum rack, state restore) on any
+    // fresh origin. The selectors are wired once the promise settles;
+    // the ↻ Rescan button covers late enumeration either way.
     logStatus("Starting MIDI...");
-    await hardwareOutput.init();
-    const midiSelect = document.getElementById("oct-midi-output") as HTMLSelectElement | null;
-    midiSelect?.addEventListener("change", () => hardwareOutput.selectOutput(midiSelect.value));
+    void hardwareOutput.init().then(() => {
+        const midiSelect = document.getElementById("oct-midi-output") as HTMLSelectElement | null;
+        midiSelect?.addEventListener("change", () => hardwareOutput.selectOutput(midiSelect.value));
+    });
 
     // Real MIDI input: hardware controller → Octopus engine
     const hardwareInput = new HardwareMidiInput(wasmModule);
-    await hardwareInput.init();
-    const midiInSelect = document.getElementById("oct-midi-input") as HTMLSelectElement | null;
-    midiInSelect?.addEventListener("change", () => hardwareInput.selectInput(midiInSelect.value));
+    void hardwareInput.init().then(() => {
+        const midiInSelect = document.getElementById("oct-midi-input") as HTMLSelectElement | null;
+        midiInSelect?.addEventListener("change", () => hardwareInput.selectInput(midiInSelect.value));
+    });
 
     // Manual rescan (covers hotplug and the Chrome-on-Linux late-enumeration case)
     document.getElementById("oct-midi-rescan")?.addEventListener("click", async () => {

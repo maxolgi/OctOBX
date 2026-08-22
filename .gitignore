@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Rust desktop launcher (gui/)
+gui/target/
+
 # Build output
 dist/
 wasm/build/
