@@ -34,7 +34,6 @@ AudioWorklets), not ALSA/winmm.
 .
 ├── firmware/              git submodule → OCT_CE_OS (Octopus + Nemo firmware)
 ├── third_party/
-│   ├── Obxd/              git submodule → 2DaT/Obxd (legacy OB-XD engine — fallback, not built)
 │   ├── OB-Xf/             git submodule → surge-synthesizer/OB-Xf (current synth engine)
 │   │                      + 5 sub-submodules under libs/ (sst-basic-blocks, sst-cpputils,
 │   │                        simde, fmt, JUCE) — see "First-time clone"
@@ -50,7 +49,7 @@ AudioWorklets), not ALSA/winmm.
 │       ├── main_obxd.cpp       multi-instance OB-Xf SynthEngine wrapper (10 instances)
 │       ├── juce_amalgam.cpp    single-TU JUCE core + events + audio_basics + processors_headless
 │       ├── obxf_imported/      curated OB-Xf header subtree (28 verbatim copies + 2 stubs)
-│       ├── obxf_param_mappings.h   OB-Xd→OB-Xf dispatch documentation
+│       ├── param_table.h   GENERATED OB-Xd→OB-Xf dispatch tables (from tools/param-spec.mjs)
 │       ├── patches/        10 CC0 .fxp factory patches (embedded via xxd → patches.h)
 │       └── Makefile        builds obxd_wasm.{js,wasm} (c++20, simd128, 256MB, 1MB stack)
 ├── src/                   TypeScript UI + MIDI + OB-Xf rack + MIDI-learn
@@ -95,8 +94,7 @@ git submodule update --init --depth 1 \
 These five satisfy the headers referenced by the OB-Xf compile path
 (`ParamMetadata.h` → `<fmt/core.h>`, `simd/setup.h` → `simde/...`,
 `SynthParam.h` → `<juce_audio_basics/...>`, plus the SST support headers).
-The legacy `third_party/Obxd/` submodule is a fallback and not on the build's
-include path; initialize it only if you need to diff against the old engine.
+The legacy `third_party/Obxd/` submodule has been removed.
 
 ## Build
 
@@ -452,16 +450,25 @@ sample), `processNoteOn(note, vel, channel)` / `processNoteOff(note, vel, channe
 `[0, 1]`), `processPolyphony(v)` (`1 + (int)(v * MAX_VOICES)`, `MAX_VOICES =
 32`), and ~80 per-param `processX(float)` setters.
 
-**Parameter dispatch** — the UI/`.fxp` layer still speaks the OLD OB-Xd
-integer param indices 0..79 (frozen `ParamsEnum.h` order). `apply_param_instance()`
-dispatches those onto the NEW OB-Xf `processX()` methods, applying the
-rescales documented in `wasm/obxd/obxf_param_mappings.h` (and mirrored in
-`src/obxf-param-mappings.ts`). OB-Xf-only params with no legacy ancestor
-(second LFO, MPE matrix, slop, per-voice pan, xpander mode, ~28 in total) are
-   rendered by the data-driven OB-Xf editor UI and dispatched via
-   `apply_new_param_instance()` (idx ≥ 200). Values are mirrored in
-   `g_new_param_mirror` so the knob UI syncs after `.fxp` load / instance
-   switch.
+**Parameter dispatch (generated, single-source)** — the UI/`.fxp` layer
+still speaks the OLD OB-Xd integer param indices 0..79 (frozen
+`ParamsEnum.h` order), but the mapping to the NEW OB-Xf `processX()`
+methods lives in ONE spec: `tools/param-spec.mjs`. `tools/gen-param-table.mjs`
+(run by `build.sh synth` before `make`) generates `wasm/obxd/param_table.h`
+(80 legacy rows with per-row `apply_legacy` forward transforms, 28 NEW rows,
+and a 104-entry sorted streaming-name index), `src/obxf-param-mappings.ts`
+(TS mirror + pure transform/invert functions), and
+`src/generated/param-table.json` (test sidecar).
+`node tools/gen-param-table.mjs --check` gates staleness. Native OB-Xf
+named-attribute `.fxp` values dispatch 1:1 via the name index, and the
+generated `invert` functions map native→legacy space for the `g_param_mirror`
+write (legacy knobs show correct positions after a native patch load).
+OB-Xf-only params with no legacy ancestor (second LFO, xpander mode, attack
+curves, ~28 in total) get sentinel `200 + canonical ordinal`, assigned
+NAME-KEYED from the generated `canonicalNewParamOrder` in
+`src/obxd-synth-ui.ts` — UI and engine share the same order by construction.
+Values are mirrored in `g_new_param_mirror` so the knob UI syncs after
+`.fxp` load / instance switch.
 
 **Factory patches** — when `wasm/obxd/patches.h` is present at compile time
 (produced by `build.sh synth` from the 10 CC0 `.fxp` files in
@@ -585,10 +592,10 @@ for fast include-chain error surfacing without a full codegen/link.
 | `obxd-processor.tail.js` | Plain JS appended to the emcc output at build time to form `obxd-processor.js` (the file fed to `audioWorklet.addModule()`). Subclasses `AudioWorkletProcessor`, drains queued MIDI at the top of `process()`, calls `_obxd_render(128)`, copies cached `HEAPF32` views to the output. Caches the views and refreshes them only when WASM memory grows (avoids per-quantum GC pressure that caused audio clicks). |
 | `obxd-awp-shim.js` | Plain JS prepended to the emcc output. Polyfills `self`/`location`/`fetch`/`importScripts`/`document`/`performance` for emcc's worker-env output, which assumes all of those exist but AudioWorkletGlobalScope doesn't define them. |
 | `obxd-rack.ts` | OB-Xf rack UI: instance selector, power/polyphony/channel selectors, level meter (30Hz ping/pong), `.fxp` loader, Reset/Panic/Panic All buttons, per-instance MPE toggle + bend-range UI. Lazy-inits the AudioContext on first PLAY click (autoplay-policy compliance). |
-| `obxd-synth-ui.ts` | Data-driven OB-Xf editor panel rendered from `obxf-layout.ts` (104 parameter-bound controls), absolute-positioned inside the 1150×576 OB-Xf VectorTheme canvas. Legacy-indexed controls dispatch via `setObxdInstanceParam(idx, v)`; OB-Xf-only controls get a sentinel `NEW_PARAM_BASE ≥ 200` index dispatched via `apply_new_param_instance()`. `syncObxdControlsFromEngine(instanceId)` re-seeds widget positions from `g_param_mirror` (legacy) and `g_new_param_mirror` (NEW params) on instance switch / patch load. |
+| `obxd-synth-ui.ts` | Data-driven OB-Xf editor panel rendered from `obxf-layout.ts` (104 parameter-bound controls), absolute-positioned inside the 1150×576 OB-Xf VectorTheme canvas. Legacy-indexed controls dispatch via `setObxdInstanceParam(idx, v)`; OB-Xf-only controls get a sentinel `200 + canonical ordinal`, assigned NAME-KEYED from the generated `canonicalNewParamOrder` (the `RingModVol`→`RingModMix` layout-id alias is handled). `syncObxdControlsFromEngine(instanceId)` re-seeds widget positions from `g_param_mirror` (legacy) and `g_new_param_mirror` (NEW params) on instance switch / patch load. |
 | `obxd-knob.ts` | Vanilla SVG widget factories (no deps): `createObxdKnob`, `createObxdToggle`, `createTriStateButton`, `createSelector`, `createSlider`, `createButton`. Drag/wheel/double-click (reset); bipolar knobs supported. |
 | `obxf-layout.ts` | OB-Xf editor UI layout spec — read-only data module auto-extracted from the OB-Xf source tree (theme.xml + `ObxfEditorLayout.cpp` + `SynthParam.h` + `ParameterList.h`). 173 `ControlSpec` entries (104 parameter-bound + 69 special widgets) across 13 sections, plus `obxfTheme` color tokens and the 1150×576 canvas geometry. Do not edit by hand — see the file header. |
-| `obxf-param-mappings.ts` | OB-Xd legacy `ParamsEnum.h` index → OB-Xf `SynthParam::ID` translation table (82 rows; `BENDRANGE` split into `PitchBendUp` + `PitchBendDown` counts twice). Auto-generated from `obxf_imported/state/ObxdImporter.cpp` (the canonical translator) + both `SynthEngine.h` headers. |
+| `obxf-param-mappings.ts` | AUTO-GENERATED by `tools/gen-param-table.mjs` from `tools/param-spec.mjs` — do not edit. 80 legacy rows (BENDRANGE split encoded via `secondaryNewId`/`secondaryMethod`), plus `canonicalNewParamOrder`, drum classification, and pure `forward`/`invert` transform functions. |
 | `obxf-midi-learn.ts` | OB-Xf MIDI-learn **logic** layer (no UI): standalone port of the OB-Xf `MidiHandler`/`MidiMap` state machine. CC→0..1 transforms, learn-then-apply path, lag smoother, reserved-CC pre-screening. |
 | `obxf-midi-learn-integration.ts` | Singleton `ObxfMidiLearnManager` + per-param registry. `processHardwareCC()` is the single entry point `midi-input.ts` calls before forwarding a CC — returns true when consumed by learn. Bindings persist to localStorage; auto-save on every learn/unlearn. |
 | `obxf-midi-learn-ui.ts` | MIDI-learn **overlay** UI: renders the OB-Xf `midiLearnButton`, paints per-knob `CC{n}` badges above bound controls, toggles the red panel-border learn-mode indicator, click-badge-to-unlearn. |
@@ -883,23 +890,22 @@ the dev server, and verify in the browser console:
    `EXPORTED_RUNTIME_METHODS`) instead of `FS.filesystems.IDBFS`. Now
    mounts IDBFS at `/persistent/` and the Octopus state file persists
    across reloads automatically.
-2. **MPE timbre & channel pressure not wired** — `obxd_midi_in()` routes
-   per-channel pitch bend through `processMPEPitch(channel, val)` and note
-   on/off through channel-aware `processNoteOn/Off` when `g_mpe_enabled[id]`
-   is set. The remaining gap is that `SynthEngine::processMPETimbre(channel, val)`
-   and `processMPEChannelPressure(channel, val)` exist but aren't dispatched
-   from `obxd_midi_in()` — MIDI CC 74 (timbre) and channel-pressure (`0xD0`)
-   messages have no handler there yet.
-3. **`third_party/Obxd/` still present** — the legacy 2DaT/Obxd submodule is
-   kept as a fallback until the OB-Xf migration is verified in production.
-   It is no longer on the OB-Xf build's include path and is not compiled
-   into `obxd_wasm.wasm`; it will be removed in a follow-up commit.
-4. **AudioWorklet reply correlation** is correct but untyped —
+2. **MPE timbre & channel pressure** — fixed. All three per-channel
+   expression handlers are now dispatched from `obxd_midi_in()` when
+   `g_mpe_enabled[id]` is set: pitch bend (`processMPEPitch`), timbre
+   (CC 74 → `processMPETimbre`), and channel pressure (`0xD0` →
+   `processMPEChannelPressure`). In non-MPE mode CC 74 and `0xD0` remain
+   dropped (the legacy OB-Xd engine had no handling for either).
+3. **AudioWorklet reply correlation** is correct but untyped —
    `obxd-audio.ts` uses an `unknown`-typed predicate router to avoid
    racing `port.onmessage` reassignments.
-5. **Limited automated tests** — vitest covers the pure-logic modules
+4. **Limited automated tests** — vitest covers the pure-logic modules
    (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
-   `obxf-param-mappings.ts`); run with `npm test`. The WASM engine and
+   `obxf-param-mappings.ts`, `obxf-param-format.ts`,
+   `obxf-dispatch-coverage`, `sentinel-migration`, `awp-task-queue`) —
+   141 tests; run with `npm test`. `npm run test:wasm` additionally runs
+   19 behavioral checks against the built synth WASM under Node
+   (`tools/verify-obxd-wasm.mjs`). The Octopus engine and
    browser-integration paths still require manual verification.
 
 ## License
@@ -915,9 +921,11 @@ choice keeps the combined work license-compatible.
 |---|---|---|
 | Octopus/Nemo firmware | `firmware/` (submodule → `maxolgi/OCT_CE_OS`) | see `firmware/OCT_OS/COPYING.txt` |
 | OB-Xf `SynthEngine` | `third_party/OB-Xf/` (submodule → `surge-synthesizer/OB-Xf`) | GPL-3.0-or-later |
-| Legacy OB-XD `SynthEngine` (fallback, not built) | `third_party/Obxd/` (submodule → `2DaT/Obxd`) | GPL-3.0 |
 | JUCE core + events + audio_basics + processors_headless | `third_party/JUCE/` (submodule → `juce-framework/JUCE`) | ISC (core modules) — see `third_party/JUCE/LICENSE.md` |
 | SST basic-blocks / cpputils, simde, fmt | `third_party/OB-Xf/libs/...` (sub-submodules) | see each submodule's LICENSE |
+
+(The legacy OB-XD engine submodule `third_party/Obxd/` was removed after the
+OB-Xf migration was verified.)
 
 The combined browser build (Octopus WASM + OB-Xf WASM + TypeScript UI) is
 distributed under GPL-3.0-or-later as a single derived work.

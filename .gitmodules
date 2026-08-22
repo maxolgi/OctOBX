@@ -1,9 +1,6 @@
 [submodule "firmware"]
 	path = firmware
 	url = https://github.com/maxolgi/OCT_CE_OS.git
-[submodule "third_party/Obxd"]
-	path = third_party/Obxd
-	url = https://github.com/2DaT/Obxd.git
 [submodule "third_party/JUCE"]
 	path = third_party/JUCE
 	url = https://github.com/juce-framework/JUCE.git
