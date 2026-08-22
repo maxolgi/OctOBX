@@ -1,0 +1,2658 @@
+{
+  "generator": "tools/gen-param-table.mjs",
+  "source": "tools/param-spec.mjs",
+  "doc": "Machine-readable dump of the OB-Xd→OB-Xf parameter spec as emitted. See tools/PARAM_SPEC.md.",
+  "constants": {
+    "PARAM_COUNT": 80,
+    "NEW_PARAM_BASE": 200,
+    "NEW_PARAM_COUNT": 28,
+    "BENDRANGE_LEGACY_INDEX": 6,
+    "nameIndexCount": 104
+  },
+  "legacyRows": [
+    {
+      "legacyIndex": 0,
+      "legacyName": "UNDEFINED",
+      "legacyMethod": "",
+      "newId": "",
+      "method": "",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": null,
+      "specialInline": false,
+      "drumClass": "none",
+      "drumRestoreSkip": false,
+      "notes": "Sentinel / no-op. C is_global_drum_param() also lists it (harmless either way)."
+    },
+    {
+      "legacyIndex": 1,
+      "legacyName": "MIDILEARN",
+      "legacyMethod": "(UI-only)",
+      "newId": "",
+      "method": "",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": null,
+      "specialInline": false,
+      "drumClass": "none",
+      "drumRestoreSkip": false,
+      "notes": "REMOVED: UI-only, no engine action, no OB-Xf equivalent. C is_global_drum_param() also lists it (no-op either way)."
+    },
+    {
+      "legacyIndex": 2,
+      "legacyName": "VOLUME",
+      "legacyMethod": "processVolume",
+      "newId": "Volume",
+      "method": "processVolume",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines linsc(v,0,0.30) internally. Sets synth-global volume."
+    },
+    {
+      "legacyIndex": 3,
+      "legacyName": "VOICE_COUNT",
+      "legacyMethod": "setVoiceCount",
+      "newId": "Polyphony",
+      "method": "processPolyphony",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "VOICE_COUNT"
+      },
+      "invert": {
+        "kind": "VOICE_COUNT"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": true,
+      "notes": "RESCALE: old 1..8 voices → new polyphony midpoint (voices-1+0.5)/32. Invert (representative): voices=clamp(round(n*32),1,8) → legacy=(voices-1)/7. drumRestoreSkip: initDrumMode owns drum polyphony."
+    },
+    {
+      "legacyIndex": 4,
+      "legacyName": "TUNE",
+      "legacyMethod": "processTune",
+      "newId": "Tune",
+      "method": "processTune",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines v*2-1 internally."
+    },
+    {
+      "legacyIndex": 5,
+      "legacyName": "OCTAVE",
+      "legacyMethod": "processOctave",
+      "newId": "Transpose",
+      "method": "processTranspose",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "OCTAVE_TRANSPOSE"
+      },
+      "invert": {
+        "kind": "OCTAVE_TRANSPOSE"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "SEMANTIC SHIFT: old (round(v*4)-2)*12 st; new round((v*2-1)*24) st. Importer: transpose=clamp(round(v*4)+1,0..4)*0.25. Invert (representative): transpose=round(n*4) → legacy=clamp((transpose-1)/4,0,1)."
+    },
+    {
+      "legacyIndex": 6,
+      "legacyName": "BENDRANGE",
+      "legacyMethod": "procPitchWheelAmount",
+      "newId": "PitchBendUp",
+      "method": "processBendUpRange",
+      "secondaryNewId": "PitchBendDown",
+      "secondaryMethod": "processBendDownRange",
+      "transform": {
+        "kind": "SPLIT_BENDRANGE",
+        "threshold": 0.5,
+        "semitonesHigh": 12,
+        "semitonesLow": 2,
+        "maxBendRange": 48,
+        "secondaryNewId": "PitchBendDown",
+        "secondaryMethod": "processBendDownRange"
+      },
+      "invert": {
+        "kind": "SPLIT_BENDRANGE",
+        "threshold": 0.5,
+        "semitonesHigh": 12,
+        "semitonesLow": 2,
+        "maxBendRange": 48,
+        "secondaryNewId": "PitchBendDown",
+        "secondaryMethod": "processBendDownRange"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "SPLIT — ONE spec row covering BOTH halves: n=(v>0.5?12:2)/48 written to processBendUpRange AND processBendDownRange (transform.secondaryNewId=PitchBendDown, secondaryMethod=processBendDownRange) with the SAME value. Legacy rows total 80, not 81. Invert (representative): range=round(n*48) → legacy = range>7 ? 1 : 0."
+    },
+    {
+      "legacyIndex": 7,
+      "legacyName": "BENDOSC2",
+      "legacyMethod": "procPitchWheelOsc2Only",
+      "newId": "BendOsc2Only",
+      "method": "processBendOsc2Only",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold inside both engines."
+    },
+    {
+      "legacyIndex": 8,
+      "legacyName": "LEGATOMODE",
+      "legacyMethod": "processLegatoMode",
+      "newId": "EnvLegatoMode",
+      "method": "processEnvLegatoMode",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "Importer copies 1:1 (quantization happens in the engine). Same 4 modes (Both/Filter/Amp/Retrigger); bucket boundaries differ at v=0.5."
+    },
+    {
+      "legacyIndex": 9,
+      "legacyName": "BENDLFORATE",
+      "legacyMethod": "procModWheelFrequency",
+      "newId": "VibratoRate",
+      "method": "processVibratoLFORate",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 3,
+          "hi": 10,
+          "rolloff": 19
+        },
+        "xf": {
+          "lo": 2,
+          "hi": 12,
+          "rolloff": 0,
+          "curve": "lin"
+        }
+      },
+      "invert": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 3,
+          "hi": 10,
+          "rolloff": 19
+        },
+        "xf": {
+          "lo": 2,
+          "hi": 12,
+          "rolloff": 0,
+          "curve": "lin"
+        }
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "RESCALE+RENAME: hzXd=logsc(v,3,10); native=invLinsc(hzXd,2,12). xf curve is LIN, not log. Invert (exact): hz=linsc(n,2,12) → legacy=invLogsc(hz,3,10,19)."
+    },
+    {
+      "legacyIndex": 10,
+      "legacyName": "VFLTENV",
+      "legacyMethod": "procFltVelocityAmount",
+      "newId": "VelToFilterEnv",
+      "method": "processVelToFilterEnv",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1."
+    },
+    {
+      "legacyIndex": 11,
+      "legacyName": "VAMPENV",
+      "legacyMethod": "procAmpVelocityAmount",
+      "newId": "VelToAmpEnv",
+      "method": "processVelToAmpEnv",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1."
+    },
+    {
+      "legacyIndex": 12,
+      "legacyName": "ASPLAYEDALLOCATION",
+      "legacyMethod": "procAsPlayedAlloc",
+      "newId": "NotePriority",
+      "method": "processNotePriority",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "NOTEPRIORITY"
+      },
+      "invert": {
+        "kind": "NOTEPRIORITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "BOOL→TRI: native = v>0.5 ? 0 : 0.5 (STRICT >). High state (1.0) has no ancestor. Invert (representative): legacy = n>0.25 ? 0 : 1."
+    },
+    {
+      "legacyIndex": 13,
+      "legacyName": "PORTAMENTO",
+      "legacyMethod": "processPortamento",
+      "newId": "Portamento",
+      "method": "processPortamento",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines logsc(1-v,0.14,250,150) internally."
+    },
+    {
+      "legacyIndex": 14,
+      "legacyName": "UNISON",
+      "legacyMethod": "processUnison",
+      "newId": "Unison",
+      "method": "processUnison",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 15,
+      "legacyName": "UDET",
+      "legacyMethod": "processDetune",
+      "newId": "UnisonDetune",
+      "method": "processUnisonDetune",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 0.001,
+          "hi": 0.9,
+          "rolloff": 19
+        },
+        "xf": {
+          "lo": 0.001,
+          "hi": 1,
+          "rolloff": 19,
+          "curve": "log"
+        }
+      },
+      "invert": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 0.001,
+          "hi": 0.9,
+          "rolloff": 19
+        },
+        "xf": {
+          "lo": 0.001,
+          "hi": 1,
+          "rolloff": 19,
+          "curve": "log"
+        }
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "RESCALE: dXd=logsc(v,0.001,0.90); native=invLogsc(dXd,0.001,1.0). Invert (exact): d=logsc(n,0.001,1.0) → legacy=invLogsc(d,0.001,0.90)."
+    },
+    {
+      "legacyIndex": 16,
+      "legacyName": "OSC2_DET",
+      "legacyMethod": "processOsc2Det",
+      "newId": "Osc2Detune",
+      "method": "processOsc2Detune",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines logsc(v,0.001,0.6) internally."
+    },
+    {
+      "legacyIndex": 17,
+      "legacyName": "LFOFREQ",
+      "legacyMethod": "processLfoFrequency",
+      "newId": "LFO1Rate",
+      "method": "processLFO1Rate",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "LFO1_RATE",
+        "free": {
+          "xd": {
+            "lo": 0,
+            "hi": 50,
+            "rolloff": 120
+          },
+          "xf": {
+            "lo": 0,
+            "hi": 250,
+            "rolloff": 3775,
+            "curve": "log"
+          }
+        },
+        "synced": {
+          "table": [
+            1,
+            4,
+            5,
+            7,
+            10,
+            11,
+            13,
+            15,
+            16
+          ],
+          "sourceBuckets": 9,
+          "denom": 20
+        },
+        "syncMirrorLegacyIndex": 72
+      },
+      "invert": null,
+      "specialInline": true,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "SPECIAL INLINE: free path logsc(v,0,50,120)→invLogsc(·,0,250,3775) (~75x range shift); synced path (LFO_SYNC mirror>0.5) 9→21 bucket table. Reads instance mirror → stays inline in C before AND after the refactor. Sets synth.globalLFO (shared LFO1) → drumClass global."
+    },
+    {
+      "legacyIndex": 18,
+      "legacyName": "LFOSINWAVE",
+      "legacyMethod": "processLfoSine",
+      "newId": "LFO1Wave1",
+      "method": "processLFO1Wave1",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "BOOL_BLEND"
+      },
+      "invert": {
+        "kind": "BOOL_BLEND"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "BOOL→BLEND: native = v>=0.5 ? 0 : 0.5 (Sine/Triangle). Shared globalLFO → drumClass global. Invert (representative): legacy = n<0.25 ? 1 : 0."
+    },
+    {
+      "legacyIndex": 19,
+      "legacyName": "LFOSQUAREWAVE",
+      "legacyMethod": "processLfoSquare",
+      "newId": "LFO1Wave2",
+      "method": "processLFO1Wave2",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "BOOL_BLEND"
+      },
+      "invert": {
+        "kind": "BOOL_BLEND"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "BOOL→BLEND, same transform (Pulse/Saw). Invert (representative): legacy = n<0.25 ? 1 : 0."
+    },
+    {
+      "legacyIndex": 20,
+      "legacyName": "LFOSHWAVE",
+      "legacyMethod": "processLfoSH",
+      "newId": "LFO1Wave3",
+      "method": "processLFO1Wave3",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "BOOL_BLEND"
+      },
+      "invert": {
+        "kind": "BOOL_BLEND"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "BOOL→BLEND, same transform (S&H/S&G). Invert (representative): legacy = n<0.25 ? 1 : 0."
+    },
+    {
+      "legacyIndex": 21,
+      "legacyName": "LFO1AMT",
+      "legacyMethod": "processLfoAmt1",
+      "newId": "LFO1ModAmount1",
+      "method": "processLFO1ModAmount1",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines logsc(logsc(v,0,1,60),0,60,10) internally."
+    },
+    {
+      "legacyIndex": 22,
+      "legacyName": "LFO2AMT",
+      "legacyMethod": "processLfoAmt2",
+      "newId": "LFO1ModAmount2",
+      "method": "processLFO1ModAmount2",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "AMBIGUOUS NAME: old LFO2AMT is LFO1 second mod amount, NOT LFO2. 1:1; both engines linsc(v,0,0.7)."
+    },
+    {
+      "legacyIndex": 23,
+      "legacyName": "LFOOSC1",
+      "legacyMethod": "processLfoOsc1",
+      "newId": "LFO1ToOsc1Pitch",
+      "method": "processLFO1ToOsc1Pitch",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "invert": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "BOOL→TRI {Off,On,Inv}=0/0.5/1: native = v>=0.5 ? 0.5 : 0. Inv state has no ancestor. Invert (representative): legacy = n>=0.25 ? 1 : 0."
+    },
+    {
+      "legacyIndex": 24,
+      "legacyName": "LFOOSC2",
+      "legacyMethod": "processLfoOsc2",
+      "newId": "LFO1ToOsc2Pitch",
+      "method": "processLFO1ToOsc2Pitch",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "invert": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "BOOL→TRI, same transform. Invert (representative): legacy = n>=0.25 ? 1 : 0."
+    },
+    {
+      "legacyIndex": 25,
+      "legacyName": "LFOFILTER",
+      "legacyMethod": "processLfoFilter",
+      "newId": "LFO1ToFilterCutoff",
+      "method": "processLFO1ToFilterCutoff",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "invert": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "BOOL→TRI, same transform. Invert (representative): legacy = n>=0.25 ? 1 : 0."
+    },
+    {
+      "legacyIndex": 26,
+      "legacyName": "LFOPW1",
+      "legacyMethod": "processLfoPw1",
+      "newId": "LFO1ToOsc1PW",
+      "method": "processLFO1ToOsc1PW",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "invert": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "BOOL→TRI, same transform. Invert (representative): legacy = n>=0.25 ? 1 : 0."
+    },
+    {
+      "legacyIndex": 27,
+      "legacyName": "LFOPW2",
+      "legacyMethod": "processLfoPw2",
+      "newId": "LFO1ToOsc2PW",
+      "method": "processLFO1ToOsc2PW",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "invert": {
+        "kind": "BOOL_TRISTATE"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "BOOL→TRI, same transform. NOT LFO2 — LFO1→Osc2PW. Invert (representative): legacy = n>=0.25 ? 1 : 0."
+    },
+    {
+      "legacyIndex": 28,
+      "legacyName": "OSC2HS",
+      "legacyMethod": "processOsc2HardSync",
+      "newId": "OscSync",
+      "method": "processOscSync",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 29,
+      "legacyName": "XMOD",
+      "legacyMethod": "processOsc2Xmod",
+      "newId": "OscCrossmod",
+      "method": "processCrossmod",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "MUL",
+        "factor": 0.5
+      },
+      "invert": {
+        "kind": "MUL",
+        "factor": 2
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "RESCALE: old v*24 st, new v*48 st → native = v*0.5. Invert (exact): legacy = n*2."
+    },
+    {
+      "legacyIndex": 30,
+      "legacyName": "OSC1P",
+      "legacyMethod": "processOsc1Pitch",
+      "newId": "Osc1Pitch",
+      "method": "processOsc1Pitch",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines v*48 st. Importer additionally has an OCTAVE-compensation branch at .fxp import time (runtime dispatch is 1:1)."
+    },
+    {
+      "legacyIndex": 31,
+      "legacyName": "OSC2P",
+      "legacyMethod": "processOsc2Pitch",
+      "newId": "Osc2Pitch",
+      "method": "processOsc2Pitch",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines v*48 st. Same importer-side OCTAVE-compensation note as OSC1P."
+    },
+    {
+      "legacyIndex": 32,
+      "legacyName": "OSCQuantize",
+      "legacyMethod": "processPitchQuantization",
+      "newId": "",
+      "method": "",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": null,
+      "specialInline": false,
+      "drumClass": "none",
+      "drumRestoreSkip": false,
+      "notes": "REMOVED: no runtime param in OB-Xf. Importer only READS it to round osc pitches at import time."
+    },
+    {
+      "legacyIndex": 33,
+      "legacyName": "OSC1Saw",
+      "legacyMethod": "processOsc1Saw",
+      "newId": "Osc1SawWave",
+      "method": "processOsc1Saw",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 34,
+      "legacyName": "OSC1Pul",
+      "legacyMethod": "processOsc1Pulse",
+      "newId": "Osc1PulseWave",
+      "method": "processOsc1Pulse",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 35,
+      "legacyName": "OSC2Saw",
+      "legacyMethod": "processOsc2Saw",
+      "newId": "Osc2SawWave",
+      "method": "processOsc2Saw",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 36,
+      "legacyName": "OSC2Pul",
+      "legacyMethod": "processOsc2Pulse",
+      "newId": "Osc2PulseWave",
+      "method": "processOsc2Pulse",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 37,
+      "legacyName": "PW",
+      "legacyMethod": "processPulseWidth",
+      "newId": "OscPW",
+      "method": "processOscPW",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines linsc(v,0,0.95) internally."
+    },
+    {
+      "legacyIndex": 38,
+      "legacyName": "BRIGHTNESS",
+      "legacyMethod": "processBrightness",
+      "newId": "OscBrightness",
+      "method": "processOscBrightness",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines linsc(v,7000,26000) internally."
+    },
+    {
+      "legacyIndex": 39,
+      "legacyName": "ENVPITCH",
+      "legacyMethod": "processEnvelopeToPitch",
+      "newId": "EnvToPitchAmount",
+      "method": "processEnvToPitchAmount",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "MUL",
+        "factor": 0.9
+      },
+      "invert": {
+        "kind": "MUL",
+        "factor": 1.1111111111111112
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "RESCALE: old v*36 st, new v*40 st → native = v*(36/40) = v*0.9. Invert (exact): legacy = n*(40/36)."
+    },
+    {
+      "legacyIndex": 40,
+      "legacyName": "OSC1MIX",
+      "legacyMethod": "processOsc1Mix",
+      "newId": "Osc1Mix",
+      "method": "processOsc1Volume",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": true,
+      "notes": "1:1. THREE names differ: ID string Osc1Mix, C++ ID constant Osc1Vol, method processOsc1Volume. drumRestoreSkip: initDrumMode silences oscillators for PCM voices."
+    },
+    {
+      "legacyIndex": 41,
+      "legacyName": "OSC2MIX",
+      "legacyMethod": "processOsc2Mix",
+      "newId": "Osc2Mix",
+      "method": "processOsc2Volume",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": true,
+      "notes": "1:1. Same three-name split as OSC1MIX (Osc2Mix / Osc2Vol / processOsc2Volume). drumRestoreSkip: initDrumMode silences oscillators."
+    },
+    {
+      "legacyIndex": 42,
+      "legacyName": "NOISEMIX",
+      "legacyMethod": "processNoiseMix",
+      "newId": "NoiseMix",
+      "method": "processNoiseVolume",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 0,
+          "hi": 1,
+          "rolloff": 35
+        },
+        "xf": {
+          "lo": 0,
+          "hi": 1,
+          "rolloff": 35,
+          "curve": "identity"
+        }
+      },
+      "invert": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 0,
+          "hi": 1,
+          "rolloff": 35
+        },
+        "xf": {
+          "lo": 0,
+          "hi": 1,
+          "rolloff": 35,
+          "curve": "identity"
+        }
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": true,
+      "notes": "LOGSC BAKE: old engine applied logsc(v,0,1,35) INTERNALLY; OB-Xf takes the pre-scaled value → native = logsc(v,0,1,35), xf curve identity (no unmap). Invert (exact): legacy = invLogsc(n,0,1,35). ID NoiseMix (C++ constant NoiseVol), method processNoiseVolume. drumRestoreSkip: noise floor owned by drum init."
+    },
+    {
+      "legacyIndex": 43,
+      "legacyName": "FLT_KF",
+      "legacyMethod": "processFilterKeyFollow",
+      "newId": "FilterKeyFollow",
+      "method": "processFilterKeyTrack",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1. Names differ: ID FilterKeyFollow (C++ constant FilterKeyTrack), method processFilterKeyTrack."
+    },
+    {
+      "legacyIndex": 44,
+      "legacyName": "CUTOFF",
+      "legacyMethod": "processCutoff",
+      "newId": "FilterCutoff",
+      "method": "processFilterCutoff",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "smoother",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines linsc(v,0,120) into the cutoff smoother. drumClass smoother: processX writes the synth-GLOBAL cutoffSmoother — drum layers apply it directly per triggered voice (v->par.filter.cutoff)."
+    },
+    {
+      "legacyIndex": 45,
+      "legacyName": "RESONANCE",
+      "legacyMethod": "processResonance",
+      "newId": "FilterResonance",
+      "method": "processFilterResonance",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "smoother",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines 0.991-logsc(1-v,0,0.991,40). drumClass smoother: resSmoother is synth-global; drum layers set v->filter.setResonance directly."
+    },
+    {
+      "legacyIndex": 46,
+      "legacyName": "MULTIMODE",
+      "legacyMethod": "processMultimode",
+      "newId": "FilterMode",
+      "method": "processFilterMode",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "smoother",
+      "drumRestoreSkip": false,
+      "notes": "1:1 (old per-voice, new smoother — same range). drumClass smoother: filterModeSmoother is synth-global; drum layers set v->filter.setMultimode directly."
+    },
+    {
+      "legacyIndex": 47,
+      "legacyName": "FILTER_WARM",
+      "legacyMethod": "processOversampling",
+      "newId": "HQMode",
+      "method": "processHQMode",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "RENAME+BEHAVIOR: old SetOversample, new SetHQMode AND the engine calls allSoundOff() on toggle — drumClass global so per-voice application cannot cut drum voices mid-trigger."
+    },
+    {
+      "legacyIndex": 48,
+      "legacyName": "BANDPASS",
+      "legacyMethod": "processBandpassSw",
+      "newId": "Filter2PoleBPBlend",
+      "method": "processFilter2PoleBPBlend",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 49,
+      "legacyName": "FOURPOLE",
+      "legacyMethod": "processFourPole",
+      "newId": "Filter4PoleMode",
+      "method": "processFilter4PoleMode",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 50,
+      "legacyName": "ENVELOPE_AMT",
+      "legacyMethod": "processFilterEnvelopeAmt",
+      "newId": "FilterEnvAmount",
+      "method": "processFilterEnvAmount",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines linsc(v,0,140) internally."
+    },
+    {
+      "legacyIndex": 51,
+      "legacyName": "LATK",
+      "legacyMethod": "processLoudnessEnvelopeAttack",
+      "newId": "AmpEnvAttack",
+      "method": "processAmpEnvAttack",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 4,
+          "hi": 60000,
+          "rolloff": 900
+        },
+        "xf": {
+          "lo": 4,
+          "hi": 60000,
+          "rolloff": 900,
+          "curve": "log"
+        },
+        "preDivisor": 3
+      },
+      "invert": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 4,
+          "hi": 60000,
+          "rolloff": 900
+        },
+        "xf": {
+          "lo": 4,
+          "hi": 60000,
+          "rolloff": 900,
+          "curve": "log"
+        },
+        "preDivisor": 3
+      },
+      "specialInline": false,
+      "drumClass": "smoother",
+      "drumRestoreSkip": true,
+      "notes": "RESCALE: msXd=logsc(v,4,60000,900); native=invLogsc(msXd/3,4,60000,900) — attack /3 only (decay/release are NOT divided). Invert (exact): msXd=logsc(n,4,60000,900)*3 → legacy=invLogsc(msXd,4,60000,900). drumClass smoother AND drumRestoreSkip — the two flags are orthogonal (direct per-voice setAttack on drum layers; amp attack owned by drum init)."
+    },
+    {
+      "legacyIndex": 52,
+      "legacyName": "LDEC",
+      "legacyMethod": "processLoudnessEnvelopeDecay",
+      "newId": "AmpEnvDecay",
+      "method": "processAmpEnvDecay",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "smoother",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines logsc(v,4,60000,900). Importer does NOT /3 decay. drumClass smoother: direct per-voice setDecay on drum layers."
+    },
+    {
+      "legacyIndex": 53,
+      "legacyName": "LSUS",
+      "legacyMethod": "processLoudnessEnvelopeSustain",
+      "newId": "AmpEnvSustain",
+      "method": "processAmpEnvSustain",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "smoother",
+      "drumRestoreSkip": false,
+      "notes": "1:1. drumClass smoother: direct per-voice setSustain on drum layers."
+    },
+    {
+      "legacyIndex": 54,
+      "legacyName": "LREL",
+      "legacyMethod": "processLoudnessEnvelopeRelease",
+      "newId": "AmpEnvRelease",
+      "method": "processAmpEnvRelease",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "smoother",
+      "drumRestoreSkip": true,
+      "notes": "1:1; both engines logsc(v,8,60000,900) (NOTE lo=8, unlike LATK/LDEC lo=4). drumClass smoother AND drumRestoreSkip (orthogonal): direct per-voice setRelease on drum layers; release owned by drum init."
+    },
+    {
+      "legacyIndex": 55,
+      "legacyName": "FATK",
+      "legacyMethod": "processFilterEnvelopeAttack",
+      "newId": "FilterEnvAttack",
+      "method": "processFilterEnvAttack",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 1,
+          "hi": 60000,
+          "rolloff": 900
+        },
+        "xf": {
+          "lo": 1,
+          "hi": 60000,
+          "rolloff": 900,
+          "curve": "log"
+        },
+        "preDivisor": 3
+      },
+      "invert": {
+        "kind": "LOGSC_INVLOGSC",
+        "xd": {
+          "lo": 1,
+          "hi": 60000,
+          "rolloff": 900
+        },
+        "xf": {
+          "lo": 1,
+          "hi": 60000,
+          "rolloff": 900,
+          "curve": "log"
+        },
+        "preDivisor": 3
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "RESCALE: msXd=logsc(v,1,60000,900); native=invLogsc(msXd/3,1,60000,900) — filter attack /3 (lo=1, not 4). Invert (exact): msXd=logsc(n,1,60000,900)*3 → legacy=invLogsc(msXd,1,60000,900)."
+    },
+    {
+      "legacyIndex": 56,
+      "legacyName": "FDEC",
+      "legacyMethod": "processFilterEnvelopeDecay",
+      "newId": "FilterEnvDecay",
+      "method": "processFilterEnvDecay",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines logsc(v,1,60000,900)."
+    },
+    {
+      "legacyIndex": 57,
+      "legacyName": "FSUS",
+      "legacyMethod": "processFilterEnvelopeSustain",
+      "newId": "FilterEnvSustain",
+      "method": "processFilterEnvSustain",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1."
+    },
+    {
+      "legacyIndex": 58,
+      "legacyName": "FREL",
+      "legacyMethod": "processFilterEnvelopeRelease",
+      "newId": "FilterEnvRelease",
+      "method": "processFilterEnvRelease",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines logsc(v,1,60000,900)."
+    },
+    {
+      "legacyIndex": 59,
+      "legacyName": "ENVDER",
+      "legacyMethod": "processEnvelopeDetune",
+      "newId": "EnvelopeSlop",
+      "method": "processEnvelopeSlop",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; old setEnvDer(linsc(v,0,1)) internally, new setEnvTimingOffset(v)."
+    },
+    {
+      "legacyIndex": 60,
+      "legacyName": "FILTERDER",
+      "legacyMethod": "processFilterDetune",
+      "newId": "FilterSlop",
+      "method": "processFilterSlop",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines linsc(v,0,18) internally."
+    },
+    {
+      "legacyIndex": 61,
+      "legacyName": "PORTADER",
+      "legacyMethod": "processPortamentoDetune",
+      "newId": "PortamentoSlop",
+      "method": "processPortamentoSlop",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines linsc(v,0,0.75) internally."
+    },
+    {
+      "legacyIndex": 62,
+      "legacyName": "PAN1",
+      "legacyMethod": "processPan",
+      "newId": "PanVoice1",
+      "method": "processPan",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "PAN",
+        "voiceIndex": 1
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "Value identity; call processPan(v, 1) — method takes an EXTRA voiceIndex argument. processPan writes synth.pannings (no ForEachVoice) → drumClass global; PCM voice panning comes from Voice::pcmPan."
+    },
+    {
+      "legacyIndex": 63,
+      "legacyName": "PAN2",
+      "legacyMethod": "processPan",
+      "newId": "PanVoice2",
+      "method": "processPan",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "PAN",
+        "voiceIndex": 2
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "processPan(v, 2). See PAN1."
+    },
+    {
+      "legacyIndex": 64,
+      "legacyName": "PAN3",
+      "legacyMethod": "processPan",
+      "newId": "PanVoice3",
+      "method": "processPan",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "PAN",
+        "voiceIndex": 3
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "processPan(v, 3). See PAN1."
+    },
+    {
+      "legacyIndex": 65,
+      "legacyName": "PAN4",
+      "legacyMethod": "processPan",
+      "newId": "PanVoice4",
+      "method": "processPan",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "PAN",
+        "voiceIndex": 4
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "processPan(v, 4). See PAN1."
+    },
+    {
+      "legacyIndex": 66,
+      "legacyName": "PAN5",
+      "legacyMethod": "processPan",
+      "newId": "PanVoice5",
+      "method": "processPan",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "PAN",
+        "voiceIndex": 5
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "processPan(v, 5). Old OB-Xd MAX_VOICES=8 so PAN5..8 were rarely used."
+    },
+    {
+      "legacyIndex": 67,
+      "legacyName": "PAN6",
+      "legacyMethod": "processPan",
+      "newId": "PanVoice6",
+      "method": "processPan",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "PAN",
+        "voiceIndex": 6
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "processPan(v, 6). See PAN5."
+    },
+    {
+      "legacyIndex": 68,
+      "legacyName": "PAN7",
+      "legacyMethod": "processPan",
+      "newId": "PanVoice7",
+      "method": "processPan",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "PAN",
+        "voiceIndex": 7
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "processPan(v, 7). See PAN5."
+    },
+    {
+      "legacyIndex": 69,
+      "legacyName": "PAN8",
+      "legacyMethod": "processPan",
+      "newId": "PanVoice8",
+      "method": "processPan",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "PAN",
+        "voiceIndex": 8
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "processPan(v, 8). See PAN5."
+    },
+    {
+      "legacyIndex": 70,
+      "legacyName": "UNLEARN",
+      "legacyMethod": "(UI-only)",
+      "newId": "",
+      "method": "",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": null,
+      "specialInline": false,
+      "drumClass": "none",
+      "drumRestoreSkip": false,
+      "notes": "REMOVED: UI-only, no engine action, no OB-Xf equivalent."
+    },
+    {
+      "legacyIndex": 71,
+      "legacyName": "ECONOMY_MODE",
+      "legacyMethod": "procEconomyMode",
+      "newId": "",
+      "method": "",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": null,
+      "specialInline": false,
+      "drumClass": "none",
+      "drumRestoreSkip": false,
+      "notes": "REMOVED: OB-Xf has no economy mode (HQMode is the successor but maps from FILTER_WARM)."
+    },
+    {
+      "legacyIndex": 72,
+      "legacyName": "LFO_SYNC",
+      "legacyMethod": "procLfoSync",
+      "newId": "LFO1TempoSync",
+      "method": "processLFO1Sync",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "LFO1_SYNC",
+        "redispatchLegacyIndex": 17
+      },
+      "invert": null,
+      "specialInline": true,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "SPECIAL INLINE: processLFO1Sync(v) (method name has no \"Tempo\"), then re-dispatch LFOFREQ from the mirror so a sequentially-loaded .fxp gets the right rate path. Shared globalLFO → drumClass global. Importer warns old sync behavior was unreliable."
+    },
+    {
+      "legacyIndex": 73,
+      "legacyName": "PW_ENV",
+      "legacyMethod": "processPwEnv",
+      "newId": "EnvToPWAmount",
+      "method": "processEnvToPWAmount",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "MUL",
+        "factor": 0.8052631579371191
+      },
+      "invert": {
+        "kind": "MUL",
+        "factor": 1.2418300652941177
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "RESCALE: old linsc(v,0,0.85), new linsc(v,0,1.055555555) → native = v*(0.85/1.0555555555). Invert (exact): legacy = n*(1.0555555555/0.85)."
+    },
+    {
+      "legacyIndex": 74,
+      "legacyName": "PW_ENV_BOTH",
+      "legacyMethod": "processPwEnvBoth",
+      "newId": "EnvToPWBothOscs",
+      "method": "processEnvToPWBothOscs",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 75,
+      "legacyName": "ENV_PITCH_BOTH",
+      "legacyMethod": "processPitchModBoth",
+      "newId": "EnvToPitchBothOscs",
+      "method": "processPitchBothOscs",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5. METHOD MISMATCH: method is processPitchBothOscs (no \"EnvTo\" prefix) — NOT processEnvToPitchBothOscs."
+    },
+    {
+      "legacyIndex": 76,
+      "legacyName": "FENV_INVERT",
+      "legacyMethod": "processInvertFenv",
+      "newId": "FilterEnvInvert",
+      "method": "processFilterEnvInvert",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold."
+    },
+    {
+      "legacyIndex": 77,
+      "legacyName": "PW_OSC2_OFS",
+      "legacyMethod": "processPwOfs",
+      "newId": "Osc2PWOffset",
+      "method": "processOsc2PWOffset",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "MUL",
+        "factor": 0.7894736842105263
+      },
+      "invert": {
+        "kind": "MUL",
+        "factor": 1.2666666666666666
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "RESCALE: old linsc(v,0,0.75), new linsc(v,0,0.95) → native = v*(0.75/0.95). Invert (exact): legacy = n*(0.95/0.75)."
+    },
+    {
+      "legacyIndex": 78,
+      "legacyName": "LEVEL_DIF",
+      "legacyMethod": "processLoudnessDetune",
+      "newId": "LevelSlop",
+      "method": "processLevelSlop",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; both engines linsc(v,0,0.67) internally."
+    },
+    {
+      "legacyIndex": 79,
+      "legacyName": "SELF_OSC_PUSH",
+      "legacyMethod": "processSelfOscPush",
+      "newId": "Filter2PolePush",
+      "method": "processFilter2PolePush",
+      "secondaryNewId": null,
+      "secondaryMethod": null,
+      "transform": {
+        "kind": "IDENTITY"
+      },
+      "invert": {
+        "kind": "IDENTITY"
+      },
+      "specialInline": false,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "1:1; >=0.5 threshold. RENAMED: old selfOscPush, new setFilter2PolePush."
+    }
+  ],
+  "newParams": [
+    {
+      "newId": "UnisonVoices",
+      "method": "processUnisonVoices",
+      "newOrdinal": 0,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "GLOBAL. processUnisonVoices → synth.setUnisonVoices → Motherboard::unisonVoiceCount (synth-global voice-allocation field, no ForEachVoice) → drumClass global."
+    },
+    {
+      "newId": "VoiceReassign",
+      "method": "processVoiceReassign",
+      "newOrdinal": 1,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "GLOBAL. processVoiceReassign → synth.reallocate (Motherboard bool read by setNoteOn, no ForEachVoice) → drumClass global."
+    },
+    {
+      "newId": "Osc2Keytrack",
+      "method": "processOsc2Keytrack",
+      "newOrdinal": 2,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "OSCILLATORS."
+    },
+    {
+      "newId": "EnvToPitchInvert",
+      "method": "processEnvToPitchInvert",
+      "newOrdinal": 3,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "OSCILLATORS."
+    },
+    {
+      "newId": "EnvToPWInvert",
+      "method": "processEnvToPWInvert",
+      "newOrdinal": 4,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "OSCILLATORS."
+    },
+    {
+      "newId": "RingModMix",
+      "method": "processRingModVolume",
+      "newOrdinal": 5,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "MIXER. ID constant RingModVol; method processRingModVolume."
+    },
+    {
+      "newId": "NoiseColor",
+      "method": "processNoiseColor",
+      "newOrdinal": 6,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "MIXER."
+    },
+    {
+      "newId": "VibratoWave",
+      "method": "processVibratoLFOWave",
+      "newOrdinal": 7,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "CONTROL. processVibratoLFOWave → synth.vibratoLFO.par.{wave1blend,wave2blend} (shared Motherboard LFO, no ForEachVoice) → drumClass global."
+    },
+    {
+      "newId": "Filter4PoleXpander",
+      "method": "processFilter4PoleXpander",
+      "newOrdinal": 8,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "FILTER."
+    },
+    {
+      "newId": "FilterXpanderMode",
+      "method": "processFilterXpanderMode",
+      "newOrdinal": 9,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "FILTER."
+    },
+    {
+      "newId": "LFO1PW",
+      "method": "processLFO1PW",
+      "newOrdinal": 10,
+      "drumClass": "global",
+      "drumRestoreSkip": false,
+      "notes": "LFO1. processLFO1PW → synth.globalLFO.par.pw (shared Motherboard LFO1, no ForEachVoice) → drumClass global."
+    },
+    {
+      "newId": "LFO1ToVolume",
+      "method": "processLFO1ToVolume",
+      "newOrdinal": 11,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO1."
+    },
+    {
+      "newId": "LFO2TempoSync",
+      "method": "processLFO2Sync",
+      "newOrdinal": 12,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2. Method processLFO2Sync (no \"Tempo\")."
+    },
+    {
+      "newId": "LFO2Wave1",
+      "method": "processLFO2Wave1",
+      "newOrdinal": 13,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2. Declaration order puts waves before rate — differs from runtime sentinel order."
+    },
+    {
+      "newId": "LFO2Wave2",
+      "method": "processLFO2Wave2",
+      "newOrdinal": 14,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2."
+    },
+    {
+      "newId": "LFO2Wave3",
+      "method": "processLFO2Wave3",
+      "newOrdinal": 15,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2."
+    },
+    {
+      "newId": "LFO2PW",
+      "method": "processLFO2PW",
+      "newOrdinal": 16,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2."
+    },
+    {
+      "newId": "LFO2Rate",
+      "method": "processLFO2Rate",
+      "newOrdinal": 17,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2. Runtime sentinel offset was 13 — canonical ordinal 17."
+    },
+    {
+      "newId": "LFO2ModAmount1",
+      "method": "processLFO2ModAmount1",
+      "newOrdinal": 18,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2. Runtime sentinel offset was 14."
+    },
+    {
+      "newId": "LFO2ModAmount2",
+      "method": "processLFO2ModAmount2",
+      "newOrdinal": 19,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2. Runtime sentinel offset was 15."
+    },
+    {
+      "newId": "LFO2ToOsc1Pitch",
+      "method": "processLFO2ToOsc1Pitch",
+      "newOrdinal": 20,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2."
+    },
+    {
+      "newId": "LFO2ToOsc2Pitch",
+      "method": "processLFO2ToOsc2Pitch",
+      "newOrdinal": 21,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2."
+    },
+    {
+      "newId": "LFO2ToFilterCutoff",
+      "method": "processLFO2ToFilterCutoff",
+      "newOrdinal": 22,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2."
+    },
+    {
+      "newId": "LFO2ToOsc1PW",
+      "method": "processLFO2ToOsc1PW",
+      "newOrdinal": 23,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2."
+    },
+    {
+      "newId": "LFO2ToOsc2PW",
+      "method": "processLFO2ToOsc2PW",
+      "newOrdinal": 24,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2."
+    },
+    {
+      "newId": "LFO2ToVolume",
+      "method": "processLFO2ToVolume",
+      "newOrdinal": 25,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "LFO2."
+    },
+    {
+      "newId": "FilterEnvAttackCurve",
+      "method": "processFilterEnvAttackCurve",
+      "newOrdinal": 26,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "FILTER ENVELOPE."
+    },
+    {
+      "newId": "AmpEnvAttackCurve",
+      "method": "processAmpEnvAttackCurve",
+      "newOrdinal": 27,
+      "drumClass": "voice",
+      "drumRestoreSkip": false,
+      "notes": "AMPLIFIER ENVELOPE."
+    }
+  ],
+  "canonicalNewParamOrder": [
+    "UnisonVoices",
+    "VoiceReassign",
+    "Osc2Keytrack",
+    "EnvToPitchInvert",
+    "EnvToPWInvert",
+    "RingModMix",
+    "NoiseColor",
+    "VibratoWave",
+    "Filter4PoleXpander",
+    "FilterXpanderMode",
+    "LFO1PW",
+    "LFO1ToVolume",
+    "LFO2TempoSync",
+    "LFO2Wave1",
+    "LFO2Wave2",
+    "LFO2Wave3",
+    "LFO2PW",
+    "LFO2Rate",
+    "LFO2ModAmount1",
+    "LFO2ModAmount2",
+    "LFO2ToOsc1Pitch",
+    "LFO2ToOsc2Pitch",
+    "LFO2ToFilterCutoff",
+    "LFO2ToOsc1PW",
+    "LFO2ToOsc2PW",
+    "LFO2ToVolume",
+    "FilterEnvAttackCurve",
+    "AmpEnvAttackCurve"
+  ],
+  "nameIndex": [
+    {
+      "name": "AmpEnvAttack",
+      "legacyIndex": 51,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "AmpEnvAttackCurve",
+      "legacyIndex": -1,
+      "newOrdinal": 27,
+      "invert": false
+    },
+    {
+      "name": "AmpEnvDecay",
+      "legacyIndex": 52,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "AmpEnvRelease",
+      "legacyIndex": 54,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "AmpEnvSustain",
+      "legacyIndex": 53,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "BendOsc2Only",
+      "legacyIndex": 7,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "EnvLegatoMode",
+      "legacyIndex": 8,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "EnvToPWAmount",
+      "legacyIndex": 73,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "EnvToPWBothOscs",
+      "legacyIndex": 74,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "EnvToPWInvert",
+      "legacyIndex": -1,
+      "newOrdinal": 4,
+      "invert": false
+    },
+    {
+      "name": "EnvToPitchAmount",
+      "legacyIndex": 39,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "EnvToPitchBothOscs",
+      "legacyIndex": 75,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "EnvToPitchInvert",
+      "legacyIndex": -1,
+      "newOrdinal": 3,
+      "invert": false
+    },
+    {
+      "name": "EnvelopeSlop",
+      "legacyIndex": 59,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Filter2PoleBPBlend",
+      "legacyIndex": 48,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Filter2PolePush",
+      "legacyIndex": 79,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Filter4PoleMode",
+      "legacyIndex": 49,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Filter4PoleXpander",
+      "legacyIndex": -1,
+      "newOrdinal": 8,
+      "invert": false
+    },
+    {
+      "name": "FilterCutoff",
+      "legacyIndex": 44,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterEnvAmount",
+      "legacyIndex": 50,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterEnvAttack",
+      "legacyIndex": 55,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterEnvAttackCurve",
+      "legacyIndex": -1,
+      "newOrdinal": 26,
+      "invert": false
+    },
+    {
+      "name": "FilterEnvDecay",
+      "legacyIndex": 56,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterEnvInvert",
+      "legacyIndex": 76,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterEnvRelease",
+      "legacyIndex": 58,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterEnvSustain",
+      "legacyIndex": 57,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterKeyFollow",
+      "legacyIndex": 43,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterMode",
+      "legacyIndex": 46,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterResonance",
+      "legacyIndex": 45,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterSlop",
+      "legacyIndex": 60,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "FilterXpanderMode",
+      "legacyIndex": -1,
+      "newOrdinal": 9,
+      "invert": false
+    },
+    {
+      "name": "HQMode",
+      "legacyIndex": 47,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1ModAmount1",
+      "legacyIndex": 21,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1ModAmount2",
+      "legacyIndex": 22,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1PW",
+      "legacyIndex": -1,
+      "newOrdinal": 10,
+      "invert": false
+    },
+    {
+      "name": "LFO1Rate",
+      "legacyIndex": 17,
+      "newOrdinal": -1,
+      "invert": false
+    },
+    {
+      "name": "LFO1TempoSync",
+      "legacyIndex": 72,
+      "newOrdinal": -1,
+      "invert": false
+    },
+    {
+      "name": "LFO1ToFilterCutoff",
+      "legacyIndex": 25,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1ToOsc1PW",
+      "legacyIndex": 26,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1ToOsc1Pitch",
+      "legacyIndex": 23,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1ToOsc2PW",
+      "legacyIndex": 27,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1ToOsc2Pitch",
+      "legacyIndex": 24,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1ToVolume",
+      "legacyIndex": -1,
+      "newOrdinal": 11,
+      "invert": false
+    },
+    {
+      "name": "LFO1Wave1",
+      "legacyIndex": 18,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1Wave2",
+      "legacyIndex": 19,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO1Wave3",
+      "legacyIndex": 20,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "LFO2ModAmount1",
+      "legacyIndex": -1,
+      "newOrdinal": 18,
+      "invert": false
+    },
+    {
+      "name": "LFO2ModAmount2",
+      "legacyIndex": -1,
+      "newOrdinal": 19,
+      "invert": false
+    },
+    {
+      "name": "LFO2PW",
+      "legacyIndex": -1,
+      "newOrdinal": 16,
+      "invert": false
+    },
+    {
+      "name": "LFO2Rate",
+      "legacyIndex": -1,
+      "newOrdinal": 17,
+      "invert": false
+    },
+    {
+      "name": "LFO2TempoSync",
+      "legacyIndex": -1,
+      "newOrdinal": 12,
+      "invert": false
+    },
+    {
+      "name": "LFO2ToFilterCutoff",
+      "legacyIndex": -1,
+      "newOrdinal": 22,
+      "invert": false
+    },
+    {
+      "name": "LFO2ToOsc1PW",
+      "legacyIndex": -1,
+      "newOrdinal": 23,
+      "invert": false
+    },
+    {
+      "name": "LFO2ToOsc1Pitch",
+      "legacyIndex": -1,
+      "newOrdinal": 20,
+      "invert": false
+    },
+    {
+      "name": "LFO2ToOsc2PW",
+      "legacyIndex": -1,
+      "newOrdinal": 24,
+      "invert": false
+    },
+    {
+      "name": "LFO2ToOsc2Pitch",
+      "legacyIndex": -1,
+      "newOrdinal": 21,
+      "invert": false
+    },
+    {
+      "name": "LFO2ToVolume",
+      "legacyIndex": -1,
+      "newOrdinal": 25,
+      "invert": false
+    },
+    {
+      "name": "LFO2Wave1",
+      "legacyIndex": -1,
+      "newOrdinal": 13,
+      "invert": false
+    },
+    {
+      "name": "LFO2Wave2",
+      "legacyIndex": -1,
+      "newOrdinal": 14,
+      "invert": false
+    },
+    {
+      "name": "LFO2Wave3",
+      "legacyIndex": -1,
+      "newOrdinal": 15,
+      "invert": false
+    },
+    {
+      "name": "LevelSlop",
+      "legacyIndex": 78,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "NoiseColor",
+      "legacyIndex": -1,
+      "newOrdinal": 6,
+      "invert": false
+    },
+    {
+      "name": "NoiseMix",
+      "legacyIndex": 42,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "NotePriority",
+      "legacyIndex": 12,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc1Mix",
+      "legacyIndex": 40,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc1Pitch",
+      "legacyIndex": 30,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc1PulseWave",
+      "legacyIndex": 34,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc1SawWave",
+      "legacyIndex": 33,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc2Detune",
+      "legacyIndex": 16,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc2Keytrack",
+      "legacyIndex": -1,
+      "newOrdinal": 2,
+      "invert": false
+    },
+    {
+      "name": "Osc2Mix",
+      "legacyIndex": 41,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc2PWOffset",
+      "legacyIndex": 77,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc2Pitch",
+      "legacyIndex": 31,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc2PulseWave",
+      "legacyIndex": 36,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Osc2SawWave",
+      "legacyIndex": 35,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "OscBrightness",
+      "legacyIndex": 38,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "OscCrossmod",
+      "legacyIndex": 29,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "OscPW",
+      "legacyIndex": 37,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "OscSync",
+      "legacyIndex": 28,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PanVoice1",
+      "legacyIndex": 62,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PanVoice2",
+      "legacyIndex": 63,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PanVoice3",
+      "legacyIndex": 64,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PanVoice4",
+      "legacyIndex": 65,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PanVoice5",
+      "legacyIndex": 66,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PanVoice6",
+      "legacyIndex": 67,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PanVoice7",
+      "legacyIndex": 68,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PanVoice8",
+      "legacyIndex": 69,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PitchBendDown",
+      "legacyIndex": 6,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PitchBendUp",
+      "legacyIndex": 6,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Polyphony",
+      "legacyIndex": 3,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Portamento",
+      "legacyIndex": 13,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "PortamentoSlop",
+      "legacyIndex": 61,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "RingModMix",
+      "legacyIndex": -1,
+      "newOrdinal": 5,
+      "invert": false
+    },
+    {
+      "name": "Transpose",
+      "legacyIndex": 5,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Tune",
+      "legacyIndex": 4,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "Unison",
+      "legacyIndex": 14,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "UnisonDetune",
+      "legacyIndex": 15,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "UnisonVoices",
+      "legacyIndex": -1,
+      "newOrdinal": 0,
+      "invert": false
+    },
+    {
+      "name": "VelToAmpEnv",
+      "legacyIndex": 11,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "VelToFilterEnv",
+      "legacyIndex": 10,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "VibratoRate",
+      "legacyIndex": 9,
+      "newOrdinal": -1,
+      "invert": true
+    },
+    {
+      "name": "VibratoWave",
+      "legacyIndex": -1,
+      "newOrdinal": 7,
+      "invert": false
+    },
+    {
+      "name": "VoiceReassign",
+      "legacyIndex": -1,
+      "newOrdinal": 1,
+      "invert": false
+    },
+    {
+      "name": "Volume",
+      "legacyIndex": 2,
+      "newOrdinal": -1,
+      "invert": true
+    }
+  ],
+  "drumSets": {
+    "globalC": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      12,
+      13,
+      14,
+      15,
+      17,
+      18,
+      19,
+      20,
+      47,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      72
+    ],
+    "global": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      12,
+      13,
+      14,
+      15,
+      17,
+      18,
+      19,
+      20,
+      47,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      72
+    ],
+    "smoother": [
+      44,
+      45,
+      46,
+      51,
+      52,
+      53,
+      54
+    ],
+    "restoreSkip": [
+      3,
+      40,
+      41,
+      42,
+      51,
+      54
+    ],
+    "none": [
+      0,
+      1,
+      32,
+      70,
+      71
+    ]
+  }
+}

@@ -12,11 +12,11 @@ import {
     previewPad,
     setDrumLayerParam,
     getDrumLayerParam,
-    reassertDrumInstanceStructural,
     DRUM_INSTANCE,
 } from "./drum-audio";
 import { setObxdInstanceParam, getObxdInstanceMeters, isObxdReady, getInstanceVolumes } from "./obxd-audio";
 import { createVuMeter } from "./mixer";
+import { newParamSentinel } from "./obxd-synth-ui";
 import type { ObxdParamTarget } from "./obxd-synth-ui";
 
 // --- Module state ---------------------------------------------------------
@@ -115,24 +115,35 @@ function arcPath(cx: number, cy: number, r: number, startDeg: number, endDeg: nu
     return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
 }
 
-// NEW param sentinel indices (NEW_PARAM_BASE + N, assigned at runtime by obxd-synth-ui
-// in the order controls appear in obxfControls). Verified by tracing obxf-layout.ts:
-const IDX_LFO1_PW = 210;
-const IDX_LFO1_TO_VOL = 211;
-const IDX_LFO2_SYNC = 212;
-const IDX_LFO2_RATE = 213;
-const IDX_LFO2_MOD1 = 214;
-const IDX_LFO2_MOD2 = 215;
-const IDX_LFO2_W1 = 216;
-const IDX_LFO2_W2 = 217;
-const IDX_LFO2_W3 = 218;
-const IDX_LFO2_PW = 219;
-const IDX_LFO2_TO_FILT = 222;
-const IDX_LFO2_TO_VOL = 225;
-const IDX_FILT_XPANDER = 208;
-const IDX_FILT_XPANDER_MODE = 209;
-const IDX_FENV_ATK_CURVE = 226;
-const IDX_AENV_ATK_CURVE = 227;
+// NEW param sentinel indices, derived BY NAME from the canonical order the C
+// engine dispatches (apply_new_param_instance: idx = NEW_PARAM_BASE +
+// canonical ordinal in canonicalNewParamOrder). These were previously
+// hard-coded to the frozen V1 encounter order (tools/new-param-order-v1.json);
+// the LFO2 block (Wave1/2/3, PW, Rate, ModAmount1/2) moved in the canonical
+// order, so the constants below intentionally differ from their V1 values.
+function drumSentinel(name: string): number {
+    const s = newParamSentinel(name);
+    if (s === undefined) {
+        throw new Error(`[drum-rack] NEW param "${name}" is not in canonicalNewParamOrder`);
+    }
+    return s;
+}
+const IDX_FILT_XPANDER = drumSentinel("Filter4PoleXpander");       // 200 + 8
+const IDX_FILT_XPANDER_MODE = drumSentinel("FilterXpanderMode");   // 200 + 9
+const IDX_LFO1_PW = drumSentinel("LFO1PW");                        // 200 + 10
+const IDX_LFO1_TO_VOL = drumSentinel("LFO1ToVolume");              // 200 + 11
+const IDX_LFO2_SYNC = drumSentinel("LFO2TempoSync");               // 200 + 12
+const IDX_LFO2_W1 = drumSentinel("LFO2Wave1");                     // 200 + 13
+const IDX_LFO2_W2 = drumSentinel("LFO2Wave2");                     // 200 + 14
+const IDX_LFO2_W3 = drumSentinel("LFO2Wave3");                     // 200 + 15
+const IDX_LFO2_PW = drumSentinel("LFO2PW");                        // 200 + 16
+const IDX_LFO2_RATE = drumSentinel("LFO2Rate");                    // 200 + 17
+const IDX_LFO2_MOD1 = drumSentinel("LFO2ModAmount1");              // 200 + 18
+const IDX_LFO2_MOD2 = drumSentinel("LFO2ModAmount2");              // 200 + 19
+const IDX_LFO2_TO_FILT = drumSentinel("LFO2ToFilterCutoff");       // 200 + 22
+const IDX_LFO2_TO_VOL = drumSentinel("LFO2ToVolume");              // 200 + 25
+const IDX_FENV_ATK_CURVE = drumSentinel("FilterEnvAttackCurve");   // 200 + 26
+const IDX_AENV_ATK_CURVE = drumSentinel("AmpEnvAttackCurve");      // 200 + 27
 
 interface DrumKnobDef {
     label: string;
@@ -542,12 +553,12 @@ export async function restoreDrumState(state: {
         renderLayerEditor();
     }
     try {
-        // reassertDrumInstanceStructural runs initDrumMode AND re-asserts
-        // polyphony=32. Defensive: a prior synth-params restore (or stale
-        // localStorage) may have lowered polyphony below 2, which makes
-        // Motherboard's PCM Pass 1 assign only one voice per pad hit so
-        // stacked layers go silent.
-        await reassertDrumInstanceStructural();
+        // NOTE: the old defensive reassertDrumInstanceStructural() call here
+        // (initDrumMode + polyphony=32) existed because the subsequent
+        // synth/drum bulk restores clobbered instance 9's structural state.
+        // Restore ordering — including the instance-9 structural finalize —
+        // is now ENGINE-OWNED (stage 4 of obxd_restore_stage, see
+        // wasm/obxd/main_obxd.cpp), so there is nothing to re-assert here.
         await loadDrumKit(currentKit);
         ready = true;
         if (statusEl) statusEl.textContent = "Ready - " + currentKit.name;

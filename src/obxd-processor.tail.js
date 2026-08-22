@@ -378,35 +378,69 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     });
                     break;
                 }
-                case 'restore_all_params': {
-                    if (!wasmModule || !Array.isArray(msg.params)) {
-                        // preserve current behavior shape: still post the reply
-                        this.port.postMessage({ type: 'all_params_restored' });
+                // Bulk full-state restore (state persistence) — ENGINE-OWNED
+                // ordering. One HEAVY task commits both arrays into C-side
+                // staging buffers via _obxd_restore_stage(0, ...); LIGHT tasks
+                // then run stages 1..4 in order. The C side owns ALL restore
+                // ordering semantics, including the instance-9 drum-structural
+                // skip + finalize that this file's old DRUM_STRUCTURAL_SKIP set
+                // and app-state's reassertDrumInstanceStructural call used to
+                // enforce (see obxd_restore_stage in wasm/obxd/main_obxd.cpp).
+                //
+                // drumParams == null → synth-only restore: stage 0 marks the
+                // drum data absent and stages 3/4 become C-side no-ops (they
+                // still run so the C state machine completes and resets).
+                // Synth-only restores are used on paths that never had drum
+                // state, so no instance-9 structural finalize is wanted there.
+                case 'restore_all_state': {
+                    if (!wasmModule || !Array.isArray(msg.synthParams)
+                            || msg.synthParams.length !== INSTANCE_COUNT * 108) {
+                        // preserve the old restore handlers' behavior shape:
+                        // still post the reply
+                        this.port.postMessage({ type: 'all_state_restored' });
                         break;
                     }
-                    const params = msg.params;
-                    // Instance 9 is the drum instance; its structural params (VOICE_COUNT=3,
-                    // OSC1MIX=40, OSC2MIX=41, NOISEMIX=42, LATK=51, LREL=54) are owned by
-                    // initDrumMode/reassertDrumInstanceStructural — restoring stale mirror
-                    // values here pinned polyphony to 1 and unmuted the oscillators.
-                    // Skip exactly these six for instance 9 only; instances 0..8 replay all.
-                    const DRUM_STRUCTURAL_SKIP = new Set([3, 40, 41, 42, 51, 54]);
-                    // 10 per-instance LIGHT chunks keep each quantum's setter
-                    // burst bounded; the FIFO queue applies them in order and
-                    // the reply lands only after the last chunk ran.
-                    for (let i = 0; i < INSTANCE_COUNT; i++) {
-                        const base = i * 108;
-                        taskQueue.push(() => {
-                            for (let p = 0; p < 80; p++) {
-                                if (i === 9 && DRUM_STRUCTURAL_SKIP.has(p)) continue;
-                                wasmModule._obxd_set_param(i, p, +params[base + p]);
+                    const synthParams = msg.synthParams;
+                    const drumParams = Array.isArray(msg.drumParams) ? msg.drumParams : null;
+                    let commitFailed = false;
+                    // HEAVY: _malloc + two HEAPF32.set copies (up to 4536
+                    // floats) + the C-side stage-0 memcpy into the static
+                    // staging buffers — deferred, one per drain. The heap
+                    // copies are freed right after stage 0 returns; later
+                    // stages read only the C-owned staging buffers.
+                    taskQueue.push(() => {
+                        try {
+                            const synthPtr = wasmModule._malloc(synthParams.length * 4);
+                            const drumPtr = drumParams ? wasmModule._malloc(drumParams.length * 4) : 0;
+                            wasmModule.HEAPF32.set(synthParams, synthPtr >> 2);
+                            if (drumPtr) wasmModule.HEAPF32.set(drumParams, drumPtr >> 2);
+                            const rc = wasmModule._obxd_restore_stage(
+                                0, synthPtr, synthParams.length,
+                                drumPtr, drumParams ? drumParams.length : 0);
+                            wasmModule._free(synthPtr);
+                            if (drumPtr) wasmModule._free(drumPtr);
+                            if (rc < 0) {
+                                console.error('[obxd-processor] restore stage 0 failed rc=' + rc);
+                                commitFailed = true;
                             }
-                            for (let n = 0; n < 28; n++)
-                                wasmModule._obxd_set_param(i, 200 + n, +params[base + 80 + n]);
+                        } catch (e) {
+                            console.error('[obxd-processor] restore_all_state commit threw:', e && e.message);
+                            commitFailed = true;
+                        }
+                    }, true);
+                    // LIGHT: stages 1..4 in order (each ~540 bounded setter
+                    // calls). FIFO guarantees they run after the commit and
+                    // before the reply. Passing 0/0 for the pointers — later
+                    // stages read the C-owned staging buffers only.
+                    for (let st = 1; st <= 4; st++) {
+                        taskQueue.push(() => {
+                            if (commitFailed) return;
+                            const rc = wasmModule._obxd_restore_stage(st, 0, 0, 0, 0);
+                            if (rc < 0) console.error('[obxd-processor] restore stage ' + st + ' failed rc=' + rc);
                         });
                     }
                     taskQueue.push(() => {
-                        this.port.postMessage({ type: 'all_params_restored' });
+                        this.port.postMessage({ type: 'all_state_restored' });
                     });
                     break;
                 }
@@ -428,8 +462,20 @@ class ObxdProcessor extends AudioWorkletProcessor {
                                         if (wasmModule._obxd_is_global_drum_param(dp)) { dparams[dbase + dp] = 0; continue; }
                                         dparams[dbase + dp] = wasmModule._obxd_get_drum_layer_param(dpad, dlayer, dp);
                                     }
-                                    for (let dn = 0; dn < 28; dn++)
+                                    for (let dn = 0; dn < 28; dn++) {
+                                        // NEW-param drum globals (verified:
+                                        // UnisonVoices, VoiceReassign,
+                                        // VibratoWave, LFO1PW) route live to
+                                        // instance 9 — dumping per-layer
+                                        // values for them would duplicate
+                                        // engine state, exactly like the
+                                        // legacy globals above. Write 0 into
+                                        // their slots (the C-side restore,
+                                        // stage 3, skips them) so the length
+                                        // stays 8*4*108.
+                                        if (wasmModule._obxd_is_global_drum_param(200 + dn)) { dparams[dbase + 80 + dn] = 0; continue; }
                                         dparams[dbase + 80 + dn] = wasmModule._obxd_get_drum_layer_param(dpad, dlayer, 200 + dn);
+                                    }
                                 }
                             }
                         } else {
@@ -439,31 +485,9 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     });
                     break;
                 }
-                case 'restore_drum_params': {
-                    if (!wasmModule || !Array.isArray(msg.params)) {
-                        // preserve current behavior shape: still post the reply
-                        this.port.postMessage({ type: 'drum_params_restored' });
-                        break;
-                    }
-                    const dparams = msg.params;
-                    // 8 per-pad LIGHT chunks (each: 4 layers × 108 slots),
-                    // reply posted only after the last chunk ran.
-                    for (let dpad = 0; dpad < 8; dpad++) {
-                        taskQueue.push(() => {
-                            for (let dlayer = 0; dlayer < 4; dlayer++) {
-                                const dbase = dpad * 432 + dlayer * 108;
-                                for (let dp = 0; dp < 80; dp++) {
-                                    if (wasmModule._obxd_is_global_drum_param(dp)) continue;
-                                    wasmModule._obxd_set_drum_layer_param(dpad, dlayer, dp, +dparams[dbase + dp]);
-                                }
-                                for (let dn = 0; dn < 28; dn++)
-                                    wasmModule._obxd_set_drum_layer_param(dpad, dlayer, 200 + dn, +dparams[dbase + 80 + dn]);
-                            }
-                        });
-                    }
-                    taskQueue.push(() => { this.port.postMessage({ type: 'drum_params_restored' }); });
-                    break;
-                }
+                // NOTE: drum params are RESTORED via the combined
+                // 'restore_all_state' handler above (engine-owned staging);
+                // only the dump side remains separate ('dump_drum_params').
                 // OctOBX PCM — per-drum-layer full-param get/set (mirrors get_param / set_param).
                 case 'set_drum_layer_param':
                     taskQueue.push(() => {

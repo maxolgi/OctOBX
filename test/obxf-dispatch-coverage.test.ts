@@ -86,11 +86,16 @@ describe("obxf-dispatch-coverage", () => {
     });
 
     it("every SynthParam::ID is covered by legacy mapping OR NEW-param dispatch", () => {
-        // Collect all streaming names covered by the legacy mapping table
+        // Collect all streaming names covered by the legacy mapping table.
+        // secondaryNewId covers the BENDRANGE split half (PitchBendDown) now
+        // that BENDRANGE is ONE row with a secondary target.
         const legacyCovered = new Set<string>();
         for (const m of paramMappings) {
             if (m.newId && m.newId.length > 0) {
                 legacyCovered.add(m.newId);
+            }
+            if (m.secondaryNewId && m.secondaryNewId.length > 0) {
+                legacyCovered.add(m.secondaryNewId);
             }
         }
 
@@ -119,7 +124,11 @@ describe("obxf-dispatch-coverage", () => {
         expect(duplicates, `These NEW_PARAM_IDS also appear in legacy mappings: ${duplicates.join(", ")}`).toEqual([]);
     });
 
-    it("paramMappings count is exactly 81 (80 params + BENDRANGE split)", () => {
-        expect(paramMappings.length).toBe(81);
+    it("paramMappings count is exactly 80 (BENDRANGE split encoded via secondaryNewId)", () => {
+        expect(paramMappings.length).toBe(80);
+        // ...and the split half is present exactly once:
+        const bendRows = paramMappings.filter(m => m.secondaryNewId === "PitchBendDown");
+        expect(bendRows.length).toBe(1);
+        expect(bendRows[0].legacyIndex).toBe(6);
     });
 });

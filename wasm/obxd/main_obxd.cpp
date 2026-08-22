@@ -13,10 +13,13 @@
  * Legacy parameter compatibility:
  *   The UI knob layer (.fxp loaders, obxd-synth-ui.ts) still speaks the OLD
  *   OB-Xd integer param indices 0..79 (ParamsEnum.h order). apply_param_instance()
- *   dispatches those legacy indices onto the NEW OB-Xf processX() methods,
- *   applying the value rescales documented in obxf_param_mappings.h and
- *   verified against obxf_imported/state/ObxdImporter.cpp (the canonical
- *   OB-Xd→OB-Xf translator). Rescale rules implemented:
+ *   dispatches those legacy indices onto the NEW OB-Xf processX() methods via
+ *   the GENERATED tables in wasm/obxd/param_table.h (obxf_legacy_params[] —
+ *   one row per legacy index with the forward transform as a fn ptr), produced
+ *   by tools/gen-param-table.mjs from tools/param-spec.mjs (the single source
+ *   of truth — see tools/PARAM_SPEC.md) and verified against
+ *   obxf_imported/state/ObxdImporter.cpp (the canonical OB-Xd→OB-Xf
+ *   translator). Rescale rules implemented:
  *     - VOICE_COUNT:   old 1..8 voices → new polyphony midpoint
  *     - OCTAVE:        → Transpose, semantic shift (round(v*4)+1 clamped 0..4)*0.25
  *     - BENDRANGE:     SPLIT → processBendUpRange + processBendDownRange
@@ -29,7 +32,8 @@
  *     - LATK/FATK:     attack /3 (OB-Xf env sustains at 90%)
  *     - PW_ENV:        → processEnvToPWAmount (v*0.85/1.0556)
  *     - PW_OSC2_OFS:   → processOsc2PWOffset (v*0.75/0.95)
- *     - LFO wave/dest: bool→blend/tri-state (lfoBoolToBlend / lfoBoolToTriState)
+ *     - LFO wave/dest: bool→blend/tri-state (lfoBoolToBlend/lfoBoolToTriState,
+ *       now baked into the generated obxf_apply_* functions)
  *     - ASPLAYEDALLOCATION: bool→tri NotePriority
  *   REMOVED (no-op): MIDILEARN(1), OSCQuantize(32), UNLEARN(70), ECONOMY_MODE(71)
  *
@@ -105,7 +109,10 @@
 #include "engine/SynthEngine.h"
 #include "engine/Program.h"
 
-#include "obxf_param_mappings.h"   // legacy → new dispatch documentation
+// GENERATED dispatch tables (legacy apply/invert fn ptrs, NEW-param native
+// applies, drum classification, sorted streaming-name index). MUST come
+// after the engine includes — see its header comment for the contract.
+#include "param_table.h"
 
 // =========================================================================
 // Optional real-.fxp factory patches
@@ -129,7 +136,7 @@
 // The NEW OB-Xf engine has no integer param index — every parameter is a
 // named processX() method. We keep the legacy 0..79 integer space ONLY as
 // the wire format for .fxp files, the knob UI (obxd_set_param), and
-// obxf_param_mappings.h. PARAM_COUNT is the legacy count (80), NOT the
+// param_table.h. PARAM_COUNT is the legacy count (80), NOT the
 // OB-Xf parameter count.
 //
 // These names intentionally match the old ParamsEnum.h identifiers so the
@@ -224,8 +231,25 @@ static float g_param_mirror[INSTANCE_COUNT][PARAM_COUNT] = {};
 // Indexed [instance_id][new_idx] where new_idx = sentinel - 200 (0..27).
 // obxd_get_param() returns from here for idx >= 200 so the knob UI can
 // sync NEW-param widget positions after a .fxp load.
+//
+// CANONICAL-ORDINAL SWITCH: new_idx is now interpreted as the CANONICAL
+// ordinal of obxf_new_params[] (declaration order of streaming IDs in
+// obxf_imported/parameter/SynthParam.h) — the apply path dispatches
+// obxf_new_params[new_idx].apply_native. The TS UI (obxd-synth-ui.ts) still
+// assigns V1 encounter-order sentinels, so UI-driven NEW-param writes land
+// in different engine params than before; that inconsistency is EXPECTED
+// and temporary (the next task migrates the UI + saved state to canonical
+// ordinals — no compat shims here). The worklet's dump/restore
+// (src/obxd-processor.tail.js) uses _obxd_get_param(i, 200+n) /
+// _obxd_set_param(i, 200+n, v) POSITIONALLY over this same mirror, so it
+// stays self-consistent with the C side and save/restore round-trips
+// correctly within a session made after this change.
 static constexpr int NEW_PARAM_COUNT = 28;
 static float g_new_param_mirror[INSTANCE_COUNT][NEW_PARAM_COUNT] = {};
+
+// The generated tables must agree with the frozen mirror sizes.
+static_assert(PARAM_COUNT == OBXF_PT_LEGACY_COUNT, "legacy table/mirror size mismatch");
+static_assert(NEW_PARAM_COUNT == OBXF_PT_NEW_COUNT, "new-param table/mirror size mismatch");
 
 // OctOBX PCM: per-layer full param store (8 pads x 4 layers). Voice-level params
 // are applied to each triggered voice (via dispatch_legacy_param with the engine's
@@ -235,9 +259,11 @@ static float g_new_param_mirror[INSTANCE_COUNT][NEW_PARAM_COUNT] = {};
 static float g_drum_layer_params[8][4][PARAM_COUNT] = {};
 
 // OctOBX PCM: per-layer mirror for the 28 NEW OB-Xf params (no legacy ancestor).
-// Indexed [pad][layer][new_idx] where new_idx = sentinel - 200 (0..27). Applied
-// per triggered voice via apply_new_param_instance (assumed voice-level — see the
-// note in apply_drum_layer_params_for_instance).
+// Indexed [pad][layer][new_idx] where new_idx = sentinel - 200 (0..27). VOICE-level
+// rows are applied to each triggered voice via apply_new_param_instance; GLOBAL rows
+// (UnisonVoices, VoiceReassign, VibratoWave, LFO1PW — the verified set whose processX
+// setters write synth-global Motherboard state with no ForEachVoice) route live to
+// instance 9, exactly like legacy drum globals (see is_global_drum_new_param).
 static float g_drum_layer_new[8][4][NEW_PARAM_COUNT] = {};
 
 // Per-instance last-loaded program name (empty until a load succeeds).
@@ -251,22 +277,19 @@ static float g_master_r[BUF_FRAMES];
 // =========================================================================
 // OB-Xd → OB-Xf rescale helpers (verbatim from ObxdImporter.cpp)
 //
-// These reimplement OB-Xd's logsc/linsc plus inverses so legacy 0..1
-// normalized values can be remapped onto the OB-Xf engine's different
-// internal ranges. Kept byte-for-byte aligned with the importer so a
-// runtime knob turn produces the same value an .fxp import would.
+// These reimplement OB-Xd's logsc plus inverses so legacy 0..1 normalized
+// values can be remapped onto the OB-Xf engine's different internal ranges.
+// Kept byte-for-byte aligned with the importer so a runtime knob turn
+// produces the same value an .fxp import would.
+//
+// NOTE: only the helpers still used by the inline LFOFREQ (17) handling in
+// apply_param_instance() live here. The per-param rescales moved into the
+// GENERATED obxf_apply_* / obxf_invert_* functions of param_table.h.
 // =========================================================================
 
 inline float xdLogsc(float p, float lo, float hi, float rolloff = 19.f)
 {
     return ((std::exp(p * std::log(rolloff + 1.f)) - 1.f) / rolloff) * (hi - lo) + lo;
-}
-
-inline float xdInvLinsc(float y, float lo, float hi)
-{
-    if (hi == lo)
-        return 0.f;
-    return juce::jlimit(0.f, 1.f, (y - lo) / (hi - lo));
 }
 
 inline float xdInvLogsc(float y, float lo, float hi, float rolloff = 19.f)
@@ -288,21 +311,17 @@ inline float mapLfoSyncedRate(float vXd)
     return static_cast<float>(xdToXf[kXd]) / 20.f; // syncedRatesCount - 1 == 20
 }
 
-// OB-Xd LFO waveform bool toggle → OB-Xf continuous blend [-1..1].
-// Importer only emits 0 or 0.5 (never negative).
-inline float lfoBoolToBlend(float v) { return v >= 0.5f ? 0.f : 0.5f; }
-
-// OB-Xd LFO destination bool toggle → OB-Xf tri-state {Off, On, Inv} = 0/0.5/1.
-// Importer only emits 0 or 0.5 (the Inv state has no OB-Xd ancestor).
-inline float lfoBoolToTriState(float v) { return v >= 0.5f ? 0.5f : 0.f; }
-
 // =========================================================================
 // Parameter dispatch (legacy OB-Xd idx → OB-Xf processX() method)
 //
 // apply_param_instance() is the instance-aware dispatch. It reads
 // g_engines[id], writes g_param_mirror[id] (in legacy 0..1 space), and
-// calls the matching NEW SynthEngine method — applying the rescale rules
-// documented in obxf_param_mappings.h.
+// calls the matching NEW SynthEngine method — through the GENERATED
+// obxf_legacy_params[] / obxf_new_params[] tables (wasm/obxd/param_table.h)
+// whose per-row functions carry the rescale rules documented in
+// tools/PARAM_SPEC.md. Only LFOFREQ (17) and LFO_SYNC (72) stay hand-written
+// inline (they read/write per-instance mirror state, which the tables
+// intentionally do not encode).
 // =========================================================================
 
 static void apply_param_instance(int instance_id, int idx, float v);
@@ -315,51 +334,24 @@ static void recreate_engine(int instance_id) {
     g_engines[instance_id]->setSampleRate(g_sample_rate);
 }
 
-// Fix 3: dispatch for the 28 NEW OB-Xf params (no OB-Xd legacy ancestor).
+// Dispatch for the 28 NEW OB-Xf params (no OB-Xd legacy ancestor).
 //
 // The UI (obxd-synth-ui.ts) assigns these a sentinel legacy index
-// NEW_PARAM_BASE (200) + position, where position is the 0-based ordinal in
-// which the paramBound controls with no legacy mapping are encountered during
-// buildObxdSynthUi. That ordering matches obxf_dispatch_reference.md's NEW
-// FEATURE list AND the SynthEngine.h method declaration order, so the switch
-// below is keyed on new_idx = (sentinel - 200). Values are passed 1:1 to the
-// matching processX() method with NO rescale (these are native OB-Xf params).
+// NEW_PARAM_BASE (200) + ordinal. The ordinal is the CANONICAL one — the
+// row index of obxf_new_params[] (declaration order of streaming IDs in
+// obxf_imported/parameter/SynthParam.h, filtered to params with no legacy
+// ancestor). Values are passed 1:1 to the matching processX() method with
+// NO rescale (these are native OB-Xf params), via the generated table's
+// apply_native fn ptr. Also used per triggered drum voice by
+// apply_drum_layer_params_for_instance — signature is part of that contract.
 //
-// IMPORTANT: if obxf-layout.ts's obxfControls array order changes, the
-// sentinel↔param mapping changes and this switch MUST be re-synchronized.
-// All 28 method names verified present in obxf_imported/engine/SynthEngine.h.
+// NOTE: this intentionally REPLACES the old V1 encounter-order switch (the
+// UI sentinel migration to canonical ordinals follows as the next task;
+// see the comment at g_new_param_mirror).
 static void apply_new_param_instance(SynthEngine& s, int new_idx, float v) {
-    switch (new_idx) {
-        case 0:  s.processUnisonVoices(v); break;        // UnisonVoices
-        case 1:  s.processVoiceReassign(v); break;        // VoiceReassign
-        case 2:  s.processOsc2Keytrack(v); break;         // Osc2Keytrack
-        case 3:  s.processEnvToPitchInvert(v); break;     // EnvToPitchInvert
-        case 4:  s.processEnvToPWInvert(v); break;        // EnvToPWInvert
-        case 5:  s.processRingModVolume(v); break;        // RingModMix
-        case 6:  s.processNoiseColor(v); break;           // NoiseColor
-        case 7:  s.processVibratoLFOWave(v); break;       // VibratoWave
-        case 8:  s.processFilter4PoleXpander(v); break;   // Filter4PoleXpander
-        case 9:  s.processFilterXpanderMode(v); break;    // FilterXpanderMode
-        case 10: s.processLFO1PW(v); break;               // LFO1PW
-        case 11: s.processLFO1ToVolume(v); break;         // LFO1ToVolume
-        case 12: s.processLFO2Sync(v); break;             // LFO2TempoSync
-        case 13: s.processLFO2Rate(v); break;             // LFO2Rate
-        case 14: s.processLFO2ModAmount1(v); break;       // LFO2ModAmount1
-        case 15: s.processLFO2ModAmount2(v); break;       // LFO2ModAmount2
-        case 16: s.processLFO2Wave1(v); break;            // LFO2Wave1
-        case 17: s.processLFO2Wave2(v); break;            // LFO2Wave2
-        case 18: s.processLFO2Wave3(v); break;            // LFO2Wave3
-        case 19: s.processLFO2PW(v); break;               // LFO2PW
-        case 20: s.processLFO2ToOsc1Pitch(v); break;      // LFO2ToOsc1Pitch
-        case 21: s.processLFO2ToOsc2Pitch(v); break;      // LFO2ToOsc2Pitch
-        case 22: s.processLFO2ToFilterCutoff(v); break;   // LFO2ToFilterCutoff
-        case 23: s.processLFO2ToOsc1PW(v); break;         // LFO2ToOsc1PW
-        case 24: s.processLFO2ToOsc2PW(v); break;         // LFO2ToOsc2PW
-        case 25: s.processLFO2ToVolume(v); break;         // LFO2ToVolume
-        case 26: s.processFilterEnvAttackCurve(v); break; // FilterEnvAttackCurve
-        case 27: s.processAmpEnvAttackCurve(v); break;    // AmpEnvAttackCurve
-        default: break;   // unknown sentinel — silently ignore
-    }
+    if (new_idx >= 0 && new_idx < OBXF_PT_NEW_COUNT)
+        obxf_new_params[new_idx].apply_native(s, v);
+    // unknown sentinel — silently ignore
 }
 
 // Seed an instance with a sensible OB-Xf init patch by calling the NEW
@@ -433,30 +425,35 @@ static void apply_defaults_for_instance(int instance_id) {
 // via dispatch_legacy_param (with the engine's pcmVoiceOverride scoping
 // ForEachVoice to the one triggered voice).
 //
-// The list below combines:
-//  (a) params the plan designates structural (tuning/octave/bend/portamento/…)
-//  (b) params whose processX sets a synth-global field rather than ForEachVoice,
-//      found by reading SynthEngine.h: the shared global LFO1 (rate/waves/sync),
-//      the synth.pannings array (PAN1..8), and HQMode (destructive allSoundOff).
+// Table-backed: the classification lives in obxf_legacy_params[].drum_class
+// (generated from tools/param-spec.mjs). DELIBERATE DEVIATION from the old
+// hand-written switch: indices 0 (UNDEFINED) and 1 (MIDILEARN) used to return
+// true here; the table classifies them DRUM_NONE. Net behavior is identical —
+// rows 0/1 have no engine dispatch (apply_legacy == NULL), so the old
+// global-routing call apply_param_instance(9, 0|1, v) was a no-op. The only
+// observable difference is the obxd_is_global_drum_param() export, which now
+// returns 0 instead of 1 for idx 0/1 (documented; nothing probes those).
 static bool is_global_drum_param(int idx) {
-    switch (idx) {
-        case UNDEFINED: case MIDILEARN:           // sentinels / REMOVED no-ops
-        case VOLUME: case VOICE_COUNT: case TUNE: case OCTAVE:
-        case BENDRANGE: case BENDOSC2: case LEGATOMODE: case BENDLFORATE:
-        case ASPLAYEDALLOCATION: case PORTAMENTO: case UNISON: case UDET:
-        // OctOBX PCM additions — shared global LFO1 (single LFO for the whole synth):
-        case LFOFREQ: case LFOSINWAVE: case LFOSQUAREWAVE: case LFOSHWAVE: case LFO_SYNC:
-        // OctOBX PCM additions — processPan writes synth.pannings (no ForEachVoice);
-        // PCM voice panning comes from Voice::pcmPan (set by assignPcmLayer) instead:
-        case PAN1: case PAN2: case PAN3: case PAN4:
-        case PAN5: case PAN6: case PAN7: case PAN8:
-        // OctOBX PCM addition — processHQMode toggles synth.oversample AND calls
-        // allSoundOff() on change; per-voice application would cut voices mid-trigger:
-        case FILTER_WARM:
-            return true;
-        default:
-            return false;
-    }
+    if (idx < 0 || idx >= PARAM_COUNT) return false;
+    return obxf_legacy_params[idx].drum_class == DRUM_GLOBAL;
+}
+
+// OctOBX PCM: NEW-param (sentinel >= 200) analogue of is_global_drum_param —
+// true when the canonical ordinal's processX setter writes SYNTH-GLOBAL
+// Motherboard state with no ForEachVoice, so it must NOT be stamped per
+// triggered voice (last-layer-applied would win on the shared field). The
+// verified set (see tools/param-spec.mjs DRUM_NEW_GLOBAL_ORDINALS and the row
+// evidence in obxf_imported/engine/SynthEngine.h):
+//    0 UnisonVoices → synth.setUnisonVoices → Motherboard::unisonVoiceCount
+//    1 VoiceReassign → synth.reallocate (Motherboard bool)
+//    7 VibratoWave   → synth.vibratoLFO.par.{wave1blend,wave2blend}
+//   10 LFO1PW        → synth.globalLFO.par.pw
+// Every other NEW param is ForEachVoice-scoped (per-voice fields / Voice::lfo2)
+// and is applied per triggered drum layer via apply_new_param_instance.
+// Table-backed: obxf_new_params[n].drum_class (generated from the spec).
+static bool is_global_drum_new_param(int n) {
+    if (n < 0 || n >= NEW_PARAM_COUNT) return false;
+    return obxf_new_params[n].drum_class == DRUM_GLOBAL;
 }
 
 // OctOBX PCM: filter cutoff/resonance/mode + amp-env params whose processX setters
@@ -468,158 +465,56 @@ static bool is_global_drum_param(int idx) {
 //   - CUTOFF/RESONANCE/MULTIMODE route to cutoffSmoother/resSmoother/filterModeSmoother
 //     (synth-GLOBAL smoothers), so dispatching them per voice pollutes the shared state.
 //   - LATK/LDEC/LSUS/LREL route to processAmpEnv* which, while ForEachVoice-scoped, apply
-//     the OB-Xd->OB-Xf rescale baked into dispatch_legacy_param; that differs from the
-//     direct per-voice writes below and would overwrite the voice with the wrong value.
+//     the OB-Xd->OB-Xf rescale baked into the generated obxf_apply_* functions; that
+//     differs from the direct per-voice writes below and would overwrite the voice with
+//     the wrong value.
 //
-// These are intentionally NOT folded into is_global_drum_param: they are per-pad/per-layer
-// values (each drum layer has its own cutoff + amp-ADSR), so they must NOT be routed live
-// to instance 9 (obxd_set_drum_layer_param) nor read back from g_param_mirror[9]
+// These are intentionally NOT folded into is_global_drum_param (DRUM_SMOOTHER is a
+// separate class in the generated table): they are per-pad/per-layer values (each drum
+// layer has its own cutoff + amp-ADSR), so they must NOT be routed live to instance 9
+// (obxd_set_drum_layer_param) nor read back from g_param_mirror[9]
 // (obxd_get_drum_layer_param).
 static bool is_smoother_driven_drum_param(int idx) {
-    switch (idx) {
-        case CUTOFF: case RESONANCE: case MULTIMODE:
-        case LATK: case LDEC: case LSUS: case LREL:
-            return true;
-        default:
-            return false;
-    }
+    if (idx < 0 || idx >= PARAM_COUNT) return false;
+    return obxf_legacy_params[idx].drum_class == DRUM_SMOOTHER;
 }
 
 // OctOBX PCM: the legacy idx -> SynthEngine processX dispatch, factored out so it
 // can be reused for single-voice application (with synth.pcmVoiceOverride set, which
-// scopes ForEachVoice to just that one voice) WITHOUT duplicating the ~80-case
-// switch. Does NOT touch g_param_mirror (the caller decides that).
+// scopes ForEachVoice to just that one voice) WITHOUT duplicating the per-param
+// transform. Does NOT touch g_param_mirror (the caller decides that).
 //
-// BEHAVIOR NOTE: every case body below is a verbatim copy of the original
-// apply_param_instance switch (a pure move refactor). The ONLY two cases NOT moved
-// here are LFOFREQ (17) and LFO_SYNC (72): their bodies read g_param_mirror /
-// re-dispatch via apply_param_instance (instance state), which contradicts this
-// function's "no mirror access" contract and would require an instance_id it does
-// not receive. They remain inline in apply_param_instance below. Because both are
-// classified global by is_global_drum_param, dispatch_legacy_param is never called
-// with idx 17 or 72 from the per-voice path; in the normal path apply_param_instance
-// short-circuits them before delegating. Net behavior is IDENTICAL to the original.
+// Table-backed: obxf_legacy_params[idx].apply_legacy carries the forward
+// (legacy→engine) transform, generated from tools/param-spec.mjs — the bodies
+// are byte-equivalent to the old ~80-case switch (pure move into the table).
+// Two row kinds short-circuit before any fn-ptr call:
+//   - special_inline (LFOFREQ 17 / LFO_SYNC 72): their handling reads
+//     g_param_mirror / re-dispatches via apply_param_instance (instance
+//     state), which contradicts this function's "no mirror access" contract;
+//     the caller handles them inline. Because both are classified global by
+//     is_global_drum_param, this function is never called with idx 17 or 72
+//     from the per-voice path; in the normal path apply_param_instance
+//     short-circuits them before delegating.
+//   - apply_legacy == NULL (removed rows 1/32/70/71, sentinel row 0): no-op.
 static void dispatch_legacy_param(SynthEngine& s, int idx, float v) {
     if (idx < 0 || idx >= PARAM_COUNT) return;
     if (v < 0.0f) v = 0.0f;
     if (v > 1.0f) v = 1.0f;
-    switch (idx) {
-        case UNDEFINED:        break;                                  // 0  sentinel
-        case MIDILEARN:        break;                                  // 1  REMOVED
-        case VOLUME:           s.processVolume(v); break;              // 2  1:1
-        case VOICE_COUNT: {                                            // 3  RESCALE old 1..8 → new
-            int xdVoices = juce::jlimit(1, 8, (int)std::round(v * 7.f) + 1);
-            s.processPolyphony(((float)(xdVoices - 1) + 0.5f) / (float)MAX_VOICES);
-        } break;
-        case TUNE:             s.processTune(v); break;                // 4  1:1
-        case OCTAVE: {                                                 // 5  → Transpose (semantic shift)
-            int transpose = juce::jlimit(0, 4, (int)std::round(v * 4.f) + 1);
-            s.processTranspose((float)transpose * 0.25f);
-        } break;
-        case BENDRANGE: {                                              // 6  SPLIT → Up + Down
-            int range = (v > 0.5f) ? 12 : 2;
-            float n = (float)range / (float)MAX_BEND_RANGE;
-            s.processBendUpRange(n);
-            s.processBendDownRange(n);
-        } break;
-        case BENDOSC2:        s.processBendOsc2Only(v); break;         // 7  1:1
-        case LEGATOMODE:      s.processEnvLegatoMode(v); break;        // 8  importer copies 1:1
-        case BENDLFORATE: {                                            // 9  → VibratoRate (rescale+rename)
-            float hzXd = xdLogsc(v, 3.f, 10.f);
-            s.processVibratoLFORate(xdInvLinsc(hzXd, 2.f, 12.f));
-        } break;
-        case VFLTENV:         s.processVelToFilterEnv(v); break;       // 10 1:1
-        case VAMPENV:         s.processVelToAmpEnv(v); break;          // 11 1:1
-        case ASPLAYEDALLOCATION:                                       // 12 bool→tri NotePriority
-            s.processNotePriority(v > 0.5f ? 0.0f : 0.5f); break;
-        case PORTAMENTO:      s.processPortamento(v); break;           // 13 1:1
-        case UNISON:          s.processUnison(v); break;               // 14 1:1
-        case UDET: {                                                   // 15 → UnisonDetune (rescale)
-            float dXd = xdLogsc(v, 0.001f, 0.90f);
-            s.processUnisonDetune(xdInvLogsc(dXd, 0.001f, 1.0f));
-        } break;
-        case OSC2_DET:        s.processOsc2Detune(v); break;           // 16 1:1
-        // LFOFREQ (17) intentionally absent — handled inline in apply_param_instance.
-        case LFOSINWAVE:      s.processLFO1Wave1(lfoBoolToBlend(v)); break;   // 18 bool→blend
-        case LFOSQUAREWAVE:   s.processLFO1Wave2(lfoBoolToBlend(v)); break;   // 19
-        case LFOSHWAVE:       s.processLFO1Wave3(lfoBoolToBlend(v)); break;   // 20
-        case LFO1AMT:         s.processLFO1ModAmount1(v); break;       // 21 1:1
-        case LFO2AMT:         s.processLFO1ModAmount2(v); break;       // 22 1:1 (NOT LFO2)
-        case LFOOSC1:         s.processLFO1ToOsc1Pitch(lfoBoolToTriState(v)); break;   // 23 bool→tri
-        case LFOOSC2:         s.processLFO1ToOsc2Pitch(lfoBoolToTriState(v)); break;   // 24
-        case LFOFILTER:       s.processLFO1ToFilterCutoff(lfoBoolToTriState(v)); break;// 25
-        case LFOPW1:          s.processLFO1ToOsc1PW(lfoBoolToTriState(v)); break;      // 26
-        case LFOPW2:          s.processLFO1ToOsc2PW(lfoBoolToTriState(v)); break;      // 27 (NOT LFO2)
-        case OSC2HS:          s.processOscSync(v); break;              // 28 1:1
-        case XMOD:            s.processCrossmod(v * 0.5f); break;      // 29 RESCALE (old v*24, new v*48)
-        case OSC1P:           s.processOsc1Pitch(v); break;            // 30 1:1
-        case OSC2P:           s.processOsc2Pitch(v); break;            // 31 1:1
-        case OSCQuantize:     break;                                   // 32 REMOVED
-        case OSC1Saw:         s.processOsc1Saw(v); break;              // 33 1:1
-        case OSC1Pul:         s.processOsc1Pulse(v); break;            // 34 1:1
-        case OSC2Saw:         s.processOsc2Saw(v); break;              // 35 1:1
-        case OSC2Pul:         s.processOsc2Pulse(v); break;            // 36 1:1
-        case PW:              s.processOscPW(v); break;                // 37 1:1
-        case BRIGHTNESS:      s.processOscBrightness(v); break;        // 38 1:1
-        case ENVPITCH:        s.processEnvToPitchAmount(v * (36.f / 40.f)); break; // 39 RESCALE
-        case OSC1MIX:         s.processOsc1Volume(v); break;           // 40 1:1 (method=processOsc1Volume)
-        case OSC2MIX:         s.processOsc2Volume(v); break;           // 41 1:1 (method=processOsc2Volume)
-        case NOISEMIX:        s.processNoiseVolume(xdLogsc(v, 0.f, 1.f, 35.f)); break; // 42 RESCALE (bake logsc)
-        case FLT_KF:          s.processFilterKeyTrack(v); break;       // 43 1:1
-        case CUTOFF:          s.processFilterCutoff(v); break;         // 44 1:1
-        case RESONANCE:       s.processFilterResonance(v); break;      // 45 1:1
-        case MULTIMODE:       s.processFilterMode(v); break;           // 46 1:1
-        case FILTER_WARM:     s.processHQMode(v); break;               // 47 1:1 (engine toggles allSoundOff internally)
-        case BANDPASS:        s.processFilter2PoleBPBlend(v); break;   // 48 1:1
-        case FOURPOLE:        s.processFilter4PoleMode(v); break;      // 49 1:1
-        case ENVELOPE_AMT:    s.processFilterEnvAmount(v); break;      // 50 1:1
-        case LATK: {                                                   // 51 → AmpEnvAttack (rescale /3)
-            float msXd = xdLogsc(v, 4.f, 60000.f, 900.f);
-            s.processAmpEnvAttack(xdInvLogsc(msXd / 3.f, 4.f, 60000.f, 900.f));
-        } break;
-        case LDEC:            s.processAmpEnvDecay(v); break;          // 52 1:1
-        case LSUS:            s.processAmpEnvSustain(v); break;        // 53 1:1
-        case LREL:            s.processAmpEnvRelease(v); break;        // 54 1:1
-        case FATK: {                                                    // 55 → FilterEnvAttack (rescale /3)
-            float msXd = xdLogsc(v, 1.f, 60000.f, 900.f);
-            s.processFilterEnvAttack(xdInvLogsc(msXd / 3.f, 1.f, 60000.f, 900.f));
-        } break;
-        case FDEC:            s.processFilterEnvDecay(v); break;       // 56 1:1
-        case FSUS:            s.processFilterEnvSustain(v); break;     // 57 1:1
-        case FREL:            s.processFilterEnvRelease(v); break;     // 58 1:1
-        case ENVDER:          s.processEnvelopeSlop(v); break;         // 59 1:1
-        case FILTERDER:       s.processFilterSlop(v); break;           // 60 1:1
-        case PORTADER:        s.processPortamentoSlop(v); break;       // 61 1:1
-        case PAN1:            s.processPan(v, 1); break;               // 62 1:1
-        case PAN2:            s.processPan(v, 2); break;               // 63
-        case PAN3:            s.processPan(v, 3); break;               // 64
-        case PAN4:            s.processPan(v, 4); break;               // 65
-        case PAN5:            s.processPan(v, 5); break;               // 66
-        case PAN6:            s.processPan(v, 6); break;               // 67
-        case PAN7:            s.processPan(v, 7); break;               // 68
-        case PAN8:            s.processPan(v, 8); break;               // 69
-        case UNLEARN:         break;                                   // 70 REMOVED
-        case ECONOMY_MODE:    break;                                   // 71 REMOVED
-        // LFO_SYNC (72) intentionally absent — handled inline in apply_param_instance.
-        case PW_ENV:          s.processEnvToPWAmount(v * (0.85f / 1.0555555555f)); break; // 73 RESCALE
-        case PW_ENV_BOTH:     s.processEnvToPWBothOscs(v); break;      // 74 1:1
-        case ENV_PITCH_BOTH:  s.processPitchBothOscs(v); break;        // 75 1:1 (method has no "EnvTo")
-        case FENV_INVERT:     s.processFilterEnvInvert(v); break;      // 76 1:1
-        case PW_OSC2_OFS:     s.processOsc2PWOffset(v * (0.75f / 0.95f)); break; // 77 RESCALE
-        case LEVEL_DIF:       s.processLevelSlop(v); break;            // 78 1:1
-        case SELF_OSC_PUSH:   s.processFilter2PolePush(v); break;      // 79 1:1
-        default: break;
-    }
+    const obxf_legacy_param_t& p = obxf_legacy_params[idx];
+    if (p.special_inline) return;   // caller handles inline (never reached from per-voice path)
+    if (!p.apply_legacy) return;    // removed / no-op row
+    p.apply_legacy(s, v);
 }
 
 // Dispatch one legacy (idx, v) pair to the NEW engine. `v` is clamped to
 // [0,1] and stored in the legacy mirror BEFORE the (possibly rescaled)
 // call. See the file header for the full rescale rule list.
 //
-// OctOBX PCM: the bulk of the switch now lives in dispatch_legacy_param() above
-// (pure move refactor — behavior IDENTICAL). LFOFREQ (17) and LFO_SYNC (72) stay
-// inline here because their bodies touch g_param_mirror / re-dispatch, which
-// dispatch_legacy_param's "no mirror access" contract forbids.
+// The per-param work lives in dispatch_legacy_param() above, which calls
+// the GENERATED obxf_legacy_params[idx].apply_legacy fn ptr. LFOFREQ (17)
+// and LFO_SYNC (72) stay inline here because their bodies touch
+// g_param_mirror / re-dispatch, which dispatch_legacy_param's "no mirror
+// access" contract forbids (the table marks them special_inline).
 static void apply_param_instance(int instance_id, int idx, float v) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     SynthEngine* e = g_engines[instance_id];
@@ -628,9 +523,11 @@ static void apply_param_instance(int instance_id, int idx, float v) {
     if (v > 1.0f) v = 1.0f;
     SynthEngine& s = *e;
 
-    // Fix 3: sentinel indices >= NEW_PARAM_BASE (200) are OB-Xf params with
-    // no legacy ancestor. Dispatch 1:1 to the NEW processX() methods (no
-    // rescale) and mirror the value so obxd_get_param can report it.
+    // Sentinel indices >= 200 are OB-Xf params with no legacy ancestor.
+    // new_idx = idx - 200 is the CANONICAL ordinal (row of obxf_new_params[]);
+    // dispatch 1:1 via the table's apply_native (no rescale) and mirror the
+    // value so obxd_get_param can report it. See the comment at
+    // g_new_param_mirror for the UI-sentinel mismatch note.
     if (idx >= 200) {
         int new_idx = idx - 200;
         if (new_idx >= 0 && new_idx < NEW_PARAM_COUNT)
@@ -646,8 +543,9 @@ static void apply_param_instance(int instance_id, int idx, float v) {
     // synced vs free-running rate path; kept inline (needs instance_id).
     if (idx == LFOFREQ) {
         // Synced path uses the 9→21 bucket map; consult the live mirror
-        // for LFO_SYNC. (During .fxp load, LFO_SYNC may not yet be set
-        // when LFOFREQ is dispatched — known limitation, see header.)
+        // for LFO_SYNC. (During a sequential .fxp load, LFO_SYNC may not yet
+        // be set when LFOFREQ is dispatched — resolved after the load by
+        // resolve_lfo_sync_dependency(), see load_fxp_data.)
         if (g_param_mirror[instance_id][LFO_SYNC] > 0.5f) {
             s.processLFO1Rate(mapLfoSyncedRate(v));
         } else {
@@ -659,6 +557,10 @@ static void apply_param_instance(int instance_id, int idx, float v) {
     // OctOBX PCM: LFO_SYNC (72) re-dispatches LFOFREQ now that sync state is known
     // (legacy .fxp loads dispatch params sequentially 0..79, so LFOFREQ at 17 was
     // processed with a stale sync). Kept inline (re-dispatch needs instance_id).
+    // NOTE: this re-dispatch applies the LEGACY-space transform to the mirrored
+    // LFOFREQ value; the native named-attribute path never re-dispatches per
+    // attribute — its ordering is fixed once, after the whole patch, by
+    // resolve_lfo_sync_dependency().
     if (idx == LFO_SYNC) {
         s.processLFO1Sync(v);
         apply_param_instance(instance_id, LFOFREQ, g_param_mirror[instance_id][LFOFREQ]);
@@ -706,17 +608,16 @@ static void seed_drum_layer_defaults() {
 //
 // For each freshly-triggered voice we scope the engine's ForEachVoice to that single
 // voice via Motherboard::pcmVoiceOverride, then run every voice-level legacy param
-// through dispatch_legacy_param (which therefore stamps only this voice) plus all 28
-// NEW params via apply_new_param_instance. Global/structural params are skipped here
-// (they are routed to the live instance 9 once, via apply_param_instance, by
-// obxd_set_drum_layer_param).
+// through dispatch_legacy_param (which therefore stamps only this voice) plus the
+// voice-level NEW params via apply_new_param_instance. Global/structural params —
+// legacy AND NEW — are skipped here (they are routed to the live instance 9 once,
+// via apply_param_instance, by obxd_set_drum_layer_param).
 //
-// ASSUMPTION for NEW params (idx >= 200): all are treated as voice-level. In reality
-// a few NEW processX setters hit synth-global fields rather than ForEachVoice
-// (UnisonVoices→setUnisonVoices, VoiceReassign→synth.reallocate, VibratoWave→
-// synth.vibratoLFO, LFO1PW→synth.globalLFO); for those, last-layer-applied wins on the
-// shared field. is_global_drum_param currently covers ONLY legacy idx; extending it to
-// NEW params is a follow-up if per-layer NEW-param control proves necessary.
+// NEW-param classification (idx >= 200) is per the generated drum_class column:
+// the four verified synth-globals (UnisonVoices, VoiceReassign, VibratoWave,
+// LFO1PW — setters that write Motherboard state with no ForEachVoice) are
+// DRUM_GLOBAL and never applied per voice; the other 24 are ForEachVoice-scoped
+// and stamp only this voice like any legacy voice-level row.
 static void apply_drum_layer_params_for_instance(int instance_id) {
     SynthEngine* e = (instance_id >= 0 && instance_id < INSTANCE_COUNT) ? g_engines[instance_id] : nullptr;
     if (!e) return;
@@ -735,6 +636,7 @@ static void apply_drum_layer_params_for_instance(int instance_id) {
             dispatch_legacy_param(*e, idx, g_drum_layer_params[pad][layer][idx]);
         }
         for (int n = 0; n < NEW_PARAM_COUNT; n++) {
+            if (is_global_drum_new_param(n)) continue;  // NEW globals handled via instance routing
             apply_new_param_instance(*e, n, g_drum_layer_new[pad][layer][n]);
         }
         // Smoother-driven filter params + amp env are NOT applied by dispatch_legacy_param
@@ -762,81 +664,26 @@ static void apply_drum_layer_params_for_instance(int instance_id) {
 // dispatch above, which must undo OB-Xd's different internal ranges.
 //
 // apply_named_param_instance() is the per-attribute entry point used by
-// parse_chunk_xml_named(). It writes g_param_mirror for any param that maps
-// to a legacy index 0..79 (Fix 4a) so the knob UI syncs after a patch load;
-// the 28 NEW params (no legacy ancestor) are not mirrored. The knob grid is
-// a legacy OB-Xd control surface and cannot represent the full OB-Xf
-// parameter space — NEW-param knob sync after patch load is a follow-up.
+// parse_chunk_xml_named(). It looks the name up ONCE in the GENERATED
+// sorted name index (obxf_param_name_find — binary search over the 104
+// streaming names) and:
+//   - dispatches via entry->native_apply (a DIRECT 1:1 processX() call,
+//     no rescale — native values, exactly like the old else-if chain);
+//   - writes g_param_mirror for legacy-mapped params so the knob UI syncs
+//     after a patch load — mapped through entry->invert (native→legacy).
+//     BEHAVIOR FIX vs the old chain, which stored the RAW native value:
+//     for the 14 rescaled params (OCTAVE/Transpose, BENDRANGE, LATK/FATK,
+//     XMOD, PW_ENV, …) the raw native value put engine-space numbers into
+//     legacy-mirrored knobs, so grabbing such a knob after a patch load
+//     caused a jump. invert() maps back to legacy space first; for the 1:1
+//     params invert is identity so nothing changes there. The ONLY
+//     legacy-mapped names without an invert are the two special_inline
+//     rows (LFO1Rate→17, LFO1TempoSync→72) — their inverse is
+//     sync-state-dependent, so the raw value is stored (as before);
+//   - mirrors NEW params (no legacy ancestor) into g_new_param_mirror at
+//     their CANONICAL ordinal (entry->new_ordinal), matching the sentinel
+//     dispatch space — see the comment at g_new_param_mirror.
 // =========================================================================
-
-static int nameeq(const char* a, int alen, const char* b) {
-    // Compare a (length alen, NOT null-terminated) against b (C string).
-    int i = 0;
-    for (; i < alen && b[i]; ++i) {
-        if (a[i] != b[i]) return 0;
-    }
-    return (i == alen && b[i] == '\0') ? 1 : 0;
-}
-
-// Fix 4(a): reverse-lookup an OB-Xf streaming param name → legacy
-// ParamsEnum.h index (0..79), using obxf_param_mappings.h. Returns -1 when
-// the name has no legacy ancestor (one of the 28 NEW params) so the caller
-// can skip the g_param_mirror write. Each streaming name is unique in the
-// table (BENDRANGE splits to "PitchBendUp" + "PitchBendDown", both → 6).
-static int legacy_index_for_streaming_name(const char* name, int nlen) {
-    for (int i = 0; i < obxf_param_mappings_count; ++i) {
-        const obxf_param_mapping_t* m = &obxf_param_mappings[i];
-        if (m->new_id && m->new_id[0] != '\0' && nameeq(name, nlen, m->new_id)) {
-            return m->legacy_index;
-        }
-    }
-    return -1;
-}
-
-// Reverse-lookup an OB-Xf streaming param name → NEW-param sentinel offset
-// (0..27), for the 28 params with no legacy ancestor. Returns -1 for names
-// that DO have a legacy ancestor (or are unknown). The mapping is 1:1 with
-// apply_new_param_instance()'s switch cases.
-static const struct { const char* name; int offset; } new_param_names[] = {
-    { "UnisonVoices",        0 },
-    { "VoiceReassign",       1 },
-    { "Osc2Keytrack",        2 },
-    { "EnvToPitchInvert",    3 },
-    { "EnvToPWInvert",       4 },
-    { "RingModMix",          5 },
-    { "NoiseColor",          6 },
-    { "VibratoWave",         7 },
-    { "Filter4PoleXpander",  8 },
-    { "FilterXpanderMode",   9 },
-    { "LFO1PW",             10 },
-    { "LFO1ToVolume",       11 },
-    { "LFO2TempoSync",      12 },
-    { "LFO2Rate",           13 },
-    { "LFO2ModAmount1",     14 },
-    { "LFO2ModAmount2",     15 },
-    { "LFO2Wave1",          16 },
-    { "LFO2Wave2",          17 },
-    { "LFO2Wave3",          18 },
-    { "LFO2PW",             19 },
-    { "LFO2ToOsc1Pitch",    20 },
-    { "LFO2ToOsc2Pitch",    21 },
-    { "LFO2ToFilterCutoff", 22 },
-    { "LFO2ToOsc1PW",       23 },
-    { "LFO2ToOsc2PW",       24 },
-    { "LFO2ToVolume",       25 },
-    { "FilterEnvAttackCurve",26 },
-    { "AmpEnvAttackCurve",  27 },
-};
-static constexpr int new_param_names_count =
-    sizeof(new_param_names) / sizeof(new_param_names[0]);
-
-static int new_offset_for_streaming_name(const char* name, int nlen) {
-    for (int i = 0; i < new_param_names_count; ++i) {
-        if (nameeq(name, nlen, new_param_names[i].name))
-            return new_param_names[i].offset;
-    }
-    return -1;
-}
 
 static void apply_named_param_instance(int instance_id, const char* name, int nlen, float v) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
@@ -847,143 +694,40 @@ static void apply_named_param_instance(int instance_id, const char* name, int nl
     if (v > 1.0f) v = 1.0f;
     SynthEngine& s = *e;
 
+    // One binary search replaces the ~150-branch else-if chain, the
+    // obxf_param_mappings.h reverse lookup, and the new_param_names[] table.
+    // Unknown names (metadata attributes like programName/author/category/
+    // license/voiceCount/ob-xf_version) return NULL and are ignored, as
+    // before.
+    const obxf_param_name_entry_t* entry = obxf_param_name_find(name, nlen);
+    if (!entry) return;
+
+    // Mirror NEW params (no legacy ancestor) into g_new_param_mirror at the
+    // CANONICAL ordinal so the knob UI can sync their widget positions too
+    // (same ordinal space as the sentinel dispatch — see g_new_param_mirror).
+    if (entry->new_ordinal >= 0 && entry->new_ordinal < NEW_PARAM_COUNT) {
+        g_new_param_mirror[instance_id][entry->new_ordinal] = v;
+    }
+
     // Mirror legacy-indexed params so the knob UI syncs correctly after a
     // native OB-Xf .fxp load (syncObxdControlsFromEngine reads g_param_mirror).
-    // The value stored is the NATIVE OB-Xf 0..1 value, which matches the
-    // legacy value for the 41 clean 1:1 params. For the 14 rescaled params
-    // (OCTAVE/Transpose, BENDRANGE, LATK/FATK, …) the stored native value
-    // differs from what the legacy knob WOULD produce, so grabbing such a
-    // knob after a patch load may cause a small jump — a known trade-off.
-    int legacy_idx = legacy_index_for_streaming_name(name, nlen);
-    if (legacy_idx >= 0 && legacy_idx < PARAM_COUNT) {
-        g_param_mirror[instance_id][legacy_idx] = v;
+    // INVERT FIX: store the LEGACY-space value (entry->invert maps
+    // native→legacy). The old code stored the raw native value, which put
+    // engine-space numbers into legacy knobs for the 14 rescaled params.
+    // invert is NULL only for the two special_inline names (LFO1Rate /
+    // LFO1TempoSync, whose inverse is sync-state-dependent) — those keep
+    // the old raw storage.
+    if (entry->legacy_index >= 0 && entry->legacy_index < PARAM_COUNT) {
+        g_param_mirror[instance_id][entry->legacy_index] =
+            entry->invert ? entry->invert(v) : v;
     }
 
-    // Mirror NEW params (no legacy ancestor) into g_new_param_mirror so the
-    // knob UI can sync their widget positions too. The sentinel offset (0..27)
-    // matches apply_new_param_instance()'s switch.
-    int new_off = new_offset_for_streaming_name(name, nlen);
-    if (new_off >= 0 && new_off < NEW_PARAM_COUNT) {
-        g_new_param_mirror[instance_id][new_off] = v;
-    }
-
-    // MASTER
-    if      (nameeq(name,nlen,"Volume"))             s.processVolume(v);
-    else if (nameeq(name,nlen,"Transpose"))          s.processTranspose(v);
-    else if (nameeq(name,nlen,"Tune"))               s.processTune(v);
-    // GLOBAL
-    else if (nameeq(name,nlen,"Polyphony"))          s.processPolyphony(v);
-    else if (nameeq(name,nlen,"HQMode"))             s.processHQMode(v);
-    else if (nameeq(name,nlen,"UnisonVoices"))       s.processUnisonVoices(v);
-    else if (nameeq(name,nlen,"Portamento"))         s.processPortamento(v);
-    else if (nameeq(name,nlen,"Unison"))             s.processUnison(v);
-    else if (nameeq(name,nlen,"UnisonDetune"))       s.processUnisonDetune(v);
-    else if (nameeq(name,nlen,"EnvLegatoMode"))      s.processEnvLegatoMode(v);
-    else if (nameeq(name,nlen,"NotePriority"))       s.processNotePriority(v);
-    else if (nameeq(name,nlen,"VoiceReassign"))      s.processVoiceReassign(v);
-    // OSCILLATORS
-    else if (nameeq(name,nlen,"Osc1Pitch"))          s.processOsc1Pitch(v);
-    else if (nameeq(name,nlen,"Osc2Detune"))         s.processOsc2Detune(v);
-    else if (nameeq(name,nlen,"Osc2Pitch"))          s.processOsc2Pitch(v);
-    else if (nameeq(name,nlen,"Osc2Keytrack"))       s.processOsc2Keytrack(v);
-    else if (nameeq(name,nlen,"Osc1SawWave"))        s.processOsc1Saw(v);
-    else if (nameeq(name,nlen,"Osc1PulseWave"))      s.processOsc1Pulse(v);
-    else if (nameeq(name,nlen,"Osc2SawWave"))        s.processOsc2Saw(v);
-    else if (nameeq(name,nlen,"Osc2PulseWave"))      s.processOsc2Pulse(v);
-    else if (nameeq(name,nlen,"OscPW"))              s.processOscPW(v);
-    else if (nameeq(name,nlen,"Osc2PWOffset"))       s.processOsc2PWOffset(v);
-    else if (nameeq(name,nlen,"EnvToPitchAmount"))   s.processEnvToPitchAmount(v);
-    else if (nameeq(name,nlen,"EnvToPitchBothOscs")) s.processPitchBothOscs(v);
-    else if (nameeq(name,nlen,"EnvToPitchInvert"))   s.processEnvToPitchInvert(v);
-    else if (nameeq(name,nlen,"EnvToPWAmount"))      s.processEnvToPWAmount(v);
-    else if (nameeq(name,nlen,"EnvToPWBothOscs"))    s.processEnvToPWBothOscs(v);
-    else if (nameeq(name,nlen,"EnvToPWInvert"))      s.processEnvToPWInvert(v);
-    else if (nameeq(name,nlen,"OscCrossmod"))        s.processCrossmod(v);
-    else if (nameeq(name,nlen,"OscSync"))            s.processOscSync(v);
-    else if (nameeq(name,nlen,"OscBrightness"))      s.processOscBrightness(v);
-    // MIXER — streaming names are Osc1Mix/Osc2Mix (ID constants are Osc1Vol/Osc2Vol)
-    else if (nameeq(name,nlen,"Osc1Mix"))            s.processOsc1Volume(v);
-    else if (nameeq(name,nlen,"Osc2Mix"))            s.processOsc2Volume(v);
-    else if (nameeq(name,nlen,"RingModMix"))         s.processRingModVolume(v);
-    else if (nameeq(name,nlen,"NoiseMix"))           s.processNoiseVolume(v);
-    else if (nameeq(name,nlen,"NoiseColor"))         s.processNoiseColor(v);
-    // CONTROL — streaming names PitchBendUp/PitchBendDown (ID: BendUpRange/Down)
-    else if (nameeq(name,nlen,"PitchBendUp"))        s.processBendUpRange(v);
-    else if (nameeq(name,nlen,"PitchBendDown"))      s.processBendDownRange(v);
-    else if (nameeq(name,nlen,"BendOsc2Only"))       s.processBendOsc2Only(v);
-    else if (nameeq(name,nlen,"VibratoWave"))        s.processVibratoLFOWave(v);
-    else if (nameeq(name,nlen,"VibratoRate"))        s.processVibratoLFORate(v);
-    // FILTER
-    else if (nameeq(name,nlen,"Filter4PoleMode"))    s.processFilter4PoleMode(v);
-    else if (nameeq(name,nlen,"FilterCutoff"))       s.processFilterCutoff(v);
-    else if (nameeq(name,nlen,"FilterResonance"))    s.processFilterResonance(v);
-    else if (nameeq(name,nlen,"FilterEnvAmount"))    s.processFilterEnvAmount(v);
-    else if (nameeq(name,nlen,"FilterKeyFollow"))    s.processFilterKeyTrack(v); // ID: FilterKeyTrack
-    else if (nameeq(name,nlen,"FilterMode"))         s.processFilterMode(v);
-    else if (nameeq(name,nlen,"Filter2PoleBPBlend")) s.processFilter2PoleBPBlend(v);
-    else if (nameeq(name,nlen,"Filter2PolePush"))    s.processFilter2PolePush(v);
-    else if (nameeq(name,nlen,"Filter4PoleXpander")) s.processFilter4PoleXpander(v);
-    else if (nameeq(name,nlen,"FilterXpanderMode"))  s.processFilterXpanderMode(v);
-    // LFO 1 — streaming "LFO1TempoSync" → processLFO1Sync
-    else if (nameeq(name,nlen,"LFO1TempoSync"))      s.processLFO1Sync(v);
-    else if (nameeq(name,nlen,"LFO1Rate"))           s.processLFO1Rate(v);
-    else if (nameeq(name,nlen,"LFO1ModAmount1"))     s.processLFO1ModAmount1(v);
-    else if (nameeq(name,nlen,"LFO1ModAmount2"))     s.processLFO1ModAmount2(v);
-    else if (nameeq(name,nlen,"LFO1Wave1"))          s.processLFO1Wave1(v);
-    else if (nameeq(name,nlen,"LFO1Wave2"))          s.processLFO1Wave2(v);
-    else if (nameeq(name,nlen,"LFO1Wave3"))          s.processLFO1Wave3(v);
-    else if (nameeq(name,nlen,"LFO1PW"))             s.processLFO1PW(v);
-    else if (nameeq(name,nlen,"LFO1ToOsc1Pitch"))    s.processLFO1ToOsc1Pitch(v);
-    else if (nameeq(name,nlen,"LFO1ToOsc2Pitch"))    s.processLFO1ToOsc2Pitch(v);
-    else if (nameeq(name,nlen,"LFO1ToFilterCutoff")) s.processLFO1ToFilterCutoff(v);
-    else if (nameeq(name,nlen,"LFO1ToOsc1PW"))       s.processLFO1ToOsc1PW(v);
-    else if (nameeq(name,nlen,"LFO1ToOsc2PW"))       s.processLFO1ToOsc2PW(v);
-    else if (nameeq(name,nlen,"LFO1ToVolume"))       s.processLFO1ToVolume(v);
-    // LFO 2 — has no legacy ancestor; only reachable via native .fxp
-    else if (nameeq(name,nlen,"LFO2TempoSync"))      s.processLFO2Sync(v);
-    else if (nameeq(name,nlen,"LFO2Rate"))           s.processLFO2Rate(v);
-    else if (nameeq(name,nlen,"LFO2ModAmount1"))     s.processLFO2ModAmount1(v);
-    else if (nameeq(name,nlen,"LFO2ModAmount2"))     s.processLFO2ModAmount2(v);
-    else if (nameeq(name,nlen,"LFO2Wave1"))          s.processLFO2Wave1(v);
-    else if (nameeq(name,nlen,"LFO2Wave2"))          s.processLFO2Wave2(v);
-    else if (nameeq(name,nlen,"LFO2Wave3"))          s.processLFO2Wave3(v);
-    else if (nameeq(name,nlen,"LFO2PW"))             s.processLFO2PW(v);
-    else if (nameeq(name,nlen,"LFO2ToOsc1Pitch"))    s.processLFO2ToOsc1Pitch(v);
-    else if (nameeq(name,nlen,"LFO2ToOsc2Pitch"))    s.processLFO2ToOsc2Pitch(v);
-    else if (nameeq(name,nlen,"LFO2ToFilterCutoff")) s.processLFO2ToFilterCutoff(v);
-    else if (nameeq(name,nlen,"LFO2ToOsc1PW"))       s.processLFO2ToOsc1PW(v);
-    else if (nameeq(name,nlen,"LFO2ToOsc2PW"))       s.processLFO2ToOsc2PW(v);
-    else if (nameeq(name,nlen,"LFO2ToVolume"))       s.processLFO2ToVolume(v);
-    // FILTER ENVELOPE
-    else if (nameeq(name,nlen,"FilterEnvInvert"))    s.processFilterEnvInvert(v);
-    else if (nameeq(name,nlen,"FilterEnvAttack"))    s.processFilterEnvAttack(v);
-    else if (nameeq(name,nlen,"FilterEnvDecay"))     s.processFilterEnvDecay(v);
-    else if (nameeq(name,nlen,"FilterEnvSustain"))   s.processFilterEnvSustain(v);
-    else if (nameeq(name,nlen,"FilterEnvRelease"))   s.processFilterEnvRelease(v);
-    else if (nameeq(name,nlen,"FilterEnvAttackCurve")) s.processFilterEnvAttackCurve(v);
-    else if (nameeq(name,nlen,"VelToFilterEnv"))     s.processVelToFilterEnv(v);
-    // AMP ENVELOPE
-    else if (nameeq(name,nlen,"AmpEnvAttack"))       s.processAmpEnvAttack(v);
-    else if (nameeq(name,nlen,"AmpEnvDecay"))        s.processAmpEnvDecay(v);
-    else if (nameeq(name,nlen,"AmpEnvSustain"))      s.processAmpEnvSustain(v);
-    else if (nameeq(name,nlen,"AmpEnvRelease"))      s.processAmpEnvRelease(v);
-    else if (nameeq(name,nlen,"AmpEnvAttackCurve"))  s.processAmpEnvAttackCurve(v);
-    else if (nameeq(name,nlen,"VelToAmpEnv"))        s.processVelToAmpEnv(v);
-    // VOICE VARIATION / PAN
-    else if (nameeq(name,nlen,"PortamentoSlop"))     s.processPortamentoSlop(v);
-    else if (nameeq(name,nlen,"FilterSlop"))         s.processFilterSlop(v);
-    else if (nameeq(name,nlen,"EnvelopeSlop"))       s.processEnvelopeSlop(v);
-    else if (nameeq(name,nlen,"LevelSlop"))          s.processLevelSlop(v);
-    else if (nameeq(name,nlen,"PanVoice1"))          s.processPan(v, 1);
-    else if (nameeq(name,nlen,"PanVoice2"))          s.processPan(v, 2);
-    else if (nameeq(name,nlen,"PanVoice3"))          s.processPan(v, 3);
-    else if (nameeq(name,nlen,"PanVoice4"))          s.processPan(v, 4);
-    else if (nameeq(name,nlen,"PanVoice5"))          s.processPan(v, 5);
-    else if (nameeq(name,nlen,"PanVoice6"))          s.processPan(v, 6);
-    else if (nameeq(name,nlen,"PanVoice7"))          s.processPan(v, 7);
-    else if (nameeq(name,nlen,"PanVoice8"))          s.processPan(v, 8);
-    // Metadata / non-param attributes (programName, author, category,
-    // license, voiceCount, ob-xf_version) are intentionally ignored here.
+    // Direct 1:1 engine call for this streaming name (native space, no
+    // rescale). For "LFO1TempoSync" this is processLFO1Sync(v) — the
+    // LEGACY-path LFOFREQ re-dispatch does NOT happen per attribute (the
+    // old chain never did that); the load-ordering fix lives in
+    // resolve_lfo_sync_dependency() after the whole patch is applied.
+    entry->native_apply(s, v);
 }
 
 // =========================================================================
@@ -1217,6 +961,28 @@ static int parse_chunk_xml_named(int instance_id, const char* xml, int xml_len) 
     return applied;
 }
 
+// LFOFREQ/LFO_SYNC load-ordering dependency resolve (bug fix).
+//
+// Both .fxp schemas apply parameters SEQUENTIALLY, and LFOFREQ (17) reads
+// the LFO_SYNC (72) mirror entry to pick the synced vs free-running rate
+// path — so whenever the file's sync flag lands AFTER the rate (the legacy
+// integer schema always dispatches 17 before 72; the native named schema
+// typically serializes LFO1TempoSync before LFO1Rate), the rate was
+// processed with a STALE sync state. Previously a documented known
+// limitation; now fixed by re-dispatching LFO_SYNC from the mirror AFTER
+// the whole patch is applied: apply_param_instance(LFO_SYNC) re-applies
+// processLFO1Sync (idempotent) and then re-dispatches LFOFREQ from
+// mirror[17] with the now-final sync state. Mirror values are unchanged
+// (each write stores the same mirrored value back); only the engine's
+// LFO1 rate is recomputed. NOTE for the native named schema: mirror[17]
+// holds the RAW native LFO1Rate (the special_inline rows have no invert),
+// so the re-derived rate passes through the legacy-space transform — this
+// is the intended post-load normalization semantic for LFO1.
+static void resolve_lfo_sync_dependency(int instance_id) {
+    apply_param_instance(instance_id, LFO_SYNC,
+                         g_param_mirror[instance_id][LFO_SYNC]);
+}
+
 // Core loader for a parsed .fxp byte stream. Writes its program name
 // into g_patch_name[instance_id]. Returns 0 on success, negative on
 // error (see obxd_load_fxp for the rc meaning table).
@@ -1260,6 +1026,7 @@ static int load_fxp_data(int instance_id, const uint8_t* ptr, int len) {
             g_patch_name[instance_id][0] = '\0';
             return -8;
         }
+        resolve_lfo_sync_dependency(instance_id);
         return 0;
     }
 
@@ -1306,6 +1073,7 @@ static int load_fxp_data(int instance_id, const uint8_t* ptr, int len) {
         g_patch_name[instance_id][0] = '\0';
         return -13;
     }
+    resolve_lfo_sync_dependency(instance_id);
     return 0;
 }
 
@@ -1512,10 +1280,26 @@ void obxd_midi_in(int instance_id, uint8_t status, uint8_t d1, uint8_t d2) {
             switch (d1 & 0x7F) {
                 case 1:    s.processModWheel((d2 & 0x7F) / 127.0f); break;
                 case 64:   if (d2 >= 64) s.sustainOn(); else s.sustainOff(); break;
+                case 74:   // MPE timbre (CC 74) — engine wants 0..1 normalized,
+                           // mapped onto the Slide matrix source. Routed
+                           // per-channel ONLY in MPE mode; CC 74 is a normal
+                           // channel control otherwise and the legacy OB-Xd
+                           // engine had no CC 74 handling, so in non-MPE mode
+                           // it stays ignored (preserving old behavior).
+                           if (g_mpe_enabled[instance_id])
+                               s.processMPETimbre(channel, (d2 & 0x7F) / 127.0f);
+                           break;
                 case 120:  s.allSoundOff();  break;
                 case 123:  s.allNotesOff();  break;
                 default:   break;
             }
+            break;
+        case 0xD0:  // Channel pressure — MPE per-note expression. Engine wants
+                    // 0..1 normalized (fed straight to the Press matrix source).
+                    // The legacy OB-Xd engine dropped 0xD0 entirely, so keep
+                    // dropping it unless MPE is enabled for this instance.
+            if (g_mpe_enabled[instance_id])
+                s.processMPEChannelPressure(channel, (d1 & 0x7F) / 127.0f);
             break;
         case 0xE0: {  // Pitch wheel — 14-bit little-endian, center 8192
             int v = ((d2 & 0x7F) << 7) | (d1 & 0x7F);
@@ -1696,7 +1480,8 @@ float obxd_get_instance_rms(int instance_id) {
 
 // Per-instance MPE enable flag. When enabled, obxd_midi_in forwards the
 // MIDI status byte's channel nibble to the OB-Xf engine's channel-aware
-// note/pitch handlers (processNoteOn/Off, processMPEPitch).
+// handlers (processNoteOn/Off, processMPEPitch, processMPETimbre on CC 74,
+// processMPEChannelPressure on 0xD0).
 EMSCRIPTEN_KEEPALIVE
 void obxd_set_mpe(int instance_id, int enabled) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
@@ -1849,7 +1634,9 @@ void obxd_clear_pcm(int instance_id) {
 // OctOBX PCM: per-layer param get/set. pad 0..7, layer 0..3, idx 0..79 (legacy) or
 // >=200 (new). Voice-level idx -> layer mirror (applied to each triggered voice on the
 // next note-on). Global/structural idx -> instance 9 live (so Volume/Tune/Polyphony/
-// global-LFO/etc. affect the whole drum instance immediately).
+// global-LFO/etc. affect the whole drum instance immediately). NEW params follow the
+// same rule via their drum_class: the four verified synth-globals route live, the
+// other 24 are per-layer voice-level.
 EMSCRIPTEN_KEEPALIVE
 void obxd_set_drum_layer_param(int pad, int layer, int idx, float v) {
     if (pad < 0 || pad >= 8 || layer < 0 || layer >= 4) return;
@@ -1857,7 +1644,12 @@ void obxd_set_drum_layer_param(int pad, int layer, int idx, float v) {
     if (idx >= 200) {
         int n = idx - 200;
         if (n >= 0 && n < NEW_PARAM_COUNT) g_drum_layer_new[pad][layer][n] = v;
-        // new params: assume voice-level; if any are global, add to is_global_drum_param logic
+        if (is_global_drum_new_param(n)) {
+            // route to the live instance so NEW synth-globals (UnisonVoices/
+            // VoiceReassign/VibratoWave/LFO1PW) affect the whole drum instance
+            // — engine 9 + g_new_param_mirror[9], same as legacy globals.
+            apply_param_instance(9, idx, v);
+        }
         return;
     }
     if (idx < 0 || idx >= PARAM_COUNT) return;
@@ -1874,6 +1666,10 @@ float obxd_get_drum_layer_param(int pad, int layer, int idx) {
     if (idx >= 200) {
         int n = idx - 200;
         if (n < 0 || n >= NEW_PARAM_COUNT) return -1.0f;
+        if (is_global_drum_new_param(n)) {
+            // read live instance value for NEW globals
+            return g_new_param_mirror[9][n];
+        }
         return g_drum_layer_new[pad][layer][n];
     }
     if (idx < 0 || idx >= PARAM_COUNT) return -1.0f;
@@ -1888,12 +1684,207 @@ float obxd_get_drum_layer_param(int pad, int layer, int idx) {
 // dump/restore paths can skip drum-global indices WITHOUT duplicating the
 // C-side list (which would drift when params are reclassified). Returns 1
 // if idx is global/structural (routed live to instance 9 by
-// obxd_set_drum_layer_param), 0 otherwise. idx semantics match the legacy
-// 0..79 space (values >= 200 are NEW-param sentinels, always 0 here).
+// obxd_set_drum_layer_param), 0 otherwise. idx semantics: legacy 0..79 OR a
+// NEW-param sentinel (200 + canonical ordinal) — for sentinels this reflects
+// the verified NEW-param classification (1 for UnisonVoices/VoiceReassign/
+// VibratoWave/LFO1PW, 0 for the 24 voice-level rows).
 EMSCRIPTEN_KEEPALIVE
 int obxd_is_global_drum_param(int idx) {
+    if (idx >= 200)
+        return is_global_drum_new_param(idx - 200) ? 1 : 0;
     if (idx < 0 || idx >= PARAM_COUNT) return 0;
     return is_global_drum_param(idx) ? 1 : 0;
+}
+
+// =========================================================================
+// OctOBX PCM: staged, engine-owned full-state restore (obxd_restore_stage)
+//
+// REPLACES the fragile 5-step JS-orchestrated restore ordering that used
+// to be smeared across three layers:
+//   OLD (app-state.ts restoreAppStateAfterAWP):
+//     (1) drum kit load → (2) worklet 'restore_all_params' replaying
+//     10 × 108 synth params with a hard-coded DRUM_STRUCTURAL_SKIP set
+//     {3,40,41,42,51,54} for instance 9 → (3) worklet 'restore_drum_params'
+//     replaying 8 × 4 × 108 drum layer params → (4) per-instance settings
+//     → (5) reassertDrumInstanceStructural() in drum-audio.ts, which HAD
+//     to run last or instance 9's polyphony stayed pinned to 1 and drum
+//     layers went silent (only one voice assigned per pad hit).
+//   NEW: ALL ordering semantics live HERE, driven by the generated
+//   obxf_legacy_params[].drum_class / drum_restore_skip classification in
+//   param_table.h — never re-derive those lists in JS.
+//
+// The worklet's audio thread must never process an unbounded task, so the
+// restore is split into five bounded stages invoked in order: stage 0 is
+// posted as a HEAVY deferred task (_malloc + two HEAPF32.set copies + a
+// memcpy into the staging buffers); stages 1..4 are LIGHT tasks of ~540
+// bounded setter calls each. Reply correlation stays in JS — the worklet
+// posts 'all_state_restored' after stage 4 returns.
+//
+// Stage contract:
+//   stage 0 — COMMIT DATA: copy both arrays from the passed pointers into
+//             C-owned static staging buffers. synth MUST be non-NULL with
+//             synth_len == 10*108 (per instance: 80 legacy slots + 28 NEW
+//             slots, same layout the dump handlers emit). drum == NULL /
+//             drum_len == 0 marks the drum data ABSENT (synth-only
+//             restore); otherwise drum_len MUST be 8*4*108. Values are
+//             0..1 (or -1 "unset", which clamps to 0 exactly as the old
+//             worklet loop's _obxd_set_param path did).
+//   stage 1 — apply synth instances 0..4 from staging (mirror + engine,
+//             exactly as _obxd_set_param does today).
+//   stage 2 — apply synth instances 5..9, SKIPPING rows flagged
+//             drum_restore_skip on instance 9 ONLY ({3,40,41,42,51,54});
+//             instances 5..8 replay everything, including idx 3
+//             polyphony, which is user state for them.
+//   stage 3 — apply the drum layer store: for each pad/layer write the
+//             VOICE/SMOOTHER rows into g_drum_layer_params and the
+//             voice-level NEW rows into g_drum_layer_new. DRUM_GLOBAL and
+//             DRUM_NONE rows — legacy AND NEW — are skipped: their values
+//             reach the engine via the instance-9 synth replay in stage 2
+//             (restore_apply_synth_block applies all 108 slots per instance,
+//             80 legacy + 28 NEW sentinels), preserving the old semantics
+//             where the drum dump zeroes global slots and the restore skips
+//             them. NO-OP when drum data is absent.
+//   stage 4 — drum structural finalize for instance 9: apply the
+//             drum-mode defaults for the skipped rows (OSC1MIX/OSC2MIX/
+//             NOISEMIX = 0.0, LATK = 0.0, LREL = 0.3 — the exact five
+//             writes of initDrumMode in src/drum-audio.ts) and set
+//             polyphony = 32 via the same path obxd_set_polyphony(9,
+//             MAX_VOICES) uses, so the mirrors reflect these finals. This
+//             stage is what made the JS-side reassertDrumInstanceStructural
+//             unnecessary. NO-OP when drum data is absent.
+//
+// State machine: stages must be called in order 0→1→2→3→4. A stage called
+// out of order returns negative and does NOT advance the machine. After
+// stage 4 the machine resets to accept a new stage 0. When drum data is
+// absent the worklet still CALLS stages 3/4 — both return 0 without
+// touching drum state so the machine always completes and resets.
+//
+// Return codes:   0  success
+//                 -1  invalid stage number (not 0..4)
+//                 -2  stage called out of order
+//                 -3  engines not initialized (stages 1/2/4)
+//                 -10 stage 0: synth pointer NULL
+//                 -11 stage 0: synth_len != 10*108
+//                 -12 stage 0: drum_len invalid (0 with drum==NULL,
+//                              8*4*108 with drum != NULL)
+// =========================================================================
+
+#define RESTORE_STRIDE  (PARAM_COUNT + NEW_PARAM_COUNT)  // 108 = 80 legacy + 28 NEW
+#define RESTORE_SYNTH_TOTAL (INSTANCE_COUNT * RESTORE_STRIDE)
+#define RESTORE_DRUM_PADS    8
+#define RESTORE_DRUM_LAYERS  4
+#define RESTORE_DRUM_TOTAL   (RESTORE_DRUM_PADS * RESTORE_DRUM_LAYERS * RESTORE_STRIDE)
+
+// C-owned staging buffers, filled once by stage 0 and consumed by stages
+// 1..4 (the JS-side heap copies are freed immediately after stage 0).
+static float g_restore_stage_synth[RESTORE_SYNTH_TOTAL] = {};
+static float g_restore_stage_drum[RESTORE_DRUM_TOTAL] = {};
+static bool  g_restore_stage_drum_present = false;
+static int   g_restore_next_stage = 0;   // state machine: next expected stage
+
+// Clamp + apply one 108-slot staging block to an instance, exactly as the
+// old worklet restore loop did (_obxd_set_param clamps into [0,1] before
+// apply_param_instance, which clamps again — identical result). When
+// skip_drum_structural is set, legacy rows flagged drum_restore_skip are
+// NOT replayed (instance 9 only — stage 2).
+static void restore_apply_synth_block(int instance_id, const float* block,
+                                      bool skip_drum_structural) {
+    for (int p = 0; p < PARAM_COUNT; ++p) {
+        if (skip_drum_structural && obxf_legacy_params[p].drum_restore_skip) continue;
+        apply_param_instance(instance_id, p, block[p]);
+    }
+    for (int n = 0; n < NEW_PARAM_COUNT; ++n)
+        apply_param_instance(instance_id, OBXF_PT_NEW_PARAM_BASE + n,
+                             block[PARAM_COUNT + n]);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int obxd_restore_stage(int stage, const float* synth, int synth_len,
+                       const float* drum, int drum_len) {
+    if (stage < 0 || stage > 4) return -1;
+    if (stage != g_restore_next_stage) return -2;
+
+    switch (stage) {
+        case 0: {  // COMMIT DATA
+            if (!synth) return -10;
+            if (synth_len != RESTORE_SYNTH_TOTAL) return -11;
+            if (drum && drum_len != RESTORE_DRUM_TOTAL) return -12;
+            if (!drum && drum_len != 0) return -12;
+            __builtin_memcpy(g_restore_stage_synth, synth, sizeof(g_restore_stage_synth));
+            g_restore_stage_drum_present = (drum != nullptr);
+            if (g_restore_stage_drum_present)
+                __builtin_memcpy(g_restore_stage_drum, drum, sizeof(g_restore_stage_drum));
+            break;
+        }
+        case 1: {  // synth instances 0..4
+            for (int i = 0; i <= 4; ++i)
+                if (!g_engines[i]) return -3;
+            for (int i = 0; i <= 4; ++i)
+                restore_apply_synth_block(i, &g_restore_stage_synth[i * RESTORE_STRIDE], false);
+            break;
+        }
+        case 2: {  // synth instances 5..9 (instance 9 skips drum-structural rows)
+            for (int i = 5; i < INSTANCE_COUNT; ++i)
+                if (!g_engines[i]) return -3;
+            for (int i = 5; i < INSTANCE_COUNT; ++i)
+                restore_apply_synth_block(i, &g_restore_stage_synth[i * RESTORE_STRIDE],
+                                          i == 9);
+            break;
+        }
+        case 3: {  // drum layer store (no-op when drum data absent)
+            if (!g_restore_stage_drum_present) break;
+            for (int pad = 0; pad < RESTORE_DRUM_PADS; ++pad) {
+                for (int layer = 0; layer < RESTORE_DRUM_LAYERS; ++layer) {
+                    const float* block =
+                        &g_restore_stage_drum[(pad * RESTORE_DRUM_LAYERS + layer) * RESTORE_STRIDE];
+                    for (int p = 0; p < PARAM_COUNT; ++p) {
+                        const obxf_drum_class_t dc = obxf_legacy_params[p].drum_class;
+                        // Globals reach the engine via the stage-2 instance-9
+                        // replay; NONE rows are dead (apply_legacy == NULL).
+                        if (dc == DRUM_GLOBAL || dc == DRUM_NONE) continue;
+                        float v = block[p];
+                        if (v < 0.0f) v = 0.0f;
+                        if (v > 1.0f) v = 1.0f;
+                        g_drum_layer_params[pad][layer][p] = v;
+                    }
+                    for (int n = 0; n < NEW_PARAM_COUNT; ++n) {
+                        // NEW globals reach the engine via the stage-2
+                        // instance-9 replay (the synth block replays all 108
+                        // slots incl. sentinels >= 200) — writing them into
+                        // the per-layer store would be dead/duplicated state.
+                        if (is_global_drum_new_param(n)) continue;
+                        float v = block[PARAM_COUNT + n];
+                        if (v < 0.0f) v = 0.0f;
+                        if (v > 1.0f) v = 1.0f;
+                        g_drum_layer_new[pad][layer][n] = v;
+                    }
+                }
+            }
+            break;
+        }
+        case 4: {  // drum structural finalize for instance 9 (no-op when drum data absent)
+            if (!g_restore_stage_drum_present) break;
+            if (!g_engines[9]) return -3;
+            // Drum-mode defaults for the rows stage 2 skipped — the exact
+            // five writes of initDrumMode (src/drum-audio.ts), applied via
+            // apply_param_instance so engine + g_param_mirror[9] agree.
+            apply_param_instance(9, OSC1MIX, 0.0f);
+            apply_param_instance(9, OSC2MIX, 0.0f);
+            apply_param_instance(9, NOISEMIX, 0.0f);
+            apply_param_instance(9, LATK,    0.0f);
+            apply_param_instance(9, LREL,    0.3f);
+            // 32-voice drum polyphony via the same path the old
+            // reassertDrumInstanceStructural used (sets engine polyphony,
+            // g_engine_polyphony[9], and the legacy mirror entry).
+            obxd_set_polyphony(9, MAX_VOICES);
+            break;
+        }
+        default:
+            return -1;
+    }
+
+    g_restore_next_stage = (stage == 4) ? 0 : stage + 1;
+    return 0;
 }
 
 }  // extern "C"

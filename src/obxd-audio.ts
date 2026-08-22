@@ -46,7 +46,7 @@ let lastVoiceActivity = new Uint32Array(10);
 // Both the mixer faders and the synth-editor volume knob read AND write
 // this, so the two views mirror each other without engine round-trips.
 // Every write path updates it: the init default, the bulk restore
-// (restoreAllSynthParams), individual knob/fader changes
+// (restoreAllSynthAndDrumState), individual knob/fader changes
 // (setObxdInstanceParam), and patch-load read-back (getObxdInstanceParam).
 const VOLUME_PARAM_IDX = 2;
 const DEFAULT_VOLUME = 0.4 * 0.7;  // matches the worklet's init gain (tail.js)
@@ -555,25 +555,36 @@ export async function dumpAllSynthParams(): Promise<number[] | null> {
 }
 
 /*
- * Restore all synth params to all 10 instances in a single AWP round-trip.
- * Takes the flat number[1080] array produced by dumpAllSynthParams. Used
- * by app-state.ts at restore time (after AWP ready).
+ * Restore the full synth + drum state in ONE AWP round-trip via the
+ * engine-owned staged restore (C export obxd_restore_stage). The worklet
+ * commits both arrays into C-side staging buffers (one HEAVY task), then
+ * applies stages 1..4 (LIGHT tasks) and replies { type:
+ * "all_state_restored" } after stage 4 — ALL ordering semantics (the
+ * instance-9 drum-structural skip during synth replay, the drum layer
+ * store write, and the drum structural finalize that ends the sequence)
+ * live in the C state machine. Takes the flat number[1080] synth array
+ * produced by dumpAllSynthParams and the flat number[3456] drum array
+ * produced by dumpAllDrumParams; `drum` may be null for synth-only
+ * restores (stages 3/4 become C-side no-ops). Replaces the old
+ * restoreAllSynthParams + restoreAllDrumParams pair. Used by app-state.ts
+ * at restore time (after AWP ready).
  */
-export async function restoreAllSynthParams(params: number[]): Promise<void> {
+export async function restoreAllSynthAndDrumState(synth: number[], drum: number[] | null): Promise<void> {
     if (!workletNode) return;
     const replyPromise = awaitReply(
         (m) => typeof m === "object" && m !== null
-            && (m as { type?: string }).type === "all_params_restored",
+            && (m as { type?: string }).type === "all_state_restored",
         5000,
     );
-    workletNode.port.postMessage({ type: "restore_all_params", params });
+    workletNode.port.postMessage({ type: "restore_all_state", synthParams: synth, drumParams: drum });
     await replyPromise;
 }
 
 /*
  * Dump all drum layer params (8 pads × 4 layers × 108 params) from the
  * C-side g_drum_layer_params + g_drum_layer_new mirrors. Used by
- * app-state.ts at save time.
+ * app-state.ts at save time; the matching restore goes through
+ * restoreAllSynthAndDrumState above.
  */
 export async function dumpAllDrumParams(): Promise<number[] | null> {
     if (!workletNode) return null;
@@ -586,21 +597,6 @@ export async function dumpAllDrumParams(): Promise<number[] | null> {
     const raw = await replyPromise;
     if (!raw) return null;
     return (raw as { params?: number[] }).params ?? null;
-}
-
-/*
- * Restore all drum layer params in a single AWP round-trip. Used by
- * app-state.ts at restore time (after drum kit load).
- */
-export async function restoreAllDrumParams(params: number[]): Promise<void> {
-    if (!workletNode) return;
-    const replyPromise = awaitReply(
-        (m) => typeof m === "object" && m !== null
-            && (m as { type?: string }).type === "drum_params_restored",
-        5000,
-    );
-    workletNode.port.postMessage({ type: "restore_drum_params", params });
-    await replyPromise;
 }
 
 // ---------------------------------------------------------------------------

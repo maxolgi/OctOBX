@@ -1,0 +1,160 @@
+{
+    "$comment": "FROZEN V1 NEW-param order. Immutable snapshot of the ordinal↔name assignment used by the shipped OB-Xf editor. NEVER regenerate, NEVER edit — see provenance. Exists solely so a later task can migrate saved localStorage state (positional 108-length arrays) to name-keyed state.",
+
+    "provenance": {
+        "file": "tools/new-param-order-v1.json",
+        "what": "Ordered list of the 28 OB-Xf SynthParams that have NO legacy OB-Xd ancestor. In the shipped UI these are assigned sentinel indices NEW_PARAM_BASE(200)+N by src/obxd-synth-ui.ts, where N is the 0-based ordinal in which controls with no legacy mapping are encountered while walking the obxfControls array in src/obxf-layout.ts (the only live build path: buildObxdSynthUi(grid) in src/obxd-rack.ts:214, synth mode, no target).",
+        "why_frozen": "The ordinal scheme is baked into saved user state in localStorage: app-state.ts bulk dumps 108 params per synth instance (and per drum layer); positions 80..107 hold these 28 values at position 80+N (src/obxd-processor.tail.js 'dump_all_params'/'dump_drum_params' write params[base+80+n] = _obxd_get_param(i, 200+n)). The sentinel assignment is about to be replaced with name-keyed lookup; this file is the migration key from old positions to names.",
+        "generated": "2026-08-21",
+        "derived_from": [
+            {
+                "path": "src/obxd-synth-ui.ts",
+                "lines": "99-161 (idToLegacyIndex build, ID_ALIASES, NEW_PARAM_BASE=200, resolveLegacyIndex), 924-930 (paramBound filter + NEW_PARAM_IDS.push(c.id) in encounter order), 827 (NEW_PARAM_IDS reset per build)",
+                "role": "the ordinal sentinel assignment being frozen"
+            },
+            {
+                "path": "src/obxf-layout.ts",
+                "lines": "93-573 (obxfControls array — array order IS the encounter order)",
+                "role": "encounter-order source"
+            },
+            {
+                "path": "src/obxf-param-mappings.ts",
+                "lines": "16-179 (paramMappings — streaming ids that DO have a legacy index and therefore never fall through to sentinels)",
+                "role": "legacy-map exclusion set"
+            },
+            {
+                "path": "wasm/obxd/main_obxd.cpp",
+                "lines": "331-363 (apply_new_param_instance switch: offset→engine method), 800-829 (new_param_names[] table: streaming name→offset), 634-640 (apply_param_instance sentinel dispatch), 1853-1885 (obxd_set/get_drum_layer_param, idx-200 = g_drum_layer_new offset)",
+                "role": "C-side ground truth for cross-verification"
+            },
+            {
+                "path": "test/obxf-dispatch-coverage.test.ts",
+                "lines": "56-66 (NEW_PARAM_IDS list)",
+                "role": "independent name-set verification"
+            },
+            {
+                "path": "src/obxd-processor.tail.js",
+                "lines": "360-376 (dump_all_params), 413-429 (dump_drum_params)",
+                "role": "proof that saved-state position = 80 + sentinel offset"
+            }
+        ],
+        "verification": {
+            "method": "Manual walk of obxfControls (paramBound !== false, alias-resolved streaming id absent from paramMappings.newId ⇒ sentinel) cross-checked against a mechanical derivation that imports the real src/obxf-layout.ts + src/obxf-param-mappings.ts modules and replicates resolveLegacyIndex verbatim. Both agree 28/28. Every offset then compared against the C-side new_param_names[] table.",
+            "result": "28/28 offsets semantically match the C-side table (same param at every offset). Exactly one NAME-STRING divergence: offset 5 — TS control id 'RingModVol' (layout) vs canonical streaming name 'RingModMix' (C table, tests, .fxp schema). Same underlying param, same offset, same engine method processRingModVolume — an alias duality, NOT an offset desync. See tools/NEW_PARAM_ORDER_NOTES.md."
+        }
+    },
+
+    "newParamBase": 200,
+    "count": 28,
+    "savedStateSlotBase": 80,
+
+    "orderedStreamingNames": [
+        "UnisonVoices",
+        "VoiceReassign",
+        "Osc2Keytrack",
+        "EnvToPitchInvert",
+        "EnvToPWInvert",
+        "RingModMix",
+        "NoiseColor",
+        "VibratoWave",
+        "Filter4PoleXpander",
+        "FilterXpanderMode",
+        "LFO1PW",
+        "LFO1ToVolume",
+        "LFO2TempoSync",
+        "LFO2Rate",
+        "LFO2ModAmount1",
+        "LFO2ModAmount2",
+        "LFO2Wave1",
+        "LFO2Wave2",
+        "LFO2Wave3",
+        "LFO2PW",
+        "LFO2ToOsc1Pitch",
+        "LFO2ToOsc2Pitch",
+        "LFO2ToFilterCutoff",
+        "LFO2ToOsc1PW",
+        "LFO2ToOsc2PW",
+        "LFO2ToVolume",
+        "FilterEnvAttackCurve",
+        "AmpEnvAttackCurve"
+    ],
+
+    "orderedControlIds": [
+        "UnisonVoices",
+        "VoiceReassign",
+        "Osc2Keytrack",
+        "EnvToPitchInvert",
+        "EnvToPWInvert",
+        "RingModVol",
+        "NoiseColor",
+        "VibratoWave",
+        "Filter4PoleXpander",
+        "FilterXpanderMode",
+        "LFO1PW",
+        "LFO1ToVolume",
+        "LFO2TempoSync",
+        "LFO2Rate",
+        "LFO2ModAmount1",
+        "LFO2ModAmount2",
+        "LFO2Wave1",
+        "LFO2Wave2",
+        "LFO2Wave3",
+        "LFO2PW",
+        "LFO2ToOsc1Pitch",
+        "LFO2ToOsc2Pitch",
+        "LFO2ToFilterCutoff",
+        "LFO2ToOsc1PW",
+        "LFO2ToOsc2PW",
+        "LFO2ToVolume",
+        "FilterEnvAttackCurve",
+        "AmpEnvAttackCurve"
+    ],
+
+    "nameAliases": {
+        "RingModVol": "RingModMix"
+    },
+
+    "positions": [
+        { "offset": 0,  "sentinel": 200, "savedStateIndex": 80,  "streamingName": "UnisonVoices",        "controlId": "UnisonVoices",        "engineMethod": "processUnisonVoices" },
+        { "offset": 1,  "sentinel": 201, "savedStateIndex": 81,  "streamingName": "VoiceReassign",        "controlId": "VoiceReassign",        "engineMethod": "processVoiceReassign" },
+        { "offset": 2,  "sentinel": 202, "savedStateIndex": 82,  "streamingName": "Osc2Keytrack",         "controlId": "Osc2Keytrack",         "engineMethod": "processOsc2Keytrack" },
+        { "offset": 3,  "sentinel": 203, "savedStateIndex": 83,  "streamingName": "EnvToPitchInvert",     "controlId": "EnvToPitchInvert",     "engineMethod": "processEnvToPitchInvert" },
+        { "offset": 4,  "sentinel": 204, "savedStateIndex": 84,  "streamingName": "EnvToPWInvert",        "controlId": "EnvToPWInvert",        "engineMethod": "processEnvToPWInvert" },
+        { "offset": 5,  "sentinel": 205, "savedStateIndex": 85,  "streamingName": "RingModMix",           "controlId": "RingModVol",           "engineMethod": "processRingModVolume" },
+        { "offset": 6,  "sentinel": 206, "savedStateIndex": 86,  "streamingName": "NoiseColor",           "controlId": "NoiseColor",           "engineMethod": "processNoiseColor" },
+        { "offset": 7,  "sentinel": 207, "savedStateIndex": 87,  "streamingName": "VibratoWave",          "controlId": "VibratoWave",          "engineMethod": "processVibratoLFOWave" },
+        { "offset": 8,  "sentinel": 208, "savedStateIndex": 88,  "streamingName": "Filter4PoleXpander",   "controlId": "Filter4PoleXpander",   "engineMethod": "processFilter4PoleXpander" },
+        { "offset": 9,  "sentinel": 209, "savedStateIndex": 89,  "streamingName": "FilterXpanderMode",    "controlId": "FilterXpanderMode",    "engineMethod": "processFilterXpanderMode" },
+        { "offset": 10, "sentinel": 210, "savedStateIndex": 90,  "streamingName": "LFO1PW",               "controlId": "LFO1PW",               "engineMethod": "processLFO1PW" },
+        { "offset": 11, "sentinel": 211, "savedStateIndex": 91,  "streamingName": "LFO1ToVolume",         "controlId": "LFO1ToVolume",         "engineMethod": "processLFO1ToVolume" },
+        { "offset": 12, "sentinel": 212, "savedStateIndex": 92,  "streamingName": "LFO2TempoSync",        "controlId": "LFO2TempoSync",        "engineMethod": "processLFO2Sync" },
+        { "offset": 13, "sentinel": 213, "savedStateIndex": 93,  "streamingName": "LFO2Rate",             "controlId": "LFO2Rate",             "engineMethod": "processLFO2Rate" },
+        { "offset": 14, "sentinel": 214, "savedStateIndex": 94,  "streamingName": "LFO2ModAmount1",       "controlId": "LFO2ModAmount1",       "engineMethod": "processLFO2ModAmount1" },
+        { "offset": 15, "sentinel": 215, "savedStateIndex": 95,  "streamingName": "LFO2ModAmount2",       "controlId": "LFO2ModAmount2",       "engineMethod": "processLFO2ModAmount2" },
+        { "offset": 16, "sentinel": 216, "savedStateIndex": 96,  "streamingName": "LFO2Wave1",            "controlId": "LFO2Wave1",            "engineMethod": "processLFO2Wave1" },
+        { "offset": 17, "sentinel": 217, "savedStateIndex": 97,  "streamingName": "LFO2Wave2",            "controlId": "LFO2Wave2",            "engineMethod": "processLFO2Wave2" },
+        { "offset": 18, "sentinel": 218, "savedStateIndex": 98,  "streamingName": "LFO2Wave3",            "controlId": "LFO2Wave3",            "engineMethod": "processLFO2Wave3" },
+        { "offset": 19, "sentinel": 219, "savedStateIndex": 99,  "streamingName": "LFO2PW",               "controlId": "LFO2PW",               "engineMethod": "processLFO2PW" },
+        { "offset": 20, "sentinel": 220, "savedStateIndex": 100, "streamingName": "LFO2ToOsc1Pitch",      "controlId": "LFO2ToOsc1Pitch",      "engineMethod": "processLFO2ToOsc1Pitch" },
+        { "offset": 21, "sentinel": 221, "savedStateIndex": 101, "streamingName": "LFO2ToOsc2Pitch",      "controlId": "LFO2ToOsc2Pitch",      "engineMethod": "processLFO2ToOsc2Pitch" },
+        { "offset": 22, "sentinel": 222, "savedStateIndex": 102, "streamingName": "LFO2ToFilterCutoff",   "controlId": "LFO2ToFilterCutoff",   "engineMethod": "processLFO2ToFilterCutoff" },
+        { "offset": 23, "sentinel": 223, "savedStateIndex": 103, "streamingName": "LFO2ToOsc1PW",         "controlId": "LFO2ToOsc1PW",         "engineMethod": "processLFO2ToOsc1PW" },
+        { "offset": 24, "sentinel": 224, "savedStateIndex": 104, "streamingName": "LFO2ToOsc2PW",         "controlId": "LFO2ToOsc2PW",         "engineMethod": "processLFO2ToOsc2PW" },
+        { "offset": 25, "sentinel": 225, "savedStateIndex": 105, "streamingName": "LFO2ToVolume",         "controlId": "LFO2ToVolume",         "engineMethod": "processLFO2ToVolume" },
+        { "offset": 26, "sentinel": 226, "savedStateIndex": 106, "streamingName": "FilterEnvAttackCurve", "controlId": "FilterEnvAttackCurve", "engineMethod": "processFilterEnvAttackCurve" },
+        { "offset": 27, "sentinel": 227, "savedStateIndex": 107, "streamingName": "AmpEnvAttackCurve",    "controlId": "AmpEnvAttackCurve",    "engineMethod": "processAmpEnvAttackCurve" }
+    ],
+
+    "anomalies": [
+        {
+            "id": "RINGMOD_NAME_DUALITY",
+            "detail": "Offset 5's layout control id is 'RingModVol' (src/obxf-layout.ts, Mixer section, widgetName 'ringModVolKnob'); the canonical SynthParam::ID streaming name is 'RingModMix' (used by the C-side new_param_names[] table, test/obxf-dispatch-coverage.test.ts, and the .fxp named-attribute schema). NEW_PARAM_IDS in obxd-synth-ui.ts therefore logs 'RingModVol' at position 5 while every other consumer uses 'RingModMix'. Same offset, same engine method (processRingModVolume) — no runtime desync in the synth path. The name-keyed replacement MUST accept both spellings (see nameAliases) or keyed lookups on either side will miss.",
+            "severity": "naming-hazard (not an offset desync)"
+        },
+        {
+            "id": "DRUM_MODE_SENTINEL_SHIFT_LATENT",
+            "detail": "If buildObxdSynthUi is ever called WITH a target (drumMode=true), the DRUM_INACTIVE_* filters remove 12 of the 28 NEW-param controls BEFORE the build loop, so the surviving 16 would be assigned sentinels 200..215 in a SHIFTED order (e.g. Filter4PoleXpander would land at 200, which the engine interprets as UnisonVoices). This path is currently DEAD CODE (the only live call is obxd-rack.ts:214 with no target; the drum UI uses drum-rack.ts knob strips whose hard-coded sentinels — lines 118-135 — match THIS frozen order). Recorded so the name-keyed replacement does not resurrect the shifted path.",
+            "severity": "latent (dead code today)"
+        }
+    ]
+}

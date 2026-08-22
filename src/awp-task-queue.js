@@ -9,11 +9,11 @@
  * loop, and several of its operations are far too heavy to execute there
  * synchronously: load_fxp does _malloc + HEAPU8.set + a full XML parse of
  * the preset, engine recreate paths delete+new whole SynthEngine objects,
- * and the bulk restores (restore_all_params: 10 instances × 108 params,
- * restore_drum_params: 8 pads × 4 layers × 108 params) push 1000+ setter
- * calls in one message. Any of these can blow past the 128-frame render
- * quantum (~2.9ms @ 44.1kHz), and a late process() callback = an audible
- * glitch.
+ * and the staged full-state restore (restore_all_state: stage 0 commits
+ * 10×108 synth + 8×4×108 drum params into C-owned staging, stages 1-4
+ * replay them as bounded per-stage batches). Any of these can blow past
+ * the 128-frame render quantum (~2.9ms @ 44.1kHz), and a late process()
+ * callback = an audible glitch.
  *
  * This queue defers that work: the message handler only enqueues, and
  * process() drains a budgeted number of tasks per quantum so the heavy

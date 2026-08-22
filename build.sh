@@ -169,6 +169,14 @@ case "${1:-all}" in
         echo "=== Building Obxd synth WASM module ==="
         sync_patches
         generate_patches_h
+        # Regenerate the parameter dispatch tables from tools/param-spec.mjs
+        # (the single source of truth for the OB-Xd→OB-Xf mapping) BEFORE
+        # compiling: wasm/obxd/param_table.h is consumed by main_obxd.cpp at
+        # build time, and src/obxf-param-mappings.ts +
+        # src/generated/param-table.json feed the TS side + tests. Deterministic
+        # output — `node tools/gen-param-table.mjs --check` verifies the
+        # committed files are fresh (CI gate).
+        node tools/gen-param-table.mjs
         make -C wasm/obxd -f Makefile clean
         make -C wasm/obxd -f Makefile
         # Concatenate emcc output + processor wrapper into a single classic
@@ -205,6 +213,9 @@ case "${1:-all}" in
         echo "=== Building Obxd synth WASM module ==="
         sync_patches
         generate_patches_h
+        # Param table generation must precede make — see the comment in the
+        # `synth` case above (same step, shared outputs + --check gate).
+        node tools/gen-param-table.mjs
         make -C wasm/obxd -f Makefile
         cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
         cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js

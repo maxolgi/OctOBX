@@ -10,7 +10,7 @@
  * AudioWorklet initializes (on first PLAY).
  */
 
-import { dumpAllSynthParams, restoreAllSynthParams, dumpAllDrumParams, restoreAllDrumParams, isObxdReady, syncInstanceVolumes } from "./obxd-audio";
+import { dumpAllSynthParams, restoreAllSynthAndDrumState, dumpAllDrumParams, isObxdReady, syncInstanceVolumes } from "./obxd-audio";
 import {
     getSynthInstanceState,
     restoreSynthAfterAWP,
@@ -26,8 +26,8 @@ import {
     setObxdInstanceMpeVoiceCount,
 } from "./obxd-bridge";
 import { getDrumState, restoreDrumState } from "./drum-rack";
-import { reassertDrumInstanceStructural } from "./drum-audio";
 import type { DrumKit } from "./drum-state";
+import { canonicalNewParamOrder } from "./obxf-param-mappings";
 
 const LS_KEY = "octobx:app_state:v1";
 
@@ -37,8 +37,7 @@ interface RoutingState {
     mpeVoiceCount: number;
 }
 
-interface SaveState {
-    version: 1;
+interface SaveStateData {
     synth: {
         instances: SynthInstanceState[];
         routing: RoutingState[];
@@ -51,6 +50,106 @@ interface SaveState {
         selectedLayer: number;
         params: number[] | null;
     } | null;
+}
+
+/** v1 on-disk shape — NEW-param slots stored in the frozen V1 encounter order. */
+interface SaveStateV1 extends SaveStateData {
+    version: 1;
+}
+
+/** Current shape (v2) — NEW-param slots stored in canonical order. */
+interface SaveState extends SaveStateData {
+    version: 2;
+}
+
+// ===========================================================================
+// v1 → v2 NEW-param order migration (pure, unit-tested)
+// ===========================================================================
+
+// Params are persisted as flat positional blocks of 108: slots 0..79 hold
+// legacy values, slots 80..107 hold the 28 NEW-param (sentinel ≥200) values.
+const PARAM_BLOCK_LEN = 108;
+const NEW_SLOT_BASE = 80;
+
+/**
+ * FROZEN V1 NEW-param order — an immutable copy of `orderedStreamingNames`
+ * from tools/new-param-order-v1.json (the ordinal↔name assignment the
+ * shipped encounter-order UI used; see that file's provenance). Exists so
+ * migrateParamsV1ToV2 can remap old saves. NEVER edit — old saves on disk
+ * depend on it.
+ */
+export const V1_NEW_PARAM_ORDER: readonly string[] = [
+    "UnisonVoices",
+    "VoiceReassign",
+    "Osc2Keytrack",
+    "EnvToPitchInvert",
+    "EnvToPWInvert",
+    "RingModMix",
+    "NoiseColor",
+    "VibratoWave",
+    "Filter4PoleXpander",
+    "FilterXpanderMode",
+    "LFO1PW",
+    "LFO1ToVolume",
+    "LFO2TempoSync",
+    "LFO2Rate",
+    "LFO2ModAmount1",
+    "LFO2ModAmount2",
+    "LFO2Wave1",
+    "LFO2Wave2",
+    "LFO2Wave3",
+    "LFO2PW",
+    "LFO2ToOsc1Pitch",
+    "LFO2ToOsc2Pitch",
+    "LFO2ToFilterCutoff",
+    "LFO2ToOsc1PW",
+    "LFO2ToOsc2PW",
+    "LFO2ToVolume",
+    "FilterEnvAttackCurve",
+    "AmpEnvAttackCurve",
+];
+
+/**
+ * Migrate a flat positional params array (as dumped by dump_all_params /
+ * dump_drum_params: N consecutive 108-length blocks) from the V1 NEW-param
+ * encounter order to the canonical order the engine now dispatches.
+ *
+ * For every 108-block, slots 80..107 are remapped through a name→value
+ * map: position 80+n in a v1 block holds the value of v1Order[n]; after
+ * migration position 80+m holds the value of canonicalOrder[m]. Slots
+ * 0..79 (legacy params) are untouched. The input array is never mutated —
+ * a migrated copy is returned (the input itself when null/empty).
+ *
+ * Robustness for user data: blocks shorter than 108 (or with missing NEW
+ * slots) carry through whatever exists — present v1 values are placed at
+ * their canonical positions and positions without a source value keep
+ * their original content. Never throws.
+ */
+export function migrateParamsV1ToV2(
+    params: number[] | null | undefined,
+    v1Order: readonly string[] = V1_NEW_PARAM_ORDER,
+    canonicalOrder: readonly string[] = canonicalNewParamOrder,
+): number[] | null {
+    if (!params || params.length === 0) return params ?? null;
+    const out = params.slice();
+    const blockCount = Math.ceil(params.length / PARAM_BLOCK_LEN);
+    for (let b = 0; b < blockCount; b++) {
+        const base = b * PARAM_BLOCK_LEN;
+        const blockEnd = Math.min(base + PARAM_BLOCK_LEN, params.length);
+        const v1Count = blockEnd - (base + NEW_SLOT_BASE);
+        if (v1Count <= 0) continue; // block has no NEW slots — nothing to remap
+        const valueByName = new Map<string, number>();
+        for (let n = 0; n < v1Order.length && n < v1Count; n++) {
+            valueByName.set(v1Order[n], params[base + NEW_SLOT_BASE + n]);
+        }
+        for (let m = 0; m < canonicalOrder.length; m++) {
+            const dest = base + NEW_SLOT_BASE + m;
+            if (dest >= blockEnd) break; // short block — carry the rest through
+            const v = valueByName.get(canonicalOrder[m]);
+            if (v !== undefined) out[dest] = v;
+        }
+    }
+    return out;
 }
 
 let cachedState: SaveState | null = null;
@@ -80,7 +179,7 @@ export async function saveAppState(): Promise<boolean> {
     if (drumState) drumState.params = drumParams;
 
     const state: SaveState = {
-        version: 1,
+        version: 2,
         synth: {
             instances: getSynthInstanceState(),
             routing,
@@ -112,11 +211,29 @@ export function loadAppState(): boolean {
     try {
         const raw = localStorage.getItem(LS_KEY);
         if (!raw) return false;
-        cachedState = JSON.parse(raw) as SaveState;
-        if (cachedState?.version !== 1) {
+        let state: SaveState | SaveStateV1 = JSON.parse(raw) as SaveState | SaveStateV1;
+        if (state?.version === 1) {
+            // v1 saves store NEW-param values (slots 80..107 of each 108
+            // block) in the frozen V1 encounter order. Remap them in memory
+            // to the canonical order the engine dispatches. The copy on
+            // disk stays v1 until the next save writes v2.
+            state = {
+                ...state,
+                version: 2,
+                synth: state.synth
+                    ? { ...state.synth, params: migrateParamsV1ToV2(state.synth.params) }
+                    : state.synth,
+                drums: state.drums
+                    ? { ...state.drums, params: migrateParamsV1ToV2(state.drums.params) }
+                    : state.drums,
+            };
+            console.info("[app-state] Migrated v1 save state to v2 (canonical NEW-param order, in memory)");
+        }
+        if (state?.version !== 2) {
             cachedState = null;
             return false;
         }
+        cachedState = state;
         // Fill the volume variable at page load so the mixer faders show the
         // correct values whenever the Mixer is opened — no PLAY required.
         if (cachedState.synth?.params) syncInstanceVolumes(cachedState.synth.params);
@@ -173,24 +290,20 @@ async function restoreAppStateAfterAWP(): Promise<boolean> {
     const s = cachedState;
 
     try {
-        // Order matters:
-        // 1. Drum kit load (calls initDrumMode + loads PCM samples +
-        //    seeds default layer params from the kit preset).
-        // 2. Synth params restore (overwrites instance 9 globals that
-        //    initDrumMode just set, with the saved values).
-        // 3. Drum layer params restore (overwrites kit-default layer
-        //    params with the user's tweaks). For global drum params
-        //    (Volume/Tune/POLYPHONY/etc.) _obxd_set_drum_layer_param
-        //    routes live to instance 9, clobbering the structural state.
-        // 4. Per-instance settings + routing (power, bend range, channel,
-        //    MPE — no longer includes polyphony, which is now solely
-        //    controlled via the editor's polyphonyMenu / legacy idx 3).
-        // 5. reassertDrumInstanceStructural MUST run LAST, after all
-        //    clobber sites above, so polyphony=32 / osc mutes / amp-env
-        //    defaults are the final writes. Without this, polyphony gets
-        //    pinned to 1 (from saved idx 3 = 0.0) and Motherboard's PCM
-        //    Pass 1 only assigns ONE voice per pad hit regardless of
-        //    pcmLayerCount, so stacked layers go silent.
+        // Restore ORDERING is ENGINE-OWNED: after the kit load below, ONE
+        // restoreAllSynthAndDrumState call drives the C-side staged restore
+        // (obxd_restore_stage in wasm/obxd/main_obxd.cpp), which owns the
+        // full sequence — synth replay (skipping instance 9's drum-
+        // structural rows), drum layer store write, and the drum structural
+        // finalize (osc mutes + polyphony=32) that ends it. Nothing in JS
+        // needs to run "last" anymore.
+        //
+        // 1. Drum kit load (loads PCM samples + seeds default layer params
+        //    from the kit preset).
+        // 2. Synth + drum params restore in one engine-owned sequence.
+        // 3. Per-instance settings + routing (power, bend range, channel,
+        //    MPE — no polyphony; that is owned by the editor / legacy
+        //    idx 3 and, for instance 9, the engine's stage 4).
 
         if (s.drums) {
             await restoreDrumState(s.drums);
@@ -198,13 +311,8 @@ async function restoreAppStateAfterAWP(): Promise<boolean> {
         }
 
         if (s.synth.params) {
-            await restoreAllSynthParams(s.synth.params);
-            console.log("[app-state] Synth params restored");
-        }
-
-        if (s.drums?.params) {
-            await restoreAllDrumParams(s.drums.params);
-            console.log("[app-state] Drum layer params restored");
+            await restoreAllSynthAndDrumState(s.synth.params, s.drums?.params ?? null);
+            console.log("[app-state] Synth + drum state restored (engine-owned ordering)");
         }
 
         if (s.synth.instances) {
@@ -219,16 +327,6 @@ async function restoreAppStateAfterAWP(): Promise<boolean> {
                 setObxdInstanceMpeVoiceCount(i, r.mpeVoiceCount);
             }
         }
-
-        // Step 5: reassert instance 9's structural settings AFTER all the
-        // bulk-restore paths above. Both restoreAllSynthParams (replays
-        // instance 9 idx 3 = VOICE_COUNT with the saved 0.0 → polyphony 1)
-        // and restoreAllDrumParams (replays idx 3 per pad/layer via the
-        // global-routing path in obxd_set_drum_layer_param) run before
-        // this line and would otherwise leave polyphony pinned to 1,
-        // which silently breaks layer stacking (only one voice per pad
-        // hit regardless of pcmLayerCount).
-        await reassertDrumInstanceStructural();
 
         console.log("[app-state] Full restore complete");
         return true;

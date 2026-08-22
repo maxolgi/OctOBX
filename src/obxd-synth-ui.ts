@@ -10,8 +10,16 @@
  * simultaneously — the OB-Xf editor is NOT a tabbed/sectioned UI.
  *
  * Engine dispatch: the OB-Xf WASM engine speaks legacy ParamsEnum.h indices
- * (0..79) plus NEW-param sentinels (≥200). src/obxf-param-mappings.ts maps
- * OB-Xf SynthParam::ID strings to those indices.
+ * (0..79) plus NEW-param sentinels. A sentinel is NEW_PARAM_BASE (200) +
+ * the param's CANONICAL ordinal in canonicalNewParamOrder (exported from
+ * src/obxf-param-mappings.ts, generated from the spec; mirrored in
+ * src/generated/param-table.json) — the same ordinal the C engine's
+ * apply_new_param_instance() dispatches on. Sentinels are therefore
+ * NAME-KEYED: resolveLegacyIndex() maps each control's streaming id (after
+ * ID_ALIASES) to 0..79 via paramMappings, or to 200+canonical ordinal via
+ * canonicalNewParamOrder. Never encounter-order — the old V1 scheme is
+ * frozen in tools/new-param-order-v1.json, and src/app-state.ts migrates
+ * saved V1 state to the canonical order.
  *
  * Visibility rules:
  *   - FILTER: Filter4PoleMode toggles 2-pole↔4-pole control set.
@@ -52,7 +60,7 @@ import {
     Section,
 } from "./obxf-layout";
 import type { ControlSpec } from "./obxf-layout";
-import { paramMappings } from "./obxf-param-mappings";
+import { paramMappings, canonicalNewParamOrder, NEW_PARAM_BASE } from "./obxf-param-mappings";
 import {
     registerLearnableControl,
     deriveHintsForControl,
@@ -101,6 +109,12 @@ for (const m of paramMappings) {
     if (m.newId && !idToLegacyIndex.has(m.newId)) {
         idToLegacyIndex.set(m.newId, m.legacyIndex);
     }
+    // BENDRANGE split half: the generated table carries PitchBendDown in
+    // secondaryNewId — without this entry the BendDownRange control would
+    // fall through to a NEW-param sentinel (≥200) and silently stop working.
+    if (m.secondaryNewId && !idToLegacyIndex.has(m.secondaryNewId)) {
+        idToLegacyIndex.set(m.secondaryNewId, m.legacyIndex);
+    }
 }
 
 const ID_ALIASES: Record<string, string> = {
@@ -110,10 +124,35 @@ const ID_ALIASES: Record<string, string> = {
     FilterKeyTrack: "FilterKeyFollow",
     BendUpRange: "PitchBendUp",
     BendDownRange: "PitchBendDown",
+    // Layout control id "RingModVol" (Mixer section) is the SAME param as the
+    // canonical/streaming name "RingModMix" (C-side new_param_names[] table,
+    // .fxp schema, canonicalNewParamOrder) — see the RINGMOD_NAME_DUALITY
+    // anomaly in tools/new-param-order-v1.json. Without this alias the
+    // name-keyed canonical lookup below would miss and the control would
+    // stop dispatching to the engine.
+    RingModVol: "RingModMix",
 };
 
-const NEW_PARAM_BASE = 200;
-const NEW_PARAM_IDS: string[] = [];
+/**
+ * Canonical NEW-param ordinal map: streaming name → position in
+ * canonicalNewParamOrder. The C engine dispatches sentinel indices by
+ * CANONICAL ordinal (idx = NEW_PARAM_BASE + ordinal in
+ * apply_new_param_instance), so the UI MUST key sentinels by name against
+ * this map — never by the order controls happen to appear in the layout.
+ */
+export const CANONICAL_NEW_PARAM_ORDINAL: ReadonlyMap<string, number> = new Map(
+    canonicalNewParamOrder.map((name, ordinal) => [name, ordinal]),
+);
+
+/**
+ * Sentinel index (≥ NEW_PARAM_BASE) for an OB-Xf-only streaming name, or
+ * undefined when the name is not a canonical NEW param. Consumed by this
+ * module's resolveLegacyIndex and by drum-rack.ts's NEW-param constants.
+ */
+export function newParamSentinel(streamingName: string): number | undefined {
+    const ordinal = CANONICAL_NEW_PARAM_ORDINAL.get(streamingName);
+    return ordinal === undefined ? undefined : NEW_PARAM_BASE + ordinal;
+}
 
 // Legacy ParamsEnum.h indices that have NO effect on PCM drum voices.
 // Oscillators are replaced by PCM at injection (pcmGain=1), so all osc
@@ -153,11 +192,26 @@ const DRUM_INACTIVE_IDS = new Set<string>([
     "Osc1TriangleLabel", "Osc1PulseLabel", "Osc2TriangleLabel", "Osc2PulseLabel",
 ]);
 
+const warnedUnresolvedIds = new Set<string>();
+
 function resolveLegacyIndex(c: ControlSpec): number {
     const streamId = ID_ALIASES[c.id] ?? c.id;
     const legacy = idToLegacyIndex.get(streamId);
     if (legacy !== undefined) return legacy;
-    return NEW_PARAM_BASE + NEW_PARAM_IDS.length;
+    const sentinel = newParamSentinel(streamId);
+    if (sentinel !== undefined) return sentinel;
+    // Neither a legacy mapping nor a canonical NEW param. Should be
+    // impossible — test/sentinel-migration.test.ts walks obxfControls and
+    // asserts every paramBound control resolves. Warn once per id and
+    // return -1 so the control stays UI-only (no engine dispatch).
+    if (!warnedUnresolvedIds.has(c.id)) {
+        warnedUnresolvedIds.add(c.id);
+        console.warn(
+            `[obxf] control "${c.id}" resolves to neither a legacy index nor a ` +
+            `canonical NEW param; it will not dispatch to the engine`,
+        );
+    }
+    return -1;
 }
 
 // ===========================================================================
@@ -502,10 +556,14 @@ function buildWidget(
     controls: ControlHandle[],
 ): BuiltWidget {
     const dispatch = (v: number): void => {
-        if (target) {
-            target.set(legacyIdx, v);
-        } else {
-            setObxdInstanceParam(getObxdSelectedInstance(), legacyIdx, v);
+        // legacyIdx < 0 = unknown id (warned in resolveLegacyIndex; should
+        // be impossible) — keep the widget interactive but skip the engine.
+        if (legacyIdx >= 0) {
+            if (target) {
+                target.set(legacyIdx, v);
+            } else {
+                setObxdInstanceParam(getObxdSelectedInstance(), legacyIdx, v);
+            }
         }
         const handle = controls.find(ch => ch.legacyIdx === legacyIdx && ch.id === c.id);
         if (handle) handle.lastValue = v;
@@ -824,7 +882,6 @@ export function buildObxdSynthUi(
     if (!target) {
         cachedControls = controls;
     }
-    NEW_PARAM_IDS.length = 0;
     resetDynamicRefs();
     resetMidiLearnOverlay();
 
@@ -927,7 +984,6 @@ export function buildObxdSynthUi(
     for (const c of paramBound) {
         const legacyIdx = resolveLegacyIndex(c);
         const isNew = legacyIdx >= NEW_PARAM_BASE;
-        if (isNew) NEW_PARAM_IDS.push(c.id);
 
         const { dom, valueEl } = buildWidget(c, legacyIdx, target, controls);
         panel.appendChild(dom);
@@ -1004,10 +1060,11 @@ export function buildObxdSynthUi(
         new ResizeObserver(fitPanel).observe(container);
     }
 
-    if (NEW_PARAM_IDS.length > 0) {
+    const newParamIds = controls.filter(c => c.isNew).map(c => c.id);
+    if (newParamIds.length > 0) {
         console.info(
-            `[obxf] ${paramBound.length} controls built; ${NEW_PARAM_IDS.length} are ` +
-            `NEW OB-Xf params: ` + NEW_PARAM_IDS.join(", "),
+            `[obxf] ${paramBound.length} controls built; ${newParamIds.length} are ` +
+            `NEW OB-Xf params (name-keyed canonical sentinels): ` + newParamIds.join(", "),
         );
     } else {
         console.info(`[obxf] ${paramBound.length} controls built`);

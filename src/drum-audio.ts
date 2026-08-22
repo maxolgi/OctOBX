@@ -22,17 +22,9 @@ import {
     getObxdNode,
     sendObxdInstanceMidi,
     setObxdInstanceParam,
-    setObxdInstancePolyphony,
 } from "./obxd-audio";
 
 export const DRUM_INSTANCE = 9;  // fixed OB-Xf instance reserved for drums
-
-/*
- * MAX_VOICES mirrors the C-side constant in Voice.h (and the value
- * obxd_init hardcodes for the drum instance). Kept private to this module
- * — callers use reassertDrumInstanceStructural() rather than passing it.
- */
-const MAX_VOICES = 32;
 
 // Legacy ParamsEnum.h indices used to configure the engine for sample
 // playback (sources: obxf-param-mappings.ts — frozen ObxdParam enum).
@@ -163,6 +155,11 @@ function seedLayerMirror(pad: number, layer: number, lyr: DrumLayer): void {
  * voice-per-layer allocation, not from unison.
  * Each param is sent through the legacy setObxdInstanceParam path and
  * wrapped so a single failed dispatch can't abort the whole init.
+ *
+ * After a state-restore round-trip these same writes (plus polyphony=32)
+ * are re-applied ENGINE-SIDE as stage 4 of obxd_restore_stage (see
+ * wasm/obxd/main_obxd.cpp) — the old JS reassertDrumInstanceStructural
+ * wrapper was removed once the C side owned the ordering.
  */
 export async function initDrumMode(): Promise<void> {
     const set = (idx: number, v: number): void => {
@@ -177,36 +174,6 @@ export async function initDrumMode(): Promise<void> {
     set(LEGACY_AMP_RELEASE, 0.3);
 
     console.info("[drum] instance " + DRUM_INSTANCE + " configured for drum mode");
-}
-
-/*
- * Re-assert instance 9's structural settings after a state-restore round-trip.
- *
- * restoreAllSynthParams faithfully replays all 108 params for all 10 instances,
- * including instance 9 — but several of those params are structural (polyphony,
- * oscillator mutes, amp-env defaults) that initDrumMode owns and the user never
- * meaningfully edits. The replay clobbers them with stale mirror values that
- * decode to:
- *   - VOICE_COUNT (idx 3): polyphony 1 (if saved as 0.0) or 8 (if 1.0), never 32
- *     → with polyphony=1, Motherboard's PCM Pass 1 only assigns ONE voice per
- *       pad hit regardless of pcmLayerCount, so only the first enabled layer
- *       is audible (the second sits silent in pcmBank[pad][1]).
- *   - OSC1/OSC2/NOISE_MIX (idx 40/41/42): unmuted oscillators mix into the
- *       drum voice alongside the PCM, colorating hits with raw osc output.
- *   - AMP_ATTACK/RELEASE (idx 51/54): default envelopes that wash out drum
- *       transients.
- *
- * Calling this after a synth-restore resets those six stray writes to the
- * values initDrumMode intended. No-op for instances 0..8 (their structural
- * state is owned by the user, not initDrumMode).
- */
-export async function reassertDrumInstanceStructural(): Promise<void> {
-    try {
-        await initDrumMode();
-        setObxdInstancePolyphony(DRUM_INSTANCE, MAX_VOICES);
-    } catch (e) {
-        console.warn("[drum] reassertDrumInstanceStructural failed:", e);
-    }
 }
 
 /*
