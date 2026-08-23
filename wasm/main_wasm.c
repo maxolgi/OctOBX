@@ -101,8 +101,16 @@ static void *sequencer_thread_func(void *arg) {
 
         g_seq_tick_count++;
 
-        /* Send MIDI clock BEFORE acquiring the scheduler lock */
-        {
+        /* Send MIDI clock BEFORE acquiring the scheduler lock.
+         *
+         * Gated on G_run_bit: without the gate the internal clock generator
+         * streams 0xF8 at 48/sec while the transport is STOPPED (the thread
+         * ticks at 48 PPQN regardless). That floods the synth SAB ring —
+         * which has no consumer until the AudioWorklet boots on first PLAY —
+         * producing the "Synth MIDI ring (AWP) dropped" spam, and would send
+         * a 48Hz clock stream to a selected hardware MIDI output while idle.
+         * Per MIDI spec, clock only streams between Start and Stop. */
+        if (G_run_bit) {
             unsigned char next_ttc = (G_TTC_abs_value % 12) + 1;
             if (next_ttc % 2 == 1) {
                 if (G_clock_source == INT ||
