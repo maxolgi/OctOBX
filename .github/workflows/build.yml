@@ -56,6 +56,12 @@ jobs:
       - name: Generate patch catalog (no emcc needed)
         run: ./build.sh catalog
 
+      # gui/ compiles against ../dist (rust-embed embeds it at compile time).
+      # The check job doesn't build the app, so stub it — contents are
+      # irrelevant, only the folder's existence matters for clippy.
+      - name: Stub dist/ for rust-embed
+        run: mkdir -p dist && echo placeholder > dist/index.html
+
       - name: tsc --noEmit
         run: npx tsc --noEmit
 

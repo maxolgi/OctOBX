@@ -63,10 +63,17 @@ export default defineConfig({
     server: {
         host: "0.0.0.0",
         port: 8080,
-        https: {
-            key: readFileSync("./certs/key.pem"),
-            cert: readFileSync("./certs/cert.pem"),
-        },
+        // HTTPS only when the (gitignored) dev certs exist — a fresh clone
+        // or CI has no certs/ and `vite build` must still work; those users
+        // use serve.py / nginx / the desktop launcher on plain HTTP
+        // (localhost is a secure context already).
+        https:
+            existsSync("./certs/key.pem") && existsSync("./certs/cert.pem")
+                ? {
+                      key: readFileSync("./certs/key.pem"),
+                      cert: readFileSync("./certs/cert.pem"),
+                  }
+                : undefined,
         headers: {
             "Cross-Origin-Opener-Policy": "same-origin",
             "Cross-Origin-Embedder-Policy": "require-corp",
