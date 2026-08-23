@@ -443,28 +443,31 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
     }
 
     /* Pre-rendered glow sprites: [1]=red [2]=green [3]=amber.
-     * Solid core in the center third, soft halo to the edge — visually
-     * equivalent to the old fill + 5px box-shadow blur, but a single
-     * drawImage blit instead of a blur rasterization. */
-    const SPRITE_PX = 28;
-    const GLOW_CSS = 22;
+     * Baked with the SAME recipe as the DOM reference (.led + on-* class):
+     * a solid 7px dot with a 0 0 5px Gaussian glow. Canvas shadowBlur is
+     * the same Gaussian model as CSS box-shadow, so the baked sprite is
+     * pixel-equivalent to the reference render — one blit per lit LED. */
+    const DOT = 7;                                   // px, matches .led w/h
+    const SHADOW_BLUR = 5;                           // px, matches box-shadow
+    const SPRITE_CSS = DOT + 2 * (SHADOW_BLUR + 1);  // dot + glow extent
+    const SPRITE_SCALE = 4;                          // supersample for crisp AA
+    const SPRITE_PX = SPRITE_CSS * SPRITE_SCALE;
     const sprites: HTMLCanvasElement[] = [];
-    function makeSprite(core: string, halo: string): HTMLCanvasElement {
+    function makeSprite(fill: string, glow: string): HTMLCanvasElement {
         const c = document.createElement("canvas");
         c.width = c.height = SPRITE_PX;
         const g = c.getContext("2d")!;
-        const grad = g.createRadialGradient(SPRITE_PX / 2, SPRITE_PX / 2, 0, SPRITE_PX / 2, SPRITE_PX / 2, SPRITE_PX / 2);
-        grad.addColorStop(0, core);
-        grad.addColorStop(0.32, core);
-        grad.addColorStop(0.55, halo);
-        grad.addColorStop(1, "rgba(0,0,0,0)");
-        g.fillStyle = grad;
-        g.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
+        g.shadowColor = glow;
+        g.shadowBlur = SHADOW_BLUR * SPRITE_SCALE;
+        g.fillStyle = fill;
+        g.beginPath();
+        g.arc(SPRITE_PX / 2, SPRITE_PX / 2, (DOT * SPRITE_SCALE) / 2, 0, Math.PI * 2);
+        g.fill();
         return c;
     }
-    sprites[1] = makeSprite("#e81818", "rgba(255,0,0,0.35)");
-    sprites[2] = makeSprite("#12d212", "rgba(0,255,0,0.35)");
-    sprites[3] = makeSprite("#e6c414", "rgba(255,205,0,0.40)");
+    sprites[1] = makeSprite("#d00", "#f00");   // on-r: background #d00, shadow #f00
+    sprites[2] = makeSprite("#0c0", "#0f0");   // on-g: background #0c0, shadow #0f0
+    sprites[3] = makeSprite("#dc0", "#e80");   // on-a: background #dc0, shadow #e80
 
     interface LedDot { x: number; y: number; s: number; r: number; b: number; }
     let ledDots: LedDot[] = [];
@@ -511,7 +514,7 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
             const v = (((mir[base + 1] >> d.b) & 1) ? 1 : 0)
                     | (((mir[base + 2] >> d.b) & 1) ? 2 : 0);
             if (v === 0) continue;
-            ledCtx.drawImage(sprites[v], d.x - GLOW_CSS / 2, d.y - GLOW_CSS / 2, GLOW_CSS, GLOW_CSS);
+            ledCtx.drawImage(sprites[v], d.x - SPRITE_CSS / 2, d.y - SPRITE_CSS / 2, SPRITE_CSS, SPRITE_CSS);
         }
     }
 
