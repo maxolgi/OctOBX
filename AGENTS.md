@@ -578,6 +578,32 @@ Standard: **gnu89** (not C99+). Many warnings suppressed in the Makefile:
 -Wno-implicit-int -Wno-int-conversion`. Cross-variant via `-DNEMO`. Cross-platform
 via the `__linux__` / `__EMSCRIPTEN__` defines.
 
+## Production deployment (supervisord, this machine)
+
+The launcher runs as a **root supervisord** program on this machine:
+
+- Config: `/etc/supervisor/conf.d/octobx.conf` (program name `octobx`; renamed
+  from the preliminary `octodaw` — do NOT use the old name).
+- Command: `gui/target/release/octobx_gui --no-gui --host 0.0.0.0 --port 8080`
+  (HTTPS with the persisted self-signed cert in `~/.config/octobx/`, forced via
+  `environment=OCTOBX_CERT_DIR`).
+- Logs: `logs/launcher.{out,err}.log`.
+
+**Ordering gotcha:** rust-embed bakes `../dist` into the binary at compile
+time, so the launcher must be rebuilt AFTER any `./build.sh app` dist change —
+and a running process keeps its old image. Full redeploy sequence:
+
+```bash
+./build.sh                                   # wasm + app (regenerates dist/)
+cargo build --release --manifest-path gui/Cargo.toml
+sudo supervisorctl restart octobx            # pick up the new binary
+curl -sk https://localhost:8080/ | grep -o 'assets/index-[^"]*\.js'   # verify hash matches dist/assets/
+```
+
+`supervisorctl status octobx` shows RUNNING + fresh uptime after restart.
+The supervisor binary path lives inside `gui/target/` — `cargo clean` will
+momentarily leave the program dead until rebuilt + restarted.
+
 ## Testing
 
 **Automated:** `npm test` runs vitest over the pure-logic modules

@@ -805,20 +805,24 @@ openssl req -x509 -newkey rsa:2048 \
 
 ## Production / process manager (optional)
 
-For a long-running deployment behind a process manager such as
-`supervisord`, drop a config like this into your supervisor's
-`conf.d/` directory (adjust `directory=`, `command=`, and log paths to
-match your checkout):
+For a long-running deployment behind a process manager, the recommended
+setup on this machine runs the **desktop launcher binary** (serves the
+embedded `dist/` over HTTPS with a persisted self-signed cert — see
+`gui/README.md`) under **root supervisord**:
 
 ```ini
 [program:octobx]
-command=/usr/bin/npx vite --host 0.0.0.0 --port 8080
+command=<path-to-repo-checkout>/gui/target/release/octobx_gui --no-gui --host 0.0.0.0 --port 8080
 directory=<path-to-repo-checkout>
+environment=OCTOBX_CERT_DIR="/home/<user>/.config/octobx"
 autostart=true
 autorestart=true
 startretries=3
-stdout_logfile=<path-to-repo-checkout>/logs/vite.out.log
-stderr_logfile=<path-to-repo-checkout>/logs/vite.err.log
+stopasgroup=true
+killasgroup=true
+stopwaitsecs=10
+stdout_logfile=<path-to-repo-checkout>/logs/launcher.out.log
+stderr_logfile=<path-to-repo-checkout>/logs/launcher.err.log
 stdout_logfile_maxbytes=5MB
 stdout_logfile_backups=3
 stderr_logfile_maxbytes=5MB
@@ -826,7 +830,13 @@ stderr_logfile_backups=3
 ```
 
 Then `sudo supervisorctl update && sudo supervisorctl restart octobx`.
-Logs land in `logs/vite.{out,err}.log` (gitignored).
+Logs land in `logs/launcher.{out,err}.log` (gitignored). Note: rust-embed
+bakes `dist/` into the binary at compile time, so rebuild the launcher
+(`cargo build --release --manifest-path gui/Cargo.toml`) after any app
+build, then restart the program to pick up the new image.
+
+Alternatively, for a dev box, `npx vite --host 0.0.0.0 --port 8080` can be
+supervised the same way (swap `command=`/log paths accordingly).
 
 ## Firmware — used as-is
 
