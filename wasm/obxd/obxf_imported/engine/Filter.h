@@ -22,6 +22,61 @@
 #include "Voice.h"
 #include <math.h>
 
+/*
+ * OctOBX perf: fast tan/atan for the per-sample filter path.
+ *
+ * apply2Pole/apply4Pole call tan (and apply4Pole atan) once per voice per
+ * sample. wasm libm tan costs ~15-30ns per call -- at 48kHz that alone is
+ * 25-50% of the measured ~39ns/voice-sample render budget. These polynomial
+ * replacements (fitted by least squares with iterative error reweighting,
+ * scripts in the OctOBX repo) keep error far below audibility:
+ *
+ *   fastTanf:  max rel err 2.6e-4 on [0, 1.5646] rad (= the sr/2-120Hz
+ *              cutoff clamp at 48kHz; 0.0008 semitones at the very top of
+ *              the range, ~100x less at musical cutoffs)
+ *   fastAtanf: max abs err 6.8e-5 rad on [-50, 50] (0.004 degrees)
+ */
+inline static float obxfTanPoly(float x)
+{
+    // tan(x) on [0, pi/4]: x + x^3 * P(x^2), P fitted to tan
+    const float x2 = x * x;
+    float p = 0.0171416641f;
+    p = p * x2 + 0.0170496435f;
+    p = p * x2 + 0.0550297761f;
+    p = p * x2 + 0.1332545265f;
+    p = p * x2 + 0.3333342435f;
+    return x + x * x2 * p;
+}
+
+inline static float fastTanf(float x)
+{
+    // x in [0, pi/2). Above pi/4 use tan(x) = 2t/(1-t^2), t = tan(x/2)
+    // (x/2 then lies in [0, pi/4) where the polynomial is tight).
+    if (x < 0.78539816339744830962f)
+        return obxfTanPoly(x);
+    float t = obxfTanPoly(x * 0.5f);
+    return (2.f * t) / (1.f - t * t);
+}
+
+inline static float fastAtanf(float x)
+{
+    // atan on [-1,1]: z * P(z^2); |x| > 1 via atan(x) = pi/2 - atan(1/x)
+    const float sign = (x < 0.f) ? -1.f : 1.f;
+    float ax = x * sign;
+    if (ax > 1.f)
+        ax = 1.f / ax;
+    const float u = ax * ax;
+    float p = 0.0254550195f;
+    p = p * u - 0.0947809840f;
+    p = p * u + 0.1867836323f;
+    p = p * u - 0.3319686278f;
+    p = p * u + 0.9999768499f;
+    const float r = ax * p;
+    const float PI_2 = 1.57079632679489661923f;
+    return ((x < -1.f) || (x > 1.f)) ? sign * (PI_2 - r) : sign * r;
+}
+
+
 class Filter
 {
   private:
@@ -140,7 +195,7 @@ class Filter
 
     inline float apply2Pole(float sample, float g)
     {
-        float gpw = tanf(g * sampleRateInv * pi);
+        float gpw = fastTanf(g * sampleRateInv * pi); // OctOBX perf: was tanf()
 
         g = gpw;
 
@@ -181,7 +236,7 @@ class Filter
 
     inline float apply4Pole(float sample, float g)
     {
-        float g1 = (float)tan(g * sampleRateInv * pi);
+        float g1 = fastTanf(g * sampleRateInv * pi); // OctOBX perf: was (float)tan()
         g = g1;
 
         float lpc = g / (1.f + g);
@@ -194,7 +249,7 @@ class Filter
         state.pole1 = res + v;
 
         // damping
-        state.pole1 = atan(state.pole1 * state.resCorrection) * state.resCorrectionInv;
+        state.pole1 = fastAtanf(state.pole1 * state.resCorrection) * state.resCorrectionInv; // OctOBX perf: was atan()
 
         float goveroneplusg = g / (1.f + g);
         float y1 = res;

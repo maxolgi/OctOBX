@@ -64,6 +64,15 @@ class ADSREnvelope
 
     float attackCurve{0.f}; // 0 == exp, 1 == lin
 
+    // OctOBX perf: memo for the per-sample applyMatrix*() calls. Voice.h
+    // invokes applyMatrixAttack/Release four times per voice per sample;
+    // without the memo every call re-runs updateAttackCoeff() -- two double
+    // log()s -- while the voice is in Attack/Release, which showed up as CPU
+    // spikes on every note-on. With constant inputs (the common case: no
+    // matrix rows modulating the envelopes) the early-out skips all of it.
+    bool mtxAtkValid{false}, mtxRelValid{false};
+    float mtxAtkMs{0.f}, mtxAtkOf{0.f}, mtxRelMs{0.f}, mtxRelOf{0.f};
+
   public:
     ADSREnvelope() {}
 
@@ -93,6 +102,7 @@ class ADSREnvelope
         orig.a = a;
         offset.a = a / atkTimeAdjustment;
         par.a = a * offsetFactor / atkTimeAdjustment;
+        mtxAtkValid = false; // OctOBX perf: par.a rewritten from orig
 
         if (state == State::Attack)
         {
@@ -131,6 +141,7 @@ class ADSREnvelope
         orig.r = r;
         offset.r = r;
         par.r = r * offsetFactor;
+        mtxRelValid = false; // OctOBX perf: par.r rewritten from orig
 
         if (state == State::Release)
         {
@@ -140,17 +151,32 @@ class ADSREnvelope
     }
 
     /* Apply a matrix-driven attack time without touching orig.a.
-     * Safe to call every sample — does not interfere with setEnvOffsets(). */
+     * Safe to call every sample — does not interfere with setEnvOffsets().
+     * OctOBX perf: memoized — no-ops when (ms, offsetFactor) are unchanged
+     * since the last call (the per-sample constant case). */
     void applyMatrixAttack(float ms)
     {
+        if (mtxAtkValid && ms == mtxAtkMs && offsetFactor == mtxAtkOf)
+            return;
+        mtxAtkValid = true;
+        mtxAtkMs = ms;
+        mtxAtkOf = offsetFactor;
+
         par.a = ms * offsetFactor / atkTimeAdjustment;
         if (state == State::Attack)
             updateAttackCoeff();
     }
 
-    /* Apply a matrix-driven release time without touching orig.r. */
+    /* Apply a matrix-driven release time without touching orig.r.
+     * OctOBX perf: memoized the same way as applyMatrixAttack. */
     void applyMatrixRelease(float ms)
     {
+        if (mtxRelValid && ms == mtxRelMs && offsetFactor == mtxRelOf)
+            return;
+        mtxRelValid = true;
+        mtxRelMs = ms;
+        mtxRelOf = offsetFactor;
+
         par.r = ms * offsetFactor;
         if (state == State::Release)
             coef = static_cast<float>((log(0.00001) - log(output + 0.0001)) /
@@ -193,10 +219,20 @@ class ADSREnvelope
 
     void updateAttackCoeff()
     {
-        coef = static_cast<float>((log(atkCoefStart) - log(atkCoefEnd)) /
-                                  (sampleRate * par.a * msToSec));
+        /* OctOBX perf: the original computed log(atkCoefStart) - log(atkCoefEnd)
+         * and log(atkValueEnd) / log(atkCoefStart) here. All three inputs are
+         * compile-time constants, so the log results are too:
+         *   ln(0.001f / 1.3f)  = -7.17011954e+0
+         *   ln(0.1f) / ln(0.001f) = 1/3 (exactly, in float)
+         * updateAttackCoeff() runs per-sample during Attack when the matrix
+         * modulates attack time; folding the logs removed two double log()
+         * calls from that path. */
+        static constexpr float atkLogRatio{-7.17011954e+0f};
+        static constexpr float atkExpRate{0.333333333f};
 
-        auto expRate = log(atkValueEnd) / log(atkCoefStart);
+        coef = atkLogRatio / (sampleRate * par.a * msToSec);
+
+        auto expRate = atkExpRate;
         auto expTime = par.a * expRate;
         auto linSamp = (1.0 - expRate * atkValueEnd) * expTime * sampleRate * msToSec;
 

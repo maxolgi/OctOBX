@@ -22,6 +22,29 @@ upstream OB-Xf has no PCM code. These three files **intentionally diverge**
 from upstream and are excluded from the byte-identical/checksum guarantee;
 all other copies remain byte-identical.
 
+### OctOBX-only divergence: per-sample fast-math (wasm CPU)
+
+`engine/Filter.h`, `engine/AdsrEnvelope.h`, and the `Utils.h` stub carry
+**OctOBX perf changes**, each marked with `// OctOBX perf` comments (the
+`Utils.h` changes live in the stub itself, §4a):
+
+- `Filter.h` — the per-voice-sample `tanf()` (2-pole prewarp), `tan()`
+  (4-pole prewarp), and `atan()` (4-pole damping) calls are replaced by
+  fitted polynomial approximations (`fastTanf`/`fastAtanf` in the same
+  file). Wasm libm calls cost ~15-30ns each; three of them per
+  voice-sample dominated the ~39ns/voice-sample render budget. Max errors:
+  tan rel 2.6e-4 (only near the sr/2-120Hz cutoff clamp), atan abs
+  6.8e-5 rad — both far below audibility.
+- `AdsrEnvelope.h` — `updateAttackCoeff()` folded its `log()` calls of
+  compile-time constants into constants; `applyMatrixAttack/Release()`
+  (called 4x per voice-sample from `Voice.h`) are memoized so the
+  constant-input case no-ops instead of recomputing coefficients (this was
+  the note-on CPU spike).
+- `Utils.h` (stub) — `getPitch()` uses a split fast-exp (`fastExpf`)
+  instead of `std::exp`.
+
+These three files are excluded from the byte-identical/checksum guarantee.
+
 ---
 
 ## 1. Files copied
