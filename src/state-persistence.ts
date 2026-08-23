@@ -160,6 +160,29 @@ function syncIdbfs(module: OctopusWasmModule): void {
 }
 
 /*
+ * Delete Emscripten's IDBFS database(s) for this origin directly, without
+ * needing a mounted filesystem. Emscripten names them "EM_FS_" + the mount
+ * path context; the octobx projects DB and any other IndexedDB databases
+ * are never touched. Used by the Shift+LOAD recovery path so it also works
+ * after a ?nosync boot (where unlink+syncfs cannot reach IDBFS).
+ */
+function purgeEmscriptenIdbfs(): void {
+    const dbs = (indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> } }).databases;
+    if (typeof dbs !== "function") {
+        console.warn("[octobx] indexedDB.databases() unavailable — close other tabs of this site and retry, or clear site data");
+        return;
+    }
+    dbs.call(indexedDB).then((list) => {
+        for (const db of list) {
+            if (typeof db.name === "string" && db.name.startsWith("EM_FS_")) {
+                indexedDB.deleteDatabase(db.name);
+                console.log(`[octobx] Deleted IDBFS database '${db.name}'`);
+            }
+        }
+    }).catch((e: unknown) => console.warn("[octobx] IDBFS purge failed:", e));
+}
+
+/*
  * User-visible failure signal for the fire-and-forget project operations.
  * IndexedDB errors (quota, blocked upgrade, private-mode rejection) would
  * otherwise surface only as unhandled promise rejections — the user would
@@ -316,6 +339,13 @@ export function setupStatePersistence(module: OctopusWasmModule) {
                     syncIdbfs(module);
                 }
             } catch { /* nothing to clear */ }
+            // Recovery for a poisoned IDBFS record: when the page was booted
+            // with ?nosync, IDBFS is not mounted, so the unlink+syncfs above
+            // is a silent no-op and the corrupt state would hang the next
+            // plain reload again. Delete Emscripten's IDBFS database directly
+            // (db name starts with "EM_FS_"); the projects DB ("octobx") and
+            // everything else in this origin is left untouched.
+            purgeEmscriptenIdbfs();
             clearAppState();
             console.log("[octobx] Cleared IDBFS + app state");
             return;
