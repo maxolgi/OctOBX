@@ -171,13 +171,19 @@ jobs:
     steps:
       - uses: actions/download-artifact@v7
         with:
+          name: octobx-${{ github.sha }}
           path: artifacts
 
       - name: Stage release assets
         run: |
+          ls -R artifacts
+          # Single-artifact downloads extract directly into path/ (no
+          # per-name subdirectory), so copy by filename from anywhere in
+          # the tree — layout-proof either way.
           mkdir -p release
-          cp artifacts/octobx-*/octobx_gui-linux-x64   release/
-          cp artifacts/octobx-*/octobx_gui-windows-x64.exe release/
+          find artifacts -type f -name 'octobx_gui-*' -exec cp {} release/ \;
+          ls -la release
+          [ "$(find release -type f | wc -l)" -eq 2 ] || { echo "ERROR: expected 2 release assets"; exit 1; }
 
       - name: Set release metadata
         id: meta
