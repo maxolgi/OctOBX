@@ -237,6 +237,20 @@ static void load_state(const char *filepath) {
     Page_repository_assign_Steps();
     Page_repository_assign_Tracks();
 
+    /* Post-load validation — SAME guards wasm_load_state() applies on the
+     * manual LOAD path. engine_init()'s auto-load used to skip them, so a
+     * corrupt save (bad GRID_CURSOR / zero tempo) bricked the boot: an OOB
+     * GRID_CURSOR traps (or wedges) inside VIEWER_fill_MIR / executeKey and
+     * a zero tempo divides by zero in G_TIMER_REFILL_update — either way
+     * the page hangs on reload with nothing in the console. Validate here
+     * so BOTH load paths are safe. */
+    if (GRID_CURSOR >= MAX_NROF_PAGES) {
+        GRID_CURSOR = 0;
+    }
+    if (G_master_tempo < MIN_TEMPO || G_master_tempo > MAX_TEMPO) {
+        G_master_tempo = 120;
+    }
+
     fclose(f);
     fprintf(stderr, "load_state: loaded %d pages, grid=%d\n", pages_loaded, grid_loaded);
 }
