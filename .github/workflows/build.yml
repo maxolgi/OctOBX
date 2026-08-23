@@ -97,9 +97,12 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: mymindstorm/setup-emsdk@v14
+      # Pin the Emscripten version the code is verified against (matches
+      # the local dev toolchain) — `latest` would drift and can break the
+      # build out of nowhere. Bump deliberately.
+      - uses: emscripten-core/setup-emsdk@v16
         with:
-          version: latest
+          version: 6.0.4
           actions-cache-folder: emsdk-cache
 
       - uses: actions/setup-node@v5
