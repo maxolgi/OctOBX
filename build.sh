@@ -18,6 +18,29 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Apply the in-repo JUCE WASM patch to third_party/JUCE (idempotent).
+# The submodule is pinned at UPSTREAM JUCE 8.0.14; the local-only commit
+# that used to carry this patch was unreachable from juce-framework/JUCE
+# and broke CI checkout. The patch adds the __EMSCRIPTEN__ branch to
+# juce_ThreadPriorities_native.h required by the emcc build.
+ensure_juce_patch() {
+    local juce_dir="third_party/JUCE"
+    local patch_file="$SCRIPT_DIR/patches/0001-juce-emscripten-threadpriorities.patch"
+    if [ ! -d "$juce_dir/.git" ] && [ ! -f "$juce_dir/README.md" ]; then
+        echo "ERROR: $juce_dir missing — run: git submodule update --init third_party/JUCE" >&2
+        exit 1
+    fi
+    if git -C "$juce_dir" apply --check "$patch_file" 2>/dev/null; then
+        git -C "$juce_dir" apply "$patch_file"
+        echo "  Applied JUCE emscripten patch ($patch_file)"
+    elif git -C "$juce_dir" apply --reverse --check "$patch_file" 2>/dev/null; then
+        echo "  JUCE emscripten patch already applied"
+    else
+        echo "ERROR: JUCE emscripten patch does not apply to $juce_dir (wrong base?)" >&2
+        exit 1
+    fi
+}
+
 # Copy all .fxp patches from the OB-Xf submodule into wasm/obxd/patches/,
 # flattened with category prefix and zero-padded numbering for stable sort:
 #   Basses_001_Acid Bass.fxp, Basses_002_..., Winds_017_...
@@ -184,6 +207,7 @@ case "${1:-all}" in
         ;;
     synth)
         echo "=== Building Obxd synth WASM module ==="
+        ensure_juce_patch
         sync_patches
         generate_patches_h
         # Regenerate the parameter dispatch tables from tools/param-spec.mjs
@@ -238,6 +262,7 @@ case "${1:-all}" in
         make -C wasm -f Makefile
         echo ""
         echo "=== Building Obxd synth WASM module ==="
+        ensure_juce_patch
         sync_patches
         generate_patches_h
         # Param table generation must precede make — see the comment in the

@@ -30,7 +30,14 @@ This repo uses **three** git submodules:
   intentionally **not** initialized to save disk and clone time.
 - `third_party/JUCE/` → <https://github.com/juce-framework/JUCE> — `juce_core`
   + `juce_audio_basics`, amalgamated into a single TU in
-  `wasm/obxd/juce_amalgam.cpp`.
+  `wasm/obxd/juce_amalgam.cpp`. Pinned at **upstream** JUCE 8.0.14
+  (`2cdfca8`); the required Emscripten fix (WASM branch in
+  `juce_ThreadPriorities_native.h`) lives in-repo as
+  `patches/0001-juce-emscripten-threadpriorities.patch` and is applied
+  idempotently by `build.sh` (`ensure_juce_patch`) before every emcc
+  synth build. Do NOT pin the submodule to local-only commits — CI
+  checkout fetches from juce-framework/JUCE and fails on unreachable
+  SHAs.
 
 (The legacy `third_party/Obxd` OB-XD submodule was removed after the OB-Xf
 migration was verified — the parameter-dispatch refactor moved the last

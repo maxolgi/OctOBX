@@ -1,0 +1,42 @@
+From 1a885cdb74346aaa5622dce7ffc4ade6cdcb014f Mon Sep 17 00:00:00 2001
+From: maxolgi <225314398+maxolgi@users.noreply.github.com>
+Date: Sat, 18 Jul 2026 16:03:48 -0400
+Subject: [PATCH] OctoDAW patch: add WASM branch to ThreadPriorities table
+
+Add #if defined(__EMSCRIPTEN__) branch with five zero-priority entries
+to satisfy the static_assert(std::size(table) == 5) check. WASM pthread
+priorities are no-ops, so the entries are all zeros.
+
+Required for juce_audio_basics to compile under emscripten 6.0.3
+with the OctoDAW Obxd synth WASM build.
+---
+ .../juce_core/native/juce_ThreadPriorities_native.h | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/modules/juce_core/native/juce_ThreadPriorities_native.h b/modules/juce_core/native/juce_ThreadPriorities_native.h
+index 6f63365a7d..078dec710e 100644
+--- a/modules/juce_core/native/juce_ThreadPriorities_native.h
++++ b/modules/juce_core/native/juce_ThreadPriorities_native.h
+@@ -89,6 +89,19 @@ struct ThreadPriorities
+         { Thread::Priority::low,        THREAD_PRIORITY_LOWEST },
+         { Thread::Priority::background, THREAD_PRIORITY_IDLE },
+        #endif
++
++       // OctoDAW patch: upstream JUCE 8.x omits a JUCE_WASM branch in this
++       // table, which makes the static_assert below trip when JUCE is built
++       // for emscripten. WASM pthreads ignore native priority values, so
++       // any five ints satisfy the lookup. Guarded by __EMSCRIPTEN__ so
++       // the submodule stays buildable everywhere else unchanged.
++       #if defined(__EMSCRIPTEN__)
++        { Thread::Priority::highest,    0 },
++        { Thread::Priority::high,       0 },
++        { Thread::Priority::normal,     0 },
++        { Thread::Priority::low,        0 },
++        { Thread::Priority::background, 0 },
++       #endif
+     };
+ 
+     static_assert (std::size (table) == 5,
+-- 
+2.53.0
+

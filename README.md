@@ -77,9 +77,12 @@ git submodule update --init --recursive
 
 The firmware submodule (`firmware/`) is required for the Octopus WASM build.
 The OB-Xf and JUCE submodules (`third_party/OB-Xf`, `third_party/JUCE`) are
-required for the synth WASM build. **OB-Xf carries nested sub-submodules under
-`libs/`** — only the five required for a WASM/AudioWorklet build need to be
-initialized:
+required for the synth WASM build (`make -C wasm/obxd`). The JUCE submodule
+is pinned at upstream 8.0.14; the Emscripten fix it needs lives in-repo as
+`patches/0001-juce-emscripten-threadpriorities.patch` and is applied
+automatically by `build.sh` before every synth build. **OB-Xf carries nested
+sub-submodules under `libs/`** — only the five required for a
+WASM/AudioWorklet build need to be initialized:
 
 ```bash
 cd third_party/OB-Xf
