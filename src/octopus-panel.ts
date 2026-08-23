@@ -83,34 +83,41 @@ function updateLEDs(mir: Uint8Array) {
     mk.forEach((k, i) => setLED(`mx${k}`, ml(mm[i][0], mm[i][1], mm[i][2])));
 }
 
+/*
+ * LED state cache — resolves button id -> LED element once (the DOM is
+ * static after panel build) and swaps pre-defined CSS classes instead of
+ * writing inline style/boxShadow strings. The LED classes carry no
+ * transition: animated box-shadow blurs re-rasterized every frame and
+ * were a top GPU-process cost during playback.
+ */
+const ledCache = new Map<string, HTMLElement | null>();
+
+function ledFor(id: string): HTMLElement | null {
+    let led = ledCache.get(id);
+    if (led === undefined) {
+        const el = document.getElementById(id);
+        led = (el?.previousElementSibling as HTMLElement)
+            ?? (el?.parentElement?.querySelector(".led") as HTMLElement)
+            ?? el
+            ?? null;
+        ledCache.set(id, led);
+    }
+    return led;
+}
+
 function setLED(id: string, v: number) {
-    const el = document.getElementById(id);
-    if (!el) return;
+    const ledEl = ledFor(id);
+    if (!ledEl) return;
 
-    const led = el.previousElementSibling ||
-        (el.parentElement?.querySelector(".led")) ||
-        el;
-
-    const ledEl = led as HTMLElement;
     if (parseInt(ledEl.dataset.mv ?? "-1") === v) return;
     ledEl.dataset.mv = String(v);
 
-    const r = v & 2;
-    const g = v & 4;
+    const r = (v & 2) !== 0;
+    const g = (v & 4) !== 0;
 
-    if (r && g) {
-        ledEl.style.background = "#dc0";
-        ledEl.style.boxShadow = "0 0 5px #e80";
-    } else if (r) {
-        ledEl.style.background = "#d00";
-        ledEl.style.boxShadow = "0 0 5px #f00";
-    } else if (g) {
-        ledEl.style.background = "#0c0";
-        ledEl.style.boxShadow = "0 0 5px #0f0";
-    } else {
-        ledEl.style.background = "transparent";
-        ledEl.style.boxShadow = "none";
-    }
+    ledEl.classList.toggle("on-r", r && !g);
+    ledEl.classList.toggle("on-g", g && !r);
+    ledEl.classList.toggle("on-a", r && g);
 }
 
 function wireInputHandlers(module: OctopusWasmModule) {

@@ -21,7 +21,15 @@ const CLASSIC_CSS = `
 .octo-classic-root .mix-row{display:flex;gap:2px;align-items:flex-end;padding:4px 0 3px 0}
 .octo-classic-root .tnum{display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--lbl);width:14px;flex-shrink:0;margin-top:8px;height:22px;margin-right:-20px}
 .octo-classic-root .bcell{display:flex;flex-direction:column;align-items:center;gap:1px}
-.octo-classic-root .led{width:7px;height:7px;border-radius:50%;background:transparent;transition:background .05s,box-shadow .05s;pointer-events:none;flex-shrink:0}
+.octo-classic-root .led{width:7px;height:7px;border-radius:50%;background:transparent;pointer-events:none;flex-shrink:0}
+.octo-classic-root .led.on-r{background:#d00;box-shadow:0 0 5px #f00}
+.octo-classic-root .led.on-g{background:#0c0;box-shadow:0 0 5px #0f0}
+.octo-classic-root .led.on-a{background:#dc0;box-shadow:0 0 5px #e80}
+/* Canvas LED layer: when active (.leds-on-canvas on the root) the layout
+   .led divs are hidden and the LED field is painted onto one overlay
+   canvas — zero per-frame DOM style/paint work. */
+.octo-classic-root.leds-on-canvas .led{visibility:hidden}
+.octo-classic-root .led-canvas{position:absolute;left:0;top:0;pointer-events:none;z-index:6}
 .octo-classic-root .sbtn{border-radius:50%;background:radial-gradient(circle at 35% 30%,#f0f0f0,#b8b8b8 70%,#a0a0a0);border:1px solid #888;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:inset 0 1px 2px rgba(255,255,255,.6),0 1px 1px rgba(0,0,0,.2);color:#444}
 .octo-classic-root .sbtn:active{transform:scale(.92)}
 .octo-classic-root .sbtn.held,.octo-classic-root .rbtn.held,.octo-classic-root .zm-btn.held,.octo-classic-root .mxp.held,.octo-classic-root .big-knob.held{transform:scale(.92)}
@@ -345,7 +353,12 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
         const escRight = (escBtn.getBoundingClientRect().right - mixRect.left) / scale;
         spacer.style.width = Math.max(0, stopCenter - 83 - escRight) + "px";
     }
-    const resizeHandler = () => { fitToWidth(); alignChordButtons(); };
+    const resizeHandler = () => {
+        fitToWidth();
+        alignChordButtons();
+        measureLeds();
+        paintLeds(prevMir);
+    };
     window.addEventListener("resize", resizeHandler);
     fitToWidth();
     alignChordButtons();
@@ -373,29 +386,28 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
         if (mirAddr) {
             const mir = new Uint8Array(module.HEAPU8.buffer, mirAddr, MIR_SIZE);
             if (mirChanged(mir)) {
-                updateLEDs(mir);
+                paintLeds(mir);
                 prevMir.set(mir);
             }
         }
         requestAnimationFrame(renderLoop);
     }
 
-    function mb(mir: Uint8Array, s: number, r: number, c: number) { return mir[s * 85 + r * 5 + c]; }
-    function ml(mir: Uint8Array, s: number, r: number, b: number) { return ((mb(mir, s, r, 1) >> b & 1) ? 2 : 0) | ((mb(mir, s, r, 2) >> b & 1) ? 4 : 0); }
-
-    function setL(el: HTMLElement | null, v: number) {
-        if (!el) return;
-        const led = el.previousElementSibling as HTMLElement || (el.parentElement?.querySelector(".led") as HTMLElement) || el;
-        const ledEl = led as HTMLElement;
-        if (parseInt(ledEl.dataset.mv ?? "-1") === v) return;
-        ledEl.dataset.mv = String(v);
-        const r = v & 2, g = v & 4;
-        if (r && g) { ledEl.style.background = "#dc0"; ledEl.style.boxShadow = "0 0 5px #e80"; }
-        else if (r) { ledEl.style.background = "#d00"; ledEl.style.boxShadow = "0 0 5px #f00"; }
-        else if (g) { ledEl.style.background = "#0c0"; ledEl.style.boxShadow = "0 0 5px #0f0"; }
-        else { ledEl.style.background = "transparent"; ledEl.style.boxShadow = "none"; }
-    }
-
+    /*
+     * LED render path — perf-critical. The playhead repaints the LED field
+     * at up to 60Hz; ~170 DOM LEDs with box-shadow glows cost 25%+ of a
+     * core in style recalc + blur rasterization (measured: GPU process 26%
+     * during playback, main thread clean). The MIR is a fixed 170-byte
+     * framebuffer, so the LED field is instead painted onto ONE <canvas>
+     * overlay: a handful of pre-rendered glow-sprite blits per frame and a
+     * single texture upload, with zero DOM invalidation.
+     *
+     * - The layout .led divs stay in the tree (visibility:hidden) so the
+     *   flex spacing they participate in is unchanged.
+     * - Input handling is untouched: the canvas has pointer-events:none.
+     * - LED positions are measured once from the laid-out .led elements
+     *   (and re-measured on resize, which re-flows the chord spacer).
+     */
     const cm: Record<string, number[]> = {
         "225":[0,15,0],"217":[0,15,1],"208":[0,15,2],"209":[0,15,3],"210":[0,15,4],"211":[0,15,5],"212":[0,15,6],"221":[0,15,7],
         "222":[1,15,0],"230":[1,15,1],"239":[1,15,2],"238":[1,15,3],"237":[1,15,4],"236":[1,15,5],"235":[1,15,6],"226":[1,15,7],
@@ -407,24 +419,112 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
         "251":[1,16,7],"252":[1,16,6],"253":[1,16,5],"254":[1,16,4],"255":[1,16,3],"256":[1,16,2],"257":[1,16,1],"258":[1,16,0],
     };
 
-    function updateLEDs(mir: Uint8Array) {
-        for (let row = 0; row < 10; row++) for (let col = 0; col < 8; col++) {
-            setL(document.getElementById(`p${row}_${col}`), ml(mir, 0, row, col));
-            setL(document.getElementById(`p${row}_${col + 8}`), ml(mir, 1, row, col));
-        }
+    /* MIR source (set, row, bit) for every rendered LED, keyed by the
+     * button id it belongs to — same mapping the old DOM updater used. */
+    const ledSources: Array<[string, number, number, number]> = [];
+    for (let row = 0; row < 10; row++) for (let col = 0; col < 8; col++) {
+        ledSources.push([`p${row}_${col}`, 0, row, col]);
+        ledSources.push([`p${row}_${col + 8}`, 1, row, col]);
+    }
+    {
         const mk = [21, 32, 43, 54, 65, 76, 87, 98, 109, 120, 131, 142, 153, 164, 175, 186];
         const mm = [[0,10,0],[0,10,1],[0,10,2],[0,10,3],[0,10,4],[0,10,5],[0,10,6],[0,10,7],[1,10,0],[1,10,1],[1,10,2],[1,10,3],[1,10,4],[1,10,5],[1,10,6],[1,10,7]];
-        mk.forEach((k, i) => setL(document.getElementById(`mx${k}`), ml(mir, mm[i][0], mm[i][1], mm[i][2])));
-        for (const [k, p] of Object.entries(cm)) {
-            setL(document.getElementById(`ck-${k}`), ml(mir, p[0], p[1], p[2]));
-            setL(document.getElementById(`chd-${k}`), ml(mir, p[0], p[1], p[2]));
+        mk.forEach((k, i) => ledSources.push([`mx${k}`, mm[i][0], mm[i][1], mm[i][2]]));
+    }
+    for (const [k, p] of Object.entries(cm)) {
+        ledSources.push([`ck-${k}`, p[0], p[1], p[2]]);
+        ledSources.push([`chd-${k}`, p[0], p[1], p[2]]);
+    }
+    for (let i = 0; i < 5; i++) {
+        ledSources.push([`lbt-${i + 1}`, 0, 11, 4 - i]);
+        ledSources.push([`lbt-${i + 6}`, 0, 12, 5 - i]);
+        ledSources.push([`rbt-${187 + i}`, 1, 11, i + 1]);
+        ledSources.push([`rbt-${192 + i}`, 1, 12, i]);
+    }
+
+    /* Pre-rendered glow sprites: [1]=red [2]=green [3]=amber.
+     * Solid core in the center third, soft halo to the edge — visually
+     * equivalent to the old fill + 5px box-shadow blur, but a single
+     * drawImage blit instead of a blur rasterization. */
+    const SPRITE_PX = 28;
+    const GLOW_CSS = 22;
+    const sprites: HTMLCanvasElement[] = [];
+    function makeSprite(core: string, halo: string): HTMLCanvasElement {
+        const c = document.createElement("canvas");
+        c.width = c.height = SPRITE_PX;
+        const g = c.getContext("2d")!;
+        const grad = g.createRadialGradient(SPRITE_PX / 2, SPRITE_PX / 2, 0, SPRITE_PX / 2, SPRITE_PX / 2, SPRITE_PX / 2);
+        grad.addColorStop(0, core);
+        grad.addColorStop(0.32, core);
+        grad.addColorStop(0.55, halo);
+        grad.addColorStop(1, "rgba(0,0,0,0)");
+        g.fillStyle = grad;
+        g.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
+        return c;
+    }
+    sprites[1] = makeSprite("#e81818", "rgba(255,0,0,0.35)");
+    sprites[2] = makeSprite("#12d212", "rgba(0,255,0,0.35)");
+    sprites[3] = makeSprite("#e6c414", "rgba(255,205,0,0.40)");
+
+    interface LedDot { x: number; y: number; s: number; r: number; b: number; }
+    let ledDots: LedDot[] = [];
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const ledCanvas = document.createElement("canvas");
+    ledCanvas.className = "led-canvas";
+    const ledCtx = ledCanvas.getContext("2d");
+
+    /* Measure every LED's center in the panel's natural (pre-transform)
+     * coordinate space and size the canvas backing store. The panel is
+     * scaled via CSS transform (fitToWidth); getBoundingClientRect returns
+     * post-transform coords, so divide by the current scale factor. */
+    function measureLeds(): void {
+        const panelRect = panel.getBoundingClientRect();
+        const scale = panelRect.width / (panel.offsetWidth || 1) || 1;
+        ledDots = [];
+        for (const [id, s, r, b] of ledSources) {
+            const el = document.getElementById(id);
+            const led = (el?.previousElementSibling as HTMLElement)
+                ?? (el?.parentElement?.querySelector(".led") as HTMLElement)
+                ?? null;
+            if (!led) continue;
+            const rect = led.getBoundingClientRect();
+            if (rect.width === 0) continue;
+            ledDots.push({
+                x: (rect.left + rect.width / 2 - panelRect.left) / scale,
+                y: (rect.top + rect.height / 2 - panelRect.top) / scale,
+                s, r, b,
+            });
         }
-        for (let i = 0; i < 5; i++) {
-            setL(document.getElementById(`lbt-${i + 1}`), ml(mir, 0, 11, 4 - i));
-            setL(document.getElementById(`lbt-${i + 6}`), ml(mir, 0, 12, 5 - i));
-            setL(document.getElementById(`rbt-${187 + i}`), ml(mir, 1, 11, i + 1));
-            setL(document.getElementById(`rbt-${192 + i}`), ml(mir, 1, 12, i));
+        const w = panel.offsetWidth, h = panel.offsetHeight;
+        ledCanvas.width = Math.round(w * dpr);
+        ledCanvas.height = Math.round(h * dpr);
+        ledCanvas.style.width = w + "px";
+        ledCanvas.style.height = h + "px";
+        ledCtx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function paintLeds(mir: Uint8Array): void {
+        if (!ledCtx || ledDots.length === 0) return;
+        ledCtx.clearRect(0, 0, ledCanvas.width, ledCanvas.height);
+        for (const d of ledDots) {
+            const base = d.s * 85 + d.r * 5;
+            const v = (((mir[base + 1] >> d.b) & 1) ? 1 : 0)
+                    | (((mir[base + 2] >> d.b) & 1) ? 2 : 0);
+            if (v === 0) continue;
+            ledCtx.drawImage(sprites[v], d.x - GLOW_CSS / 2, d.y - GLOW_CSS / 2, GLOW_CSS, GLOW_CSS);
         }
+    }
+
+    /* Activate the canvas layer: overlay on the panel, hide the DOM LEDs
+     * (layout preserved), seed with the current MIR state (all-off at
+     * mount). Runs after alignChordButtons() so the chord spacer width —
+     * which shifts the chord LED positions — has settled. */
+    if (ledCtx) {
+        panel.style.position = "relative";
+        panel.appendChild(ledCanvas);
+        measureLeds();
+        paintLeds(prevMir);
+        root.classList.add("leds-on-canvas");
     }
 
     requestAnimationFrame(renderLoop);
