@@ -31,6 +31,10 @@ static pthread_t sequencer_pthread;
 volatile long g_tick_ns = 0;
 volatile int g_seq_tick_count = 0;
 
+/* Late-recovery log aggregation (see sequencer_thread_func) */
+static long late_log_pending = 0;
+static long late_log_last_ms = 0;
+
 /* Set to 1 when the firmware's internal save (GRID+PGM) writes to MEMFS.
  * JS polls this after each key press to trigger a browser download. */
 static volatile int g_state_saved = 0;
@@ -87,7 +91,21 @@ static void *sequencer_thread_func(void *arg) {
                 delta_ns += add_ns;
                 skipped++;
             }
-            fprintf(stderr, "sequencer: late by >= 1 tick; skipped %ld tick(s)\n", skipped);
+            /*
+             * Rate-limited: on Windows, Chrome rounds Atomics.wait (the
+             * backing of nanosleep) to the ~15.6ms OS timer grid, so a
+             * 10.4ms tick deadline is missed by >= 1 tick ROUTINELY. The
+             * original per-occurrence fprintf flooded console.error from
+             * this worker and pinned a full core. Log the first stall
+             * immediately, then aggregate — at most one line per 10 s.
+             */
+            late_log_pending += skipped;
+            long now_ms = now.tv_sec * 1000L + now.tv_nsec / 1000000L;
+            if (late_log_last_ms == 0 || now_ms - late_log_last_ms >= 10000) {
+                fprintf(stderr, "sequencer: late tick(s) skipped: %ld\n", late_log_pending);
+                late_log_pending = 0;
+                late_log_last_ms = now_ms;
+            }
             continue;   /* loop re-reads g_tick_ns; sleeps until new deadline */
         }
 
