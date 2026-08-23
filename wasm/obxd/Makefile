@@ -29,6 +29,16 @@ TARGET = ../build/obxd_wasm
 # include chain; the generated param_table.h is #include'd by main_obxd.cpp.
 SRCS = main_obxd.cpp juce_amalgam.cpp obxf_imported/state/ObxdImporter.cpp
 
+# Header dependencies — most of the engine lives in headers (Voice.h,
+# Motherboard.h, OscillatorBlock.h, Filter.h, Utils.h, ...) #include'd by the
+# three TUs above. Without them as prerequisites, a header-only change (e.g.
+# the fast-exp getPitch in Utils.h) makes `make` report "up to date" and serve
+# a stale wasm. The wildcard covers the whole curated subtree. (The generated
+# param_table.h is NOT listed — it doesn't exist on a fresh clone before
+# build.sh synth generates it; its staleness is gated separately by
+# gen-param-table.mjs --check in build.sh.)
+HDRS = $(wildcard obxf_imported/*.h obxf_imported/*/*.h obxf_imported/*/*/*.h)
+
 # OB-Xf include paths — required by the obxf_imported/ subtree:
 #   sst-basic-blocks: sst/basic-blocks/params/ParamMetadata.h (SynthParam.h)
 #   sst-cpputils:     SST support headers
@@ -178,7 +188,7 @@ LDFLAGS = -sWASM=1 \
 
 all: $(TARGET).js
 
-$(TARGET).js: $(SRCS)
+$(TARGET).js: $(SRCS) $(HDRS)
 	@mkdir -p ../build
 	$(CXX) $(CXXFLAGS) $(SRCS) $(LDFLAGS)
 
