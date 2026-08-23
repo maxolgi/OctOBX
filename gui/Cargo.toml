@@ -5,5 +5,13 @@ edition = "2024"
 
 [dependencies]
 eframe = "0.36.1"
+rcgen = "0.14"
 rust-embed = "8.12.0"
-tiny_http = "0.12.0"
+tiny_http = { version = "0.12.0", default-features = false }
+
+[features]
+default = ["tls"]
+# Pure-Rust TLS (rustls) — no system OpenSSL, cross-compiles for Windows CI.
+# LAN hosts need HTTPS: a non-localhost plain-HTTP origin is "untrustworthy",
+# so the browser ignores COOP/COEP and SharedArrayBuffer (pthreads) is denied.
+tls = ["tiny_http/ssl-rustls"]
