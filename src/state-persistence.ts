@@ -167,7 +167,7 @@ function syncIdbfs(module: OctopusWasmModule): void {
  * after a ?nosync boot (where unlink+syncfs cannot reach IDBFS).
  */
 function purgeEmscriptenIdbfs(): void {
-    const dbs = (indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> } }).databases;
+    const dbs = (indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> }).databases;
     if (typeof dbs !== "function") {
         console.warn("[octobx] indexedDB.databases() unavailable — close other tabs of this site and retry, or clear site data");
         return;
