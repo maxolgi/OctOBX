@@ -12,7 +12,7 @@
 import type { OctopusWasmModule } from "./octopus-types";
 import { openMidiAccess, pollForPorts } from "./midi-access";
 import { isObxdReady, setHwMidiHandler } from "./obxd-audio";
-import { frameMidi } from "./midi-framing";
+import { frameMidi, normalizeMidiTimestamp } from "./midi-framing";
 
 /*
  * Handler invoked once per frame with the batch of events drained from the
@@ -144,11 +144,14 @@ export function drainMidiToHardware(
     let frameSinceCheck = 0;
 
     /*
-     * Epoch offset: emscripten_get_now() in the sequencer worker returns
-     * Date.now()-based epoch ms (~1.78T), while MIDIOutput.send() expects
-     * DOMHighResTimeStamp (performance.now() epoch, ~thousands of ms).
-     * Compute the offset once and subtract it from each event timestamp
-     * before adding the forward offset.
+     * Epoch offset: emscripten_get_now() in the sequencer worker may return
+     * Date.now()-based epoch ms (~1.78T) or performance.now()-epoch ms,
+     * depending on platform. normalizeMidiTimestamp() detects the epoch by
+     * magnitude (values > 1e9 get EPOCH_OFFSET subtracted), then sanity-
+     * clamps the result to [now-50, now+5000] ms — if a timestamp lands
+     * outside that window (clock drift, epoch flip), it falls back to
+     * now + forward offset so delivery stays self-healing instead of
+     * sending wildly wrong timestamps to MIDIOutput.send().
      */
     const EPOCH_OFFSET = Date.now() - performance.now();
 
@@ -173,7 +176,12 @@ export function drainMidiToHardware(
                     const status = packed & 0xff;
                     const data1 = (packed >> 8) & 0xff;
                     const data2 = (packed >> 16) & 0xff;
-                    const deliveryTime = timestamps[i] - EPOCH_OFFSET + MIDI_FORWARD_OFFSET_MS;
+                    const deliveryTime = normalizeMidiTimestamp(
+                        timestamps[i],
+                        performance.now(),
+                        EPOCH_OFFSET,
+                        MIDI_FORWARD_OFFSET_MS,
+                    );
                     output.send(status, data1, data2, deliveryTime);
                 }
 

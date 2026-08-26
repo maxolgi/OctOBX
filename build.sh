@@ -232,11 +232,12 @@ case "${1:-all}" in
         # synthesizing a minimal location lets the emcc output run unchanged.
         #
         # Splice the AWP task queue between the emcc output and the processor
-        # tail (shim -> emcc JS -> task queue -> tail): the tail references
-        # the AwpTaskQueue binding, and everything ships as one classic
-        # script, so the queue must ride along in the same concatenation.
+        # tail (shim -> emcc JS -> restore layout -> task queue -> tail): the
+        # tail references the AwpTaskQueue binding AND the generated
+        # restore-layout consts, and everything ships as one classic
+        # script, so both must ride along in the same concatenation.
         cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
-        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
+        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
         rm wasm/build/_awp_shim.js
         echo "=== Synth build complete ==="
         echo "Output: wasm/build/obxd_wasm.{js,wasm} + wasm/build/obxd-processor.js (combined)"
@@ -270,7 +271,7 @@ case "${1:-all}" in
         node tools/gen-param-table.mjs
         make -C wasm/obxd -f Makefile
         cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
-        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
+        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
         rm wasm/build/_awp_shim.js
         echo ""
         echo "=== Building OctOBX TypeScript app ==="

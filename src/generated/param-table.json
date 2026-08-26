@@ -1945,6 +1945,16 @@
     "FilterEnvAttackCurve",
     "AmpEnvAttackCurve"
   ],
+  "restoreLayout": {
+    "instanceCount": 10,
+    "legacyParamCount": 80,
+    "newParamCount": 28,
+    "newParamBase": 200,
+    "stride": 108,
+    "drumPads": 8,
+    "drumLayers": 4,
+    "drumStride": 432
+  },
   "nameIndex": [
     {
       "name": "AmpEnvAttack",

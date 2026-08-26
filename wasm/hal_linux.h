@@ -152,6 +152,10 @@ typedef struct {
 #elif defined(__EMSCRIPTEN__)
     /* No timerfd or Windows timer — nanosleep-based watcher */
     long            interval_ns;
+    /* Bumped by initialize; watcher exits when its captured generation
+     * no longer matches — replaces the unlocked active-flag protocol. */
+    unsigned        generation;
+    int             watcher_alive;  /* set by spawner, cleared by retiring watcher */
 #else
     int             tfd;
 #endif

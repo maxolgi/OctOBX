@@ -232,18 +232,20 @@ static float g_param_mirror[INSTANCE_COUNT][PARAM_COUNT] = {};
 // obxd_get_param() returns from here for idx >= 200 so the knob UI can
 // sync NEW-param widget positions after a .fxp load.
 //
-// CANONICAL-ORDINAL SWITCH: new_idx is now interpreted as the CANONICAL
-// ordinal of obxf_new_params[] (declaration order of streaming IDs in
-// obxf_imported/parameter/SynthParam.h) — the apply path dispatches
-// obxf_new_params[new_idx].apply_native. The TS UI (obxd-synth-ui.ts) still
-// assigns V1 encounter-order sentinels, so UI-driven NEW-param writes land
-// in different engine params than before; that inconsistency is EXPECTED
-// and temporary (the next task migrates the UI + saved state to canonical
-// ordinals — no compat shims here). The worklet's dump/restore
+// CANONICAL ORDINALS END-TO-END: new_idx is the CANONICAL ordinal of
+// obxf_new_params[] (declaration order of streaming IDs in
+// obxf_imported/parameter/SynthParam.h, filtered to params with no legacy
+// ancestor) — the apply path dispatches obxf_new_params[new_idx].apply_native.
+// The TS UI (obxd-synth-ui.ts) and the drum layer editor (drum-rack.ts) assign
+// their sentinels NAME-KEYED from that same generated canonical order
+// (canonicalNewParamOrder / newParamSentinel in src/obxf-param-mappings.ts),
+// so UI-driven NEW-param writes land on the engine param the name intends;
+// old V1 encounter-order saved state is migrated to canonical ordinals on
+// load by migrateParamsV1ToV2 in src/app-state.ts. The worklet's dump/restore
 // (src/obxd-processor.tail.js) uses _obxd_get_param(i, 200+n) /
 // _obxd_set_param(i, 200+n, v) POSITIONALLY over this same mirror, so it
 // stays self-consistent with the C side and save/restore round-trips
-// correctly within a session made after this change.
+// correctly.
 static constexpr int NEW_PARAM_COUNT = 28;
 static float g_new_param_mirror[INSTANCE_COUNT][NEW_PARAM_COUNT] = {};
 
@@ -345,9 +347,9 @@ static void recreate_engine(int instance_id) {
 // apply_native fn ptr. Also used per triggered drum voice by
 // apply_drum_layer_params_for_instance — signature is part of that contract.
 //
-// NOTE: this intentionally REPLACES the old V1 encounter-order switch (the
-// UI sentinel migration to canonical ordinals follows as the next task;
-// see the comment at g_new_param_mirror).
+// Historical note: this replaced an earlier V1 encounter-order switch, and
+// the UI sentinel migration to canonical ordinals has since completed (see
+// the comment at g_new_param_mirror).
 static void apply_new_param_instance(SynthEngine& s, int new_idx, float v) {
     if (new_idx >= 0 && new_idx < OBXF_PT_NEW_COUNT)
         obxf_new_params[new_idx].apply_native(s, v);
@@ -474,6 +476,11 @@ static bool is_global_drum_new_param(int n) {
 // layer has its own cutoff + amp-ADSR), so they must NOT be routed live to instance 9
 // (obxd_set_drum_layer_param) nor read back from g_param_mirror[9]
 // (obxd_get_drum_layer_param).
+//
+// The per-note applier no longer CALLS this (DRUM_SMOOTHER rows are excluded when
+// rebuild_drum_layer_snapshot compiles the memo), but it stays as the canonical
+// table-backed classifier — same rationale as is_global_drum_param.
+__attribute__((unused))
 static bool is_smoother_driven_drum_param(int idx) {
     if (idx < 0 || idx >= PARAM_COUNT) return false;
     return obxf_legacy_params[idx].drum_class == DRUM_SMOOTHER;
@@ -570,6 +577,10 @@ static void apply_param_instance(int instance_id, int idx, float v) {
     dispatch_legacy_param(s, idx, v);
 }
 
+// OctOBX PCM: snapshot compiler — defined below (needs DrumLayerSnapshot).
+// Forward-declared here so the seeding write path can refresh the memos.
+static void rebuild_drum_layer_snapshot(int pad, int layer);
+
 // OctOBX PCM: seed every pad/layer slot in the per-layer param store with the same
 // sensible defaults apply_defaults_for_instance() writes to g_param_mirror, so a
 // freshly-initialised drum layer sounds like the OB-Xf init patch. Called once from
@@ -601,23 +612,132 @@ static void seed_drum_layer_defaults() {
                 g_drum_layer_params[pad][layer][i] = 0.5f;   // center (constructor default)
         }
     }
+    // Refresh the per-layer snapshots so the memos match the seeded mirrors.
+    for (int pad = 0; pad < 8; ++pad)
+        for (int layer = 0; layer < 4; ++layer)
+            rebuild_drum_layer_snapshot(pad, layer);
+}
+
+// =========================================================================
+// OctOBX PCM: per-layer snapshot memoization.
+//
+// apply_drum_layer_params_for_instance() used to recompute, on EVERY
+// triggered voice of EVERY note-on:
+//   - an 80-iteration legacy loop with per-row classification calls
+//     (is_global_drum_param / is_smoother_driven_drum_param) and
+//     dispatch_legacy_param clamping,
+//   - a 28-iteration NEW-param loop with classification,
+//   - seven direct voice writes whose logsc/linsc rescale math
+//     (cutoff*120, 0.991-logsc(1-v,...), logsc(v,4|8,60000,900), ...) is
+//     invariant per (pad, layer).
+// ALL of that filtering/rescaling is INVARIANT per (pad, layer): only the
+// mirror values change between notes, and they change ONLY through three
+// write paths (obxd_set_drum_layer_param's legacy branch, its NEW/sentinel
+// branch, and restore stage 3 / seed defaults). So the compiled result is
+// memoized in DrumLayerSnapshot:
+//
+//   - cutoff/resonance/multimode/atk/dec/sus/rel are the PRE-RESOLVED
+//     engine-unit values the seven direct writes used to compute per note;
+//   - rows[]/vals[] compact the legacy table down to exactly the rows the
+//     old loop dispatched: !special_inline && apply_legacy != NULL &&
+//     drum_class != DRUM_GLOBAL && != DRUM_SMOOTHER, values pre-clamped
+//     into [0,1] ONCE here so the hot path needs no clamping. DRUM_NONE
+//     rows (0/1/32/70/71) are excluded by the NULL check alone — verified
+//     against param_table.h: all five carry apply_legacy == NULL;
+//   - new_idx[]/new_val[] hold the voice-level NEW ordinals (drum_class !=
+//     DRUM_GLOBAL); they are valid canonical ordinals by construction, so
+//     no apply_new_param_instance-style range check is needed at apply time.
+//
+// The snapshots are a PURE MEMO of what the applier used to compute per
+// note. They are rebuilt on EVERY mutation of g_drum_layer_params /
+// g_drum_layer_new — i.e. all three write paths listed above.
+//
+// What is NOT memoized: Motherboard::assignPcmLayer still applies the
+// PcmLayerDef values (gain/filter/env pushed via set_pcm_layer) at trigger
+// time, but the param mirror may be NEWER than those (an editor knob turn
+// without a sample reload), so the per-note re-stamping stays — it just
+// replays the precompiled snapshot instead of recomputing it.
+// =========================================================================
+
+typedef struct {
+    /* Pre-resolved smoother-driven filter/env values (engine units). */
+    float cutoff, resonance, multimode, atk, dec, sus, rel;
+    /* Compacted legacy rows: apply_legacy != NULL, not special_inline,
+     * drum_class != DRUM_GLOBAL && != DRUM_SMOOTHER. */
+    int n_legacy;
+    const obxf_legacy_param_t* rows[PARAM_COUNT];
+    float vals[PARAM_COUNT];
+    /* Voice-level NEW rows (drum_class != DRUM_GLOBAL), canonical ordinals. */
+    int n_new;
+    int new_idx[NEW_PARAM_COUNT];
+    float new_val[NEW_PARAM_COUNT];
+} DrumLayerSnapshot;
+
+static DrumLayerSnapshot g_drum_snapshots[8][4];
+
+// Compile g_drum_layer_params[pad][layer] / g_drum_layer_new[pad][layer]
+// into the snapshot for that slot. Pure function of the two mirrors plus
+// the generated tables; called after every mirror write (see callers).
+static void rebuild_drum_layer_snapshot(int pad, int layer) {
+    DrumLayerSnapshot& snap = g_drum_snapshots[pad][layer];
+    const float* params = g_drum_layer_params[pad][layer];
+    const float* news = g_drum_layer_new[pad][layer];
+
+    // Legacy rows: keep exactly what the old per-note loop dispatched,
+    // with the [0,1] clamp resolved once here instead of per call.
+    snap.n_legacy = 0;
+    for (int idx = 0; idx < PARAM_COUNT; ++idx) {
+        const obxf_legacy_param_t& p = obxf_legacy_params[idx];
+        if (p.special_inline) continue;              // instance-state handling, never per-voice
+        if (!p.apply_legacy) continue;               // removed/no-op row (covers every DRUM_NONE row)
+        if (p.drum_class == DRUM_GLOBAL) continue;   // routed live via apply_param_instance(9, ...)
+        if (p.drum_class == DRUM_SMOOTHER) continue; // applied directly per-voice via the floats below
+        float v = params[idx];
+        if (v < 0.0f) v = 0.0f;
+        if (v > 1.0f) v = 1.0f;
+        snap.rows[snap.n_legacy] = &p;
+        snap.vals[snap.n_legacy] = v;
+        ++snap.n_legacy;
+    }
+
+    // Voice-level NEW rows (valid canonical ordinals by construction).
+    snap.n_new = 0;
+    for (int n = 0; n < NEW_PARAM_COUNT; ++n) {
+        if (is_global_drum_new_param(n)) continue;   // routed live via apply_param_instance(9, ...)
+        float v = news[n];
+        if (v < 0.0f) v = 0.0f;
+        if (v > 1.0f) v = 1.0f;
+        snap.new_idx[snap.n_new] = n;
+        snap.new_val[snap.n_new] = v;
+        ++snap.n_new;
+    }
+
+    // Pre-resolve the seven smoother-driven filter/env values, replicating
+    // today's formulas exactly (the mirror writers already clamp into
+    // [0,1], so these read the same inputs the old inline math did).
+    snap.cutoff    = params[CUTOFF] * 120.f;  // linsc(cutoff, 0, 120)
+    snap.resonance = 0.991f - logsc(1.f - params[RESONANCE], 0.f, 0.991f, 40.f);
+    snap.multimode = params[MULTIMODE];
+    snap.atk       = logsc(params[LATK], 4.f, 60000.f, 900.f);
+    snap.dec       = logsc(params[LDEC], 4.f, 60000.f, 900.f);
+    snap.sus       = params[LSUS];
+    snap.rel       = logsc(params[LREL], 8.f, 60000.f, 900.f);
 }
 
 // OctOBX PCM: after a drum note-on (assignPcmLayer set pcmNeedsParams=true on each
-// triggered PCM voice), stamp every such voice with its layer's full param set.
+// triggered PCM voice), stamp every such voice with its layer's full param set —
+// replayed from the PRECOMPILED DrumLayerSnapshot instead of re-running the
+// per-row classification / clamping / rescale math on every note.
 //
 // For each freshly-triggered voice we scope the engine's ForEachVoice to that single
-// voice via Motherboard::pcmVoiceOverride, then run every voice-level legacy param
-// through dispatch_legacy_param (which therefore stamps only this voice) plus the
-// voice-level NEW params via apply_new_param_instance. Global/structural params —
-// legacy AND NEW — are skipped here (they are routed to the live instance 9 once,
-// via apply_param_instance, by obxd_set_drum_layer_param).
-//
-// NEW-param classification (idx >= 200) is per the generated drum_class column:
-// the four verified synth-globals (UnisonVoices, VoiceReassign, VibratoWave,
-// LFO1PW — setters that write Motherboard state with no ForEachVoice) are
-// DRUM_GLOBAL and never applied per voice; the other 24 are ForEachVoice-scoped
-// and stamp only this voice like any legacy voice-level row.
+// voice via Motherboard::pcmVoiceOverride, replay every snapshot legacy row through
+// its apply_legacy fn ptr (which therefore stamps only this voice), then the
+// voice-level NEW rows via their generated apply_native fn ptrs, then the seven
+// direct filter/env writes from the snapshot's pre-resolved engine-unit floats.
+// Global/structural params — legacy AND NEW — were excluded when the snapshot was
+// built (they route live to instance 9 once, via apply_param_instance, driven by
+// obxd_set_drum_layer_param). Snapshot NEW ordinals are valid by construction, so
+// the old apply_new_param_instance range check is not needed here.
 static void apply_drum_layer_params_for_instance(int instance_id) {
     SynthEngine* e = (instance_id >= 0 && instance_id < INSTANCE_COUNT) ? g_engines[instance_id] : nullptr;
     if (!e) return;
@@ -629,26 +749,22 @@ static void apply_drum_layer_params_for_instance(int instance_id) {
         v->pcmNeedsParams = false;
         int pad = v->pcmPadId, layer = v->pcmLayerId;
         if (pad < 0 || pad >= 8 || layer < 0 || layer >= 4) continue;
+        const DrumLayerSnapshot& snap = g_drum_snapshots[pad][layer];
         mb->pcmVoiceOverride = v;   // scope ForEachVoice to this voice only
-        for (int idx = 0; idx < PARAM_COUNT; idx++) {
-            if (is_global_drum_param(idx)) continue;   // globals handled via instance routing
-            if (is_smoother_driven_drum_param(idx)) continue;  // applied directly per-voice below (avoids global-smoother pollution)
-            dispatch_legacy_param(*e, idx, g_drum_layer_params[pad][layer][idx]);
-        }
-        for (int n = 0; n < NEW_PARAM_COUNT; n++) {
-            if (is_global_drum_new_param(n)) continue;  // NEW globals handled via instance routing
-            apply_new_param_instance(*e, n, g_drum_layer_new[pad][layer][n]);
-        }
-        // Smoother-driven filter params + amp env are NOT applied by dispatch_legacy_param
-        // (their processX set engine smoothers, not the voice) — set them directly from the
-        // mirror so the editor's Cutoff/Reso/Mode + Amp-ADSR knobs reach this voice.
-        v->par.filter.cutoff = g_drum_layer_params[pad][layer][CUTOFF] * 120.f;  // linsc(cutoff, 0, 120)
-        v->filter.setResonance(0.991f - logsc(1.f - g_drum_layer_params[pad][layer][RESONANCE], 0.f, 0.991f, 40.f));
-        v->filter.setMultimode(g_drum_layer_params[pad][layer][MULTIMODE]);
-        v->ampEnv.setAttack(logsc(g_drum_layer_params[pad][layer][LATK], 4.f, 60000.f, 900.f));
-        v->ampEnv.setDecay(logsc(g_drum_layer_params[pad][layer][LDEC], 4.f, 60000.f, 900.f));
-        v->ampEnv.setSustain(g_drum_layer_params[pad][layer][LSUS]);
-        v->ampEnv.setRelease(logsc(g_drum_layer_params[pad][layer][LREL], 8.f, 60000.f, 900.f));
+        for (int k = 0; k < snap.n_legacy; ++k)
+            snap.rows[k]->apply_legacy(*e, snap.vals[k]);
+        for (int k = 0; k < snap.n_new; ++k)
+            obxf_new_params[snap.new_idx[k]].apply_native(*e, snap.new_val[k]);
+        // Smoother-driven filter params + amp env come straight from the
+        // snapshot's pre-resolved floats (same engine-unit values the old
+        // inline math produced per note).
+        v->par.filter.cutoff = snap.cutoff;
+        v->filter.setResonance(snap.resonance);
+        v->filter.setMultimode(snap.multimode);
+        v->ampEnv.setAttack(snap.atk);
+        v->ampEnv.setDecay(snap.dec);
+        v->ampEnv.setSustain(snap.sus);
+        v->ampEnv.setRelease(snap.rel);
         mb->pcmVoiceOverride = nullptr;
     }
 }
@@ -1116,6 +1232,11 @@ EMSCRIPTEN_KEEPALIVE const char* obxd_get_factory_patch_category(int patch_id);
 // Creates all 10 SynthEngine instances, applies the OB-Xf init patch to
 // each, and seeds default polyphony (instance 0 polyphonic 8 voices, rest
 // mono). Idempotent — frees any prior instances first.
+//
+// Note: apply_defaults_for_instance() is NOT called here explicitly —
+// obxd_set_factory_patch() already invokes it right after recreate_engine()
+// in BOTH of its compile-time branches (HAS_FACTORY_FXP 1 and 0), so an
+// explicit pre-defaulting pass would run twice per instance for no effect.
 EMSCRIPTEN_KEEPALIVE
 void obxd_init(int sample_rate) {
     float sr = sample_rate ? (float)sample_rate : 44100.0f;
@@ -1128,7 +1249,6 @@ void obxd_init(int sample_rate) {
         for (int p = 0; p < NEW_PARAM_COUNT; ++p) g_new_param_mirror[i][p] = 0.0f;
         g_patch_name[i][0] = '\0';
         g_mpe_enabled[i] = false;
-        apply_defaults_for_instance(i);
         obxd_set_factory_patch(i, i);   // init patch (or real .fxp if present)
         g_engine_active[i] = true;
     }
@@ -1643,7 +1763,13 @@ void obxd_set_drum_layer_param(int pad, int layer, int idx, float v) {
     if (v < 0.0f) v = 0.0f; if (v > 1.0f) v = 1.0f;
     if (idx >= 200) {
         int n = idx - 200;
-        if (n >= 0 && n < NEW_PARAM_COUNT) g_drum_layer_new[pad][layer][n] = v;
+        if (n >= 0 && n < NEW_PARAM_COUNT) {
+            g_drum_layer_new[pad][layer][n] = v;
+            // Snapshot refresh — cheap, done unconditionally on every
+            // sentinel write (globals don't touch the memo but rebuilding
+            // anyway keeps this branch dead-simple).
+            rebuild_drum_layer_snapshot(pad, layer);
+        }
         if (is_global_drum_new_param(n)) {
             // route to the live instance so NEW synth-globals (UnisonVoices/
             // VoiceReassign/VibratoWave/LFO1PW) affect the whole drum instance
@@ -1654,6 +1780,8 @@ void obxd_set_drum_layer_param(int pad, int layer, int idx, float v) {
     }
     if (idx < 0 || idx >= PARAM_COUNT) return;
     g_drum_layer_params[pad][layer][idx] = v;
+    // Snapshot refresh — cheap, done unconditionally on every legacy write.
+    rebuild_drum_layer_snapshot(pad, layer);
     if (is_global_drum_param(idx)) {
         // route to the live instance so Volume/Tune/etc. affect the whole drum instance
         apply_param_instance(9, idx, v);
@@ -1860,6 +1988,11 @@ int obxd_restore_stage(int stage, const float* synth, int synth_len,
                     }
                 }
             }
+            // All layer mirrors just changed wholesale — refresh every
+            // snapshot so the note-on applier replays the restored values.
+            for (int pad = 0; pad < RESTORE_DRUM_PADS; ++pad)
+                for (int layer = 0; layer < RESTORE_DRUM_LAYERS; ++layer)
+                    rebuild_drum_layer_snapshot(pad, layer);
             break;
         }
         case 4: {  // drum structural finalize for instance 9 (no-op when drum data absent)

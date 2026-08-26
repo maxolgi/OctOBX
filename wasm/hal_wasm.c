@@ -14,8 +14,20 @@ unsigned int hal_cpu_load_timer_start = 0;
 #define HAL_FLASH_SIZE  (1024 * 1024)
 unsigned char *hal_flash_base = NULL;
 
+#define HAL_SCRATCH_SIZE 4096
+static unsigned char hal_scratch[HAL_SCRATCH_SIZE];
+static unsigned long long hal_last_oob_warn_ms = 0;
+
 /* ============================================================ */
 /* Flash API — backed by in-memory buffer                       */
+/*                                                              */
+/* OOB policy: if any part of [offset, offset+len) falls        */
+/* outside the flash buffer, the WHOLE operation is diverted    */
+/* to a scratch page — reads see deterministic zeros, erases/   */
+/* programs are discarded. This keeps behavior total and never  */
+/* corrupts valid flash (a partial-tail clamp would silently    */
+/* change read semantics). Real firmware accesses are always    */
+/* well-formed, so this is purely defensive.                    */
 /* ============================================================ */
 
 static void hal_flash_ensure_init(void) {
@@ -28,8 +40,8 @@ static void hal_flash_ensure_init(void) {
     }
 }
 
-static unsigned char *hal_flash_xlate(void *firmware_ptr) {
-    hal_flash_ensure_init();
+/* Map a firmware flash pointer to an offset into hal_flash_base. */
+static unsigned long long hal_flash_offset(void *firmware_ptr) {
     unsigned long long fw_addr = (unsigned long long)(unsigned char *)firmware_ptr;
     unsigned long long base_addr = 0x01900000ULL;
     unsigned long long offset;
@@ -39,33 +51,88 @@ static unsigned char *hal_flash_xlate(void *firmware_ptr) {
     } else {
         offset = fw_addr;
     }
+    return offset;
+}
 
-    if (offset >= HAL_FLASH_SIZE) {
-        fprintf(stderr, "hal_wasm: WARNING: flash access out of bounds: offset=%llu\n", offset);
-        return hal_flash_base;
+/* Rate-limited OOB warning: at most once per second. */
+static void hal_flash_oob_warn(const char *op, unsigned long long offset, unsigned int len) {
+    unsigned long long now = (unsigned long long)emscripten_get_now();
+
+    if (hal_last_oob_warn_ms == 0 || now - hal_last_oob_warn_ms >= 1000) {
+        fprintf(stderr,
+                "hal_wasm: WARNING: flash %s out of bounds diverted to scratch: "
+                "offset=%llu len=%u\n",
+                op, offset, len);
+        hal_last_oob_warn_ms = now;
     }
-    return hal_flash_base + offset;
+}
+
+/*
+ * Classify a flash access range.
+ *
+ * Returns 1 (diverted) when ANY part of the range is out of bounds:
+ * zeroes the scratch region covering min(len, HAL_SCRATCH_SIZE) so
+ * diverted reads are deterministic, and sets *page to the scratch
+ * buffer. Returns 0 when fully in bounds: *page = base + offset.
+ * *len is never modified — diverted ops use the original length.
+ */
+static int hal_flash_range(unsigned long long offset, unsigned int len, unsigned char **page) {
+    unsigned int zero_len;
+
+    hal_flash_ensure_init();
+
+    if (offset >= (unsigned long long)HAL_FLASH_SIZE ||
+        offset + (unsigned long long)len > (unsigned long long)HAL_FLASH_SIZE) {
+        zero_len = len;
+        if (zero_len > HAL_SCRATCH_SIZE)
+            zero_len = HAL_SCRATCH_SIZE;
+        memset(hal_scratch, 0, zero_len);
+        *page = hal_scratch;
+        return 1;
+    }
+
+    *page = hal_flash_base + offset;
+    return 0;
 }
 
 #define HAL_ERR_CLEAR(err_addr) do { if (err_addr) *(unsigned int *)(err_addr) = 0; } while(0)
 
 int flash_read(void *src, void *dest, unsigned int len, void **err_addr) {
-    unsigned char *s = hal_flash_xlate(src);
-    memcpy(dest, s, len);
+    unsigned char *page;
+    unsigned long long offset = hal_flash_offset(src);
+
+    if (hal_flash_range(offset, len, &page))
+        hal_flash_oob_warn("read", offset, len);
+
+    memcpy(dest, page, len);
     HAL_ERR_CLEAR(err_addr);
     return 0;
 }
 
 int flash_erase(void *dest, unsigned int len, void **err_addr) {
-    unsigned char *d = hal_flash_xlate(dest);
-    memset(d, 0xFF, len);
+    unsigned char *page;
+    unsigned long long offset = hal_flash_offset(dest);
+
+    if (hal_flash_range(offset, len, &page)) {
+        hal_flash_oob_warn("erase", offset, len);
+    } else {
+        memset(page, 0xFF, len);
+    }
+
     HAL_ERR_CLEAR(err_addr);
     return 0;
 }
 
 int flash_program(void *dest, void *src, unsigned int len, void **err_addr) {
-    unsigned char *d = hal_flash_xlate(dest);
-    memcpy(d, src, len);
+    unsigned char *page;
+    unsigned long long offset = hal_flash_offset(dest);
+
+    if (hal_flash_range(offset, len, &page)) {
+        hal_flash_oob_warn("program", offset, len);
+    } else {
+        memcpy(page, src, len);
+    }
+
     HAL_ERR_CLEAR(err_addr);
     return 0;
 }
@@ -274,8 +341,10 @@ void cyg_clock_to_counter(cyg_handle_t clock, cyg_handle_t *counter) {
 
 static void *hal_alarm_watcher(void *arg) {
     cyg_alarm *alarm = (cyg_alarm *)arg;
+    unsigned my_gen = alarm->generation;
 
     while (alarm->active) {
+        my_gen = alarm->generation;
         long sleep_ns = alarm->interval_ns;
         if (sleep_ns <= 0) sleep_ns = 10 * 1000000L; /* fallback: 10ms */
         struct timespec ts = {
@@ -283,7 +352,8 @@ static void *hal_alarm_watcher(void *arg) {
             .tv_nsec = sleep_ns % 1000000000L
         };
         nanosleep(&ts, NULL);
-        if (alarm->handler && alarm->active) {
+        if (!alarm->active || alarm->generation != my_gen) break;
+        if (alarm->handler) {
             alarm->handler(alarm->handle, alarm->data);
             /* interval == 0: one-shot alarm — fire once then self-disable */
             if (alarm->interval_ns == 0) {
@@ -292,6 +362,19 @@ static void *hal_alarm_watcher(void *arg) {
             }
         }
     }
+
+    /*
+     * Retirement. If the generation advanced while we slept AND the alarm
+     * is still enabled, a re-initialize was folded into our liveness slot
+     * (watcher_alive was still set, so initialize did not spawn) — hand off
+     * to a fresh watcher under the newer generation before retiring.
+     * Otherwise this watcher owns the liveness slot: release it.
+     */
+    if (alarm->generation != my_gen && alarm->active) {
+        pthread_create(&alarm->watcher_tid, NULL, hal_alarm_watcher, alarm);
+        return NULL; /* successor inherited watcher_alive */
+    }
+    alarm->watcher_alive = 0;
     return NULL;
 }
 
@@ -307,6 +390,8 @@ void cyg_alarm_create(
     alarm_obj->handler = alarm_fn;
     alarm_obj->data = data;
     alarm_obj->active = 0;
+    alarm_obj->generation = 0;
+    alarm_obj->watcher_alive = 0;
 
     int idx = hal_alarm_count++;
     if (idx >= HAL_MAX_ALARMS) {
@@ -328,8 +413,17 @@ void cyg_alarm_initialize(cyg_handle_t handle, cyg_tick_count_t trigger, cyg_tic
     /* 1 eCos tick = 10ms (matches cyg_current_time: emscripten_get_now()/10.0) */
     alarm->interval_ns = (long)(interval * 10 * 1000000ULL);
 
-    if (!alarm->active) {
-        alarm->active = 1;
+    /*
+     * Bump the generation FIRST: any live watcher from a previous arming
+     * observes the mismatch on wake and retires without firing (handing
+     * off to a successor if the alarm is still enabled). Spawn only when
+     * no watcher holds the liveness slot — this keeps at most one live
+     * watcher per alarm.
+     */
+    alarm->generation++;
+    alarm->active = 1;
+    if (!alarm->watcher_alive) {
+        alarm->watcher_alive = 1;
         pthread_create(&alarm->watcher_tid, NULL, hal_alarm_watcher, alarm);
     }
 }
@@ -338,6 +432,8 @@ void cyg_alarm_disable(cyg_handle_t handle) {
     if (handle >= (cyg_handle_t)hal_alarm_count) return;
     cyg_alarm *alarm = hal_alarm_registry[handle];
     if (!alarm) return;
+    /* watcher_alive is left alone: the watcher thread is still winding
+     * down and will release the liveness slot (or hand off) on exit. */
     alarm->active = 0;
 }
 

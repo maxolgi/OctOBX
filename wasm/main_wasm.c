@@ -261,6 +261,11 @@ static void load_state(const char *filepath) {
 
 extern unsigned int G_pressed_keys[];
 
+/* MUST match the firmware's G_pressed_keys[] array dimension.
+ * The firmware submodule is not compiled here (single-TU include pulls only
+ * declarations), so the literal cannot be re-derived — keep in sync by hand. */
+#define G_KEY_COUNT 261
+
 #define OSC_KEY_ZOOM_GRID  218
 #define OSC_ZOOM_GRID      2
 #define OSC_BIRDSEYE       2
@@ -291,7 +296,7 @@ static void handle_key_press(int keyNdx, int press) {
         }
 
         int any_pressed = 0, i;
-        for (i = 0; i < 261; i++) {
+        for (i = 0; i < G_KEY_COUNT; i++) {
             if (G_pressed_keys[i]) { any_pressed = 1; break; }
         }
         if (!any_pressed) {
