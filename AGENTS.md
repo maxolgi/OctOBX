@@ -80,13 +80,24 @@ required for the synth WASM build (`make -C wasm/obxd`).
 ## Build
 
 ### Prerequisites
+
+```bash
+./install-prereqs.sh   # idempotent; --check to verify only
+```
+
+Installs: system build tools (incl. `xxd`, needed for `patches.h` generation),
+the Emscripten SDK (user-local, `~/emsdk`), Node.js, and Rust. Local dev works
+on Node 20; the Node >= 23 requirement is a GitHub CI constraint.
+
+Manual equivalent of what it installs:
+
 ```bash
 # Emscripten SDK
 git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
 cd ~/emsdk && ./emsdk install latest && ./emsdk activate latest
 source ~/emsdk/emsdk_env.sh
 
-# Node.js >= 23
+# Node.js (CI: >= 23; local dev: >= 20)
 node --version
 ```
 
