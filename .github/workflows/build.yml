@@ -159,7 +159,11 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 3. Publish a GitHub Release for every successful build.
-  #    - Push to main  → prerelease tagged dev-<short_sha>, marked "latest"
+  #    - Push to main  → regular release tagged dev-<short_sha>, marked
+  #      "latest" (prerelease=false — GitHub ignores make_latest on
+  #      pre-releases, so dev builds must be full releases to get the
+  #      "Latest" badge, top-of-list pinning, sidebar visibility, and a
+  #      working /releases/latest link)
   #    - v* tag push    → stable release tagged <version>, marked "latest"
   # ---------------------------------------------------------------------------
   release:
@@ -203,7 +207,7 @@ jobs:
           else
             echo "tag=dev-${short}"         >> "$GITHUB_OUTPUT"
             echo "name=Dev ${short}"        >> "$GITHUB_OUTPUT"
-            echo "prerelease=true"          >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"         >> "$GITHUB_OUTPUT"
             echo "make_latest=true"         >> "$GITHUB_OUTPUT"
           fi
 
