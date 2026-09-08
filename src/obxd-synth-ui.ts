@@ -73,7 +73,7 @@ import {
 import { openObxfPopup } from "./obxf-popup";
 import type { PopupItem } from "./obxf-popup";
 import { FACTORY_PATCHES } from "./patch-catalog";
-import { getInstancePatchId, setInstancePatchIdFromEditor } from "./obxd-rack";
+import { getInstancePatchId, getInstancePatchName, setInstancePatchIdFromEditor } from "./obxd-rack";
 
 // ===========================================================================
 // 0. Editor target abstraction (instance vs. drum layer)
@@ -1128,7 +1128,10 @@ function updatePatchDisplay(inst: number): void {
         patchNameDisplay.textContent = p.name;
         patchNumberDisplay.textContent = String(patchId + 1).padStart(3, "0");
     } else {
-        patchNameDisplay.textContent = "— init —";
+        // A loaded .fxp file has no factory ID — show its name if we have it,
+        // otherwise the init label.
+        const customName = getInstancePatchName(inst);
+        patchNameDisplay.textContent = customName || "— init —";
         patchNumberDisplay.textContent = "---";
     }
 }

@@ -71,6 +71,10 @@ const LEGACY_PARAM_BENDRANGE = 6;
 // init: all 10 active). Patch ID tracks which factory patch is loaded.
 const instancePower = new Array<boolean>(INSTANCE_COUNT).fill(true);
 const instancePatchId = new Array<number>(INSTANCE_COUNT).fill(-1);
+// Custom (.fxp file) patch name per instance. Factory patches have a valid
+// ID and use the catalog name; a loaded .fxp has no factory ID (patchId -1)
+// so its name is tracked here for the Programmer footer display.
+const instancePatchName = new Array<string>(INSTANCE_COUNT).fill("");
 
 // Per-instance pitch-bend-range UI state. Bend range defaults to 2
 // semitones (the conservative OB-Xd default); the engine's current binary
@@ -230,6 +234,7 @@ function wireFxLoader(): void {
             const result = await loadObxdInstanceFxp(id, bytes);
             if (result.success) {
                 instancePatchId[id] = -1;
+                instancePatchName[id] = result.name || "";
                 const catSel = document.getElementById("obxd-patch-category") as HTMLSelectElement | null;
                 const patchSel = document.getElementById("obxd-patch-selector") as HTMLSelectElement | null;
                 if (catSel) catSel.value = "";
@@ -255,6 +260,7 @@ function wireResetButton(): void {
         const id = getObxdSelectedInstance();
         obxdInstanceResetPatch(id);
         instancePatchId[id] = -1;
+        instancePatchName[id] = "";
         const catSel = document.getElementById("obxd-patch-category") as HTMLSelectElement | null;
         const patchSel = document.getElementById("obxd-patch-selector") as HTMLSelectElement | null;
         if (catSel) catSel.value = "";
@@ -457,6 +463,7 @@ function wirePatchSelector(): void {
         const patchId = parseInt(sel.value, 10);
         if (patchId < 0 || patchId >= FACTORY_PATCHES.length) return;
         instancePatchId[id] = patchId;
+        instancePatchName[id] = "";
         applyObxdFactoryPatch(id, patchId);
         await syncObxdControlsFromEngine(id);
     });
@@ -594,6 +601,7 @@ export function restoreSynthAfterAWP(state: SynthInstanceState[]): void {
         const s = state[i];
         instancePower[i] = s.active;
         instancePatchId[i] = s.patchId;
+        instancePatchName[i] = "";
         instanceBendRange[i] = s.bendRange;
         setObxdInstanceActive(i, s.active);
         if (s.patchId >= 0 && s.patchId < FACTORY_PATCHES.length) {
@@ -613,6 +621,15 @@ export function getInstancePatchId(id: number): number {
 }
 
 /*
+ * The custom (.fxp file) patch name for an instance, or "" when a factory
+ * patch (or the init patch) is loaded. Used by the Programmer footer to show
+ * the loaded .fxp's name instead of "— init —".
+ */
+export function getInstancePatchName(id: number): string {
+    return instancePatchName[id] ?? "";
+}
+
+/*
  * Called from the OB-Xf editor's prev/next/select buttons when they load
  * a factory patch. Updates the per-instance state AND syncs the rack
  * header dropdowns so both UIs stay in sync.
@@ -621,6 +638,7 @@ export function setInstancePatchIdFromEditor(id: number, patchId: number): void 
     if (id < 0 || id >= INSTANCE_COUNT) return;
     if (patchId < 0 || patchId >= FACTORY_PATCHES.length) return;
     instancePatchId[id] = patchId;
+    instancePatchName[id] = "";
     // Sync dropdowns if this instance is currently selected.
     if (id === getObxdSelectedInstance()) {
         const cat = FACTORY_PATCHES[patchId].category;
