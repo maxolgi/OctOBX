@@ -463,6 +463,64 @@ async function main() {
     if (rcs.some((v) => v !== 0)) return `drum-absent stages 1..4 rc=[${rcs.join(',')}]`;
   });
 
+  // (k) PCM drum audio path -------------------------------------------------
+  // Every earlier check exercises the oscillator path or the param stores.
+  // The PCM drum sampler (instance 9) has its own load/note/render path that
+  // was previously untested — this proves a loaded sample actually produces
+  // non-silent audio on two different pads, then cleans up.
+  expect('k. PCM drum: loaded samples render non-silent audio (2 pads)', () => {
+    // Self-contained: reset instance 9 to a known-audible state via a clean
+    // staged restore (all-0.5 data) so this check does not depend on the
+    // leftover state from the earlier staged-restore tests.
+    const SYNTH_N = 10 * 108;
+    const DRUM_N = 8 * 4 * 108;
+    const sp = mod._malloc(SYNTH_N * 4);
+    const dp = mod._malloc(DRUM_N * 4);
+    mod.HEAPF32.fill(0.5, sp >> 2, (sp >> 2) + SYNTH_N);
+    mod.HEAPF32.fill(0.5, dp >> 2, (dp >> 2) + DRUM_N);
+    mod._obxd_restore_stage(0, sp, SYNTH_N, dp, DRUM_N);
+    for (const st of [1, 2, 3, 4]) mod._obxd_restore_stage(st, 0, 0, 0, 0);
+    mod._free(sp);
+    mod._free(dp);
+
+    const N = 48000;
+    const sine = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      sine[i] = 0.5 * Math.sin(2 * Math.PI * 80 * i / 48000) * Math.exp(-i / (N * 0.3));
+    }
+    const loadPad = (pad, note) => {
+      const ptr = mod._malloc(N * 4);
+      mod.HEAPF32.set(sine, ptr >> 2);
+      mod._obxd_load_pcm(9, pad, 0, ptr, N);
+      mod._obxd_set_pcm_layer(9, pad, 0, 3.0, 1.0, 0.0, 0.0, 0.0, 0.3, 1.0, 0.2, 0.5, 1.0);
+      mod._obxd_set_pcm_note_map(9, note, pad);
+      mod._obxd_set_pcm_layer_count(9, pad, 1);
+    };
+    const renderSumSq = () => {
+      let s = 0;
+      for (let q = 0; q < 8; q++) {
+        mod._obxd_render(128);
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_buf_l_ptr(), 128);
+        for (let i = 0; i < 128; i++) s += l[i] * l[i];
+      }
+      return s;
+    };
+    mod._obxd_clear_pcm(9);
+    loadPad(0, 36);
+    loadPad(1, 38);
+    mod._obxd_midi_in(9, 0x90, 36, 127);
+    const s0 = renderSumSq();
+    mod._obxd_midi_in(9, 0x80, 36, 0);
+    renderSumSq(); // settle
+    mod._obxd_midi_in(9, 0x90, 38, 127);
+    const s1 = renderSumSq();
+    mod._obxd_midi_in(9, 0x80, 38, 0);
+    mod._obxd_panic(9);
+    mod._obxd_clear_pcm(9);
+    if (!(s0 > 0)) return `pad0 sum-of-squares = ${s0} (silent after load)`;
+    if (!(s1 > 0)) return `pad1 sum-of-squares = ${s1} (silent after load)`;
+  });
+
   // --- summary -------------------------------------------------------------
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);
