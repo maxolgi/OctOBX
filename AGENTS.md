@@ -320,9 +320,11 @@ where `denseIdx` packs enabled+sampled layers at 0, 1, 2, … and
 `pcmLayerCount[pad]` is the dense count. `setNoteOn` iterates
 `0..pcmLayerCount-1` reading `pcmBank[pad][denseIdx]` per voice. TS code
 must translate sparse array indices (0..3, position in `DrumPad.layers[]`)
-to dense via `denseLayerIndexOf(pad, sparseIdx)` before sending
-layer-targeted messages (`set_pcm_layer`, `set_drum_layer_param`,
-`get_drum_layer_param`). Returns -1 for layers not in the played set
+to dense via `denseIndexOf(pad, sparseIdx)` (drum-state.ts — built on the
+same `isLayerPlayed` predicate the kit-load packing loop uses, so the two
+paths can't diverge) before sending layer-targeted messages
+(`set_pcm_layer`, `set_drum_layer_param`, `get_drum_layer_param`).
+Returns -1 for layers not in the played set
 (disabled or sampleless); callers no-op in that case so the engine never
 sees a write to a dead slot. This matters because the dense mapping shifts
 whenever a lower-numbered layer is disabled or assigned a sample — without
@@ -620,7 +622,8 @@ curl -s http://127.0.0.1:8081/ | grep -o 'assets/index-[^"]*\.js'   # verify has
 **Automated:** `npm test` runs vitest over the pure-logic modules
 (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
 `obxf-param-mappings.ts`, `obxf-param-format.ts`, `obxf-dispatch-coverage`,
-`sentinel-migration`, `awp-task-queue`) — 141 tests, no browser required.
+`sentinel-migration`, `dense-layer-index`, `awp-task-queue`) — 179 tests,
+no browser required.
 `npm run test:wasm` additionally exercises the built synth WASM under Node
 (`tools/verify-obxd-wasm.mjs` — 19 behavioral checks over the exported C
 surface: mirror round-trips, factory patch loads, drum classification,

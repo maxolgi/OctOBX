@@ -17,6 +17,7 @@
  */
 
 import type { DrumKit, DrumPad, DrumLayer } from "./drum-state";
+import { isLayerPlayed } from "./drum-state";
 import {
     getObxdAudioContext,
     getObxdNode,
@@ -245,7 +246,9 @@ async function loadDrumKitImpl(kit: DrumKit): Promise<void> {
             const lyr = pad.layers[l];
             const url = lyr.sampleName ? layerSampleUrl(lyr, kit.source) : null;
             const pcm = url ? decoded.get(url) : undefined;
-            if (lyr.enabled === false || !pcm) continue;
+            // isLayerPlayed is the shared dense-packing predicate (drum-state.ts);
+            // the extra !pcm guard drops layers whose sample failed to decode.
+            if (!isLayerPlayed(lyr) || !pcm) continue;
             postDrum({
                 type: "load_pcm",
                 instance_id: DRUM_INSTANCE,

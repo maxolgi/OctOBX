@@ -75,3 +75,33 @@ export function createDefaultKitPads(): DrumPad[] {
         return createDefaultPad(padName, DRUM_DEFAULT_NOTES[i], choke);
     });
 }
+
+/**
+ * A layer is in the "played set" (gets a dense pcmBank slot) when it is
+ * enabled AND has a sample name. This predicate is the single source of
+ * truth for dense packing: loadDrumKitImpl (drum-audio.ts) packs played
+ * layers into dense slots 0..count-1, and denseIndexOf() below translates
+ * sparse → dense with the same rule — both paths move together by
+ * construction. If you change this, the C-side pcmLayerCount packing
+ * changes with it.
+ */
+export function isLayerPlayed(lyr: DrumLayer): boolean {
+    return lyr.enabled !== false && !!lyr.sampleName;
+}
+
+/**
+ * Translate a sparse TS layer index (0..3, position in DrumPad.layers[])
+ * into the DENSE layer index the C engine expects (0..count-1). Returns -1
+ * when the sparse layer isn't in the played set (disabled or sampleless),
+ * so callers can short-circuit — an engine write to a dead slot would be
+ * silently never read.
+ */
+export function denseIndexOf(pad: DrumPad, sparseIdx: number): number {
+    const target = pad.layers[sparseIdx];
+    if (!target || !isLayerPlayed(target)) return -1;
+    let dense = 0;
+    for (let i = 0; i < sparseIdx; i++) {
+        if (isLayerPlayed(pad.layers[i])) dense++;
+    }
+    return dense;
+}

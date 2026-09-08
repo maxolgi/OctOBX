@@ -936,8 +936,8 @@ the dev server, and verify in the browser console:
 4. **Limited automated tests** — vitest covers the pure-logic modules
    (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
    `obxf-param-mappings.ts`, `obxf-param-format.ts`,
-   `obxf-dispatch-coverage`, `sentinel-migration`, `awp-task-queue`) —
-   141 tests; run with `npm test`. `npm run test:wasm` additionally runs
+   `obxf-dispatch-coverage`, `sentinel-migration`, `dense-layer-index`,
+   `awp-task-queue`) — 179 tests; run with `npm test`. `npm run test:wasm` additionally runs
    19 behavioral checks against the built synth WASM under Node
    (`tools/verify-obxd-wasm.mjs`). The Octopus engine and
    browser-integration paths still require manual verification.

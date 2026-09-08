@@ -4,6 +4,7 @@
 
 import { createObxdToggle } from "./obxd-knob";
 import type { DrumKit, DrumLayer, DrumPad } from "./drum-state";
+import { denseIndexOf } from "./drum-state";
 import { DRUM_KITS, SAMPLE_CATALOG } from "./drum-kits";
 import {
     initDrumMode,
@@ -48,19 +49,19 @@ const padDots: HTMLSpanElement[][] = [];
 //
 // DENSE LAYER INDEXING: the C engine addresses g_drum_layer_params[pad][dense]
 // where dense packs enabled+sampled layers at 0,1,2,… We translate sparse
-// selectedLayer → dense here via denseLayerIndexOf(). For layers not in the
+// selectedLayer → dense here via denseIndexOf() (drum-state.ts). For layers not in the
 // played set (disabled or sampleless), get returns -1 (syncKnobStrips'
 // `if (v >= 0) kh.setValue(v)` guard leaves the knob position untouched) and
 // set is a no-op (the tweak persists in TS but won't reach the engine until
 // the layer enters the played set).
 const drumTarget: ObxdParamTarget = {
     get: (idx) => {
-        const dense = denseLayerIndexOf(currentKit.pads[selectedPad], selectedLayer);
+        const dense = denseIndexOf(currentKit.pads[selectedPad], selectedLayer);
         if (dense < 0) return Promise.resolve(-1);
         return getDrumLayerParam(selectedPad, dense, idx);
     },
     set: (idx, v) => {
-        const dense = denseLayerIndexOf(currentKit.pads[selectedPad], selectedLayer);
+        const dense = denseIndexOf(currentKit.pads[selectedPad], selectedLayer);
         if (dense < 0) return;
         setDrumLayerParam(selectedPad, dense, idx, v);
     },
@@ -601,33 +602,10 @@ function catalogIndexForLayer(lyr: DrumLayer, kitSource: string): number {
 // is muted, force gain to 0 so the real gain is preserved on the layer obj
 // for when the user unmutes.
 function pushLayer(lyr: DrumLayer): void {
-    const dense = denseLayerIndexOf(currentKit.pads[selectedPad], selectedLayer);
+    const dense = denseIndexOf(currentKit.pads[selectedPad], selectedLayer);
     if (dense < 0) return; // selected layer isn't in the played set (disabled or sampleless); engine write would land in a dead pcmBank slot
     const eff: DrumLayer = lyr.muted ? { ...lyr, gain: 0 } : lyr;
     setLayerParam(selectedPad, dense, eff);
-}
-
-/*
- * Translate a sparse TS layer index (0..3, position in DrumPad.layers[]) into
- * the DENSE layer index the C engine expects. loadDrumKitImpl packs
- * enabled+sampled layers at dense 0, 1, 2, … and the C-side setNoteOn iterates
- * `0..pcmLayerCount-1` reading pcmBank[pad][dense]. A sparse layer that is
- * disabled or has no sample isn't in the played set — return -1 so callers
- * can short-circuit (no engine write means no dead-slot write that would be
- * silently never read). Mirrors loadDrumKitImpl's iteration at
- * src/drum-audio.ts:281 — keep in sync.
- */
-function denseLayerIndexOf(pad: DrumPad, sparseIdx: number): number {
-    const target = pad.layers[sparseIdx];
-    if (!target) return -1;
-    if (target.enabled === false || !target.sampleName) return -1;
-    let dense = 0;
-    for (let i = 0; i < sparseIdx; i++) {
-        const l = pad.layers[i];
-        if (l.enabled === false || !l.sampleName) continue;
-        dense++;
-    }
-    return dense;
 }
 
 // --- Kit loading ----------------------------------------------------------
@@ -752,7 +730,7 @@ function buildUI(container: HTMLElement): void {
             // it each time. renderLayerButtons/Editor/syncEditor below will
             // re-seed the UI for the new pad; if the currently-selected
             // layer isn't playable on the new pad (disabled or sampleless),
-            // denseLayerIndexOf returns -1 and the knobs retain their
+            // denseIndexOf returns -1 and the knobs retain their
             // previous positions harmlessly.
             refreshPadBank();
             renderLayerButtons();
