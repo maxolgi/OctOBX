@@ -9,12 +9,13 @@
     "preview": "vite preview",
     "serve": "python3 serve.py",
     "test": "vitest run",
-    "test:wasm": "node tools/verify-obxd-wasm.mjs"
+    "test:wasm": "node tools/verify-obxd-wasm.mjs",
+    "test:octopus": "node tools/verify-octopus-wasm.mjs"
   },
-  "dependencies": {},
   "devDependencies": {
+    "playwright-core": "^1.63.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.2.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^3.2.0"
   }
 }

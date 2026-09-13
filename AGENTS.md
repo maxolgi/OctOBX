@@ -412,8 +412,8 @@ AudioWorklet — OB-Xf synth  (obxd_wasm.wasm, separate emcc build)
 **Octopus engine** (`main_wasm.c`):
 
 Input/state: `engine_init`, `wasm_key_press`, `wasm_rotary`, `wasm_transport`,
-`wasm_set_tempo`, `wasm_pause`, `wasm_shutdown`, `wasm_save_state`,
-`wasm_load_state`.
+`wasm_set_tempo`, `wasm_set_zoom`, `wasm_pause`, `wasm_shutdown`,
+`wasm_save_state`, `wasm_load_state`.
 
 MIR/state out: `get_mir_ptr`, `get_processed_mir_ptr`, `get_run_bit`,
 `get_tempo`, `get_zoom_level`, `page_refresh`, `wasm_get_tick_ns`,
@@ -629,6 +629,15 @@ no browser required.
 surface: mirror round-trips, factory patch loads, drum classification,
 staged restore, audio smoke). Run it after any `main_obxd.cpp` /
 `param-spec.mjs` change (`./build.sh synth` first).
+`npm run test:octopus` (or `node tools/verify-octopus-wasm.mjs`) drives the built Octopus
+engine WASM in headless Chromium (system `/usr/bin/chromium` + `playwright-core`), serving
+`dist/` with COOP/COEP and asserting 10 manual-grounded behaviors ported from the native
+Octopus repo's `tests/test_manual.py`: page-selection toggle, transport start/stop +
+pause/continue, the four zoom indicators, record arm, state save, and tempo responsiveness. LED
+assertions use blink-safe window-OR captures of the 170-byte MIR read from the WASM heap. Prereqs:
+`dist/` built and current (`./build.sh app`) and `playwright-core` installed; run it after
+any `main_wasm.c` or firmware change. (The native suite's 11th test, name-based OSC dispatch,
+is N/A — OctOBX has no OSC surface.)
 
 **Manual:** build the WASM modules, run the dev server, and verify in the
 browser console:

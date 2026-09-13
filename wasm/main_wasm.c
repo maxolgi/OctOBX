@@ -446,6 +446,18 @@ unsigned char EMSCRIPTEN_KEEPALIVE get_zoom_level(void) {
     return G_zoom_level;
 }
 
+/* Test/driver hook mirroring the native launcher's /zoom OSC command: set the
+ * zoom level directly. Physical zoom keys are play-mode dependent (PAGE only
+ * switches in GRID_EDIT, MAP toggles MIDI-CC routing in GRID_MIX, in STEP zoom
+ * only GRID/PAGE/TRK act), so a deterministic setter is needed for the
+ * zoom-indicator behavior tests (tools/verify-octopus-wasm.mjs). */
+void EMSCRIPTEN_KEEPALIVE wasm_set_zoom(int level) {
+    cyg_scheduler_lock();
+    G_zoom_level = level;
+    Page_requestRefresh();
+    cyg_scheduler_unlock();
+}
+
 /* Page refresh — called from JS at ~60Hz via requestAnimationFrame.
  *
  * Kept for backward compatibility. New callers should use
