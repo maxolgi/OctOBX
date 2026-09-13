@@ -671,11 +671,19 @@ browser console:
 3. **AudioWorklet reply correlation** is correct but untyped — `obxd-audio.ts`
    uses an `unknown`-typed predicate router to avoid racing `port.onmessage`
    reassignments.
-4. **Limited automated tests** — vitest covers the pure-logic modules
-   (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
-   `obxf-param-mappings.ts`, `obxf-param-format.ts`, `obxf-dispatch-coverage`,
-   `awp-task-queue`); run with `npm test`. The WASM engine and
-   browser-integration paths still require manual verification (see Testing).
+4. **Limited automated tests** — vitest (`npm test`, 179 tests) covers the
+   pure-logic modules (`midi-framing.ts`, `channel-routing.ts`,
+   `obxf-midi-learn.ts`, `obxf-param-mappings.ts`, `obxf-param-format.ts`,
+   `obxf-dispatch-coverage`, `awp-task-queue`); `npm run test:wasm`
+   (`tools/verify-obxd-wasm.mjs`) covers the OB-Xf synth WASM under Node
+   (20 checks); `npm run test:octopus` (`tools/verify-octopus-wasm.mjs`)
+   covers the Octopus engine WASM behaviorally in headless Chromium
+   (10 tests: transport, zoom indicators, page-selection toggle, record
+   arm, state save, tempo — ported from the native Octopus repo's
+   `tests/test_manual.py`; name-based OSC dispatch N/A — no OSC surface).
+   Still manual-only (see `MANUAL_TEST_PLAN.md`): drum audio, Web MIDI
+   hardware I/O, IDBFS save/reload round-trip, and the AudioWorklet
+   integration paths.
 
 ## License
 
