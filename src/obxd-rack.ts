@@ -2,10 +2,9 @@
  * obxd-rack.ts — Phase C UI for the multi-instance OB-Xf synth.
  *
  * Replaces obxd-panel.ts. The panel is always visible in document flow
- * (knob grid shows baked defaults until the engine comes up). The audio
- * engine is lazy-initialized on the first PLAY click — Octopus requires
- * PLAY to make sound anyway, and that click is the user-gesture the
- * suspended AudioContext needs for autoplay-policy compliance.
+ * (knob grid shows baked defaults until the engine comes up). The worklet
+ * node is created AT STARTUP by bootOctopusEngine(); the PLAY click now
+ * just resumes the suspended AudioContext (autoplay-policy gesture).
  *
  * Layout (defined in index.html):
  *   .obxd-panel-header
@@ -32,6 +31,7 @@
 import {
     setupObxdAudio,
     isObxdReady,
+    getObxdAudioContext,
     getObxdSelectedInstance,
     setObxdSelectedInstance,
     setObxdInstanceActive,
@@ -495,19 +495,36 @@ function wirePatchSelector(): void {
 }
 
 /*
- * Lazy-init AudioContext when the sequencer starts. Octopus already
+ * Re-resume the AudioContext on a user gesture. The worklet node (and the
+ * AudioContext) are created AT STARTUP by bootOctopusEngine(); the initial
+ * resume attempt inside setupObxdAudio() happens before any user gesture,
+ * so the context is typically still suspended until the first PLAY click /
+ * pointerdown. Calling this on every startAudioInit() path guarantees the
+ * resume happens regardless of whether the worklet is already up.
+ */
+function resumeAudioContext(): void {
+    const ctx = getObxdAudioContext();
+    if (ctx && ctx.state === "suspended") {
+        void ctx.resume().catch(() => { /* autoplay policy — non-fatal */ });
+    }
+}
+
+/*
+ * Bring the audio path up when the sequencer starts. Octopus already
  * requires PLAY to make sound, so we ride on whichever gesture starts
  * the sequencer. The transport-bar PLAY (#oct-play) is hooked directly
  * for instant response; a run-bit poller catches every OTHER path
  * (Octopus panel's on-surface PLAY key #ck-229, modern-grid PLAY,
  * incoming MIDI START, keyboard shortcuts, etc.) — anything that flips
- * _get_run_bit() from 0 to 1.
+ * the controller's runBit() from 0 to 1.
  *
- * Until the engine comes up, all 10 instances show as "on" in the UI
- * but produce no audio; knob edits are buffered locally (no-op) and
- * applied post-init via syncObxdControlsFromEngine().
+ * setupObxdAudio() is now a fast no-op when the worklet node already
+ * exists (it is created at startup by bootOctopusEngine) — its internal
+ * resume only runs on the create path, so resumeAudioContext() above is
+ * what guarantees the gesture resume in the already-booted case.
  */
 function startAudioInit(): void {
+    resumeAudioContext();
     if (isObxdReady() || audioInitializing) return;
     audioInitializing = true;
     setupObxdAudio().then(async () => {
@@ -536,20 +553,20 @@ function wireLazyAudioInit(): void {
 
     // Any user gesture satisfies the AudioContext autoplay policy.
     // A single pointerdown anywhere on the page (step pad, knob, circle
-    // button, etc.) boots the synth so notes are audible from the first
-    // interaction — not just after pressing PLAY.
+    // button, etc.) resumes the context so notes are audible from the
+    // first interaction — not just after pressing PLAY.
     document.addEventListener("pointerdown", () => startAudioInit(), { once: true });
 
     // Fallback — poll the sequencer run-bit for the 0->1 transition.
     // Catches Octopus-panel PLAY (#ck-229), modern-grid PLAY, MIDI START,
     // and any other path that doesn't go through #oct-play. Cheap: one
-    // WASM call every 200ms, stops itself once audio is up.
-    const octopus = window.__module;
-    if (!octopus?._get_run_bit) return;
-    let prevRun = octopus._get_run_bit() || 0;
+    // controller read every 200ms, stops itself once audio is up.
+    const octopus = window.__octopus;
+    if (!octopus) return;
+    let prevRun = octopus.status.runBit() || 0;
     const poll = setInterval(() => {
         if (isObxdReady()) { clearInterval(poll); return; }
-        const now = octopus._get_run_bit?.() || 0;
+        const now = octopus.status.runBit() || 0;
         if (now && !prevRun) startAudioInit();
         prevRun = now;
     }, 200);

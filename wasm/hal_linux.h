@@ -133,8 +133,17 @@ typedef struct {
 /* This header is only used for the WASM build; Windows uses the original */
 #endif
 
+#ifdef OCT_AWP
+/* AudioWorklet build: no pthread primitives may be USED on the audio
+ * thread. Mutex = recursion-depth counter, semaphore = plain int count
+ * (implementations in hal_wasm.c). The pthread typedefs below still
+ * compile without -pthread; only function usage is guarded. */
+typedef struct { int depth; } cyg_mutex_t;
+typedef struct { int count; } cyg_sem_t;
+#else
 typedef pthread_mutex_t cyg_mutex_t;
 typedef sem_t cyg_sem_t;
+#endif
 
 typedef struct {
     cyg_vector_t vector;
@@ -150,16 +159,23 @@ typedef struct {
 #ifdef _WIN32
     void           *htimer;
 #elif defined(__EMSCRIPTEN__)
+#ifdef OCT_AWP
+    /* AudioWorklet build: cooperative alarm on the virtual clock —
+     * hal_advance_clock() in hal_wasm.c polls these fields inline. */
+    double          deadline_ms;    /* virtual time of next fire */
+    double          interval_ms;    /* <= 0 = one-shot */
+#else
     /* No timerfd or Windows timer — nanosleep-based watcher */
     long            interval_ns;
     /* Bumped by initialize; watcher exits when its captured generation
      * no longer matches — replaces the unlocked active-flag protocol. */
     unsigned        generation;
     int             watcher_alive;  /* set by spawner, cleared by retiring watcher */
+#endif
 #else
     int             tfd;
 #endif
-    pthread_t       watcher_tid;
+    pthread_t       watcher_tid;    /* unused in OCT_AWP (type compiles without -pthread) */
     int             active;
     cyg_alarm_t    *handler;
     cyg_addrword_t  data;
@@ -225,6 +241,9 @@ extern unsigned int hal_cpu_load_timer_start;
 } while(0)
 
 extern unsigned long long hal_clock_counter;
+
+/* OCT_AWP: advance the virtual HAL clock by ms and poll alarms (one call per audio quantum). */
+void hal_advance_clock(double ms);
 
 #ifdef __EMSCRIPTEN__
 #define HAL_CLOCK_READ(pval)  do { \

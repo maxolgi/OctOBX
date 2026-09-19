@@ -10,7 +10,10 @@ parameters). The legacy `third_party/Obxd/` submodule has been removed.
 This is the **WASM/browser port**. It is a sibling project to the native
 Linux/Windows C-engine port at <https://github.com/maxolgi/Octopus>. The two
 share the same firmware source and the same eCos-HAL shim concept, but this repo
-targets the browser (Emscripten + Web Workers + SharedArrayBuffer), not ALSA/winmm.
+targets the browser (Emscripten + a single combined AudioWorklet hosting BOTH
+the OB-Xf synth and the Octopus sequencer engine + a shared WebAssembly.Memory),
+not ALSA/winmm. There are no Emscripten pthreads any more — the sequencer is
+pumped sample-block by sample-block on the audio thread.
 
 ## Submodules
 
@@ -109,6 +112,15 @@ make -C wasm NEMO=1     # Nemo variant → wasm/build/nemo_wasm.{js,wasm}
 make -C wasm clean
 ```
 
+AudioWorklet build — **no pthreads**: the engine is compiled with
+`-DOCT_AWP -sENVIRONMENT=worker -sIMPORTED_MEMORY -sALLOW_MEMORY_GROWTH=0
+-sINITIAL_MEMORY=134217728` (fixed 128 MiB shared heap, imported from JS). The
+emcc glue output (`octopus_wasm.js`) is no longer loaded via a `<script>` tag on
+the main thread; `build.sh` concatenates it into the combined AudioWorklet
+module (`wasm/build/obxd-processor.js`). The JS side MUST create a matching
+memory: `new WebAssembly.Memory({initial: 2048, maximum: 2048, shared: true})`
+— done in `src/octopus-awp.ts` at boot.
+
 ### Compile the OB-Xf synth WASM (requires `third_party/{OB-Xf,JUCE}`)
 ```bash
 make -C wasm/obxd       # → wasm/build/obxd_wasm.{js,wasm}
@@ -148,7 +160,11 @@ python3 serve.py                       # http://localhost:8080
 `wasm/obxd/patches/` to generate `wasm/obxd/patches.h` (gitignored), which
 `main_obxd.cpp`'s `__has_include("patches.h")` guard picks up so
 `obxd_set_factory_patch()` loads real presets instead of the programmatic
-fallback.
+fallback. It then concatenates the combined AudioWorklet module
+`wasm/build/obxd-processor.js` in this order: `obxd-awp-shim.js` →
+`octopus_wasm.js` → `obxd_wasm.js` → `src/generated/restore-layout.js` →
+`src/awp-task-queue.js` → `obxd-processor.tail.js` — one classic script, two
+WASM factories (`OctopusModuleFactory` + `ObxdModuleFactory`).
 
 Open the URL you started. With Vite, accept the self-signed cert warning
 (needed because SharedArrayBuffer requires a secure context). With `serve.py`
@@ -163,14 +179,26 @@ translation unit, matching the original firmware's architecture. The original
 firmware headers — they are NOT compiled separately and NOT listed in `SRCS`.
 
 Only these files in `wasm/` are compiled as `SRCS` (still into one TU by `emcc`):
-- `main_wasm.c` — async entry point, sequencer pthread, exported functions
-- `hal_wasm.c` — eCos HAL shim (pthreads, ring-buffer mbox, nanosleep)
+- `main_wasm.c` — async entry point, exported functions, and the sample-driven
+  sequencer pump `octopus_pump()` (no pthread in the OCT_AWP build)
+- `hal_wasm.c` — eCos HAL shim (OCT_AWP cooperative mode: virtual clock,
+  alarm polling, never-blocking primitives)
 - `midi_wasm.c` — MIDI event ring buffer (replaces ALSA/winmm MIDI backend)
 - `flash_file.c` — file-based persistence (copied from the native port; works
-  with Emscripten's MEMFS/IDBFS virtual filesystem)
+  with Emscripten's MEMFS virtual filesystem — state bytes cross the worklet
+  boundary as port messages, there is no IDBFS any more)
 - `hal_linux.h` — modified copy of the native `hal_linux.h` with
   `#elif defined(__EMSCRIPTEN__)` guards (no socket/timerfd/ioctl/mman headers,
-  ring-buffer mailbox type, `emscripten_get_now()` clock, OSC excluded)
+  ring-buffer mailbox type, `emscripten_get_now()` clock, OSC excluded) and
+  `#ifdef OCT_AWP` types (mutex = recursion counter, semaphore = plain count,
+  alarm = virtual-clock deadline/interval fields)
+
+Octopus build constraints: **no `-pthread`** (illegal inside
+AudioWorkletGlobalScope, and the engine lives on the audio thread);
+`-sENVIRONMENT=worker` (AWP is worker-like and forbids importScripts/dynamic
+import, hence the build.sh concat); `-sIMPORTED_MEMORY` with
+`-sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=134217728` (linear memory is the
+fixed 128 MiB shared `WebAssembly.Memory` created on the JS main thread).
 
 The OB-Xf synth is a **separate emcc build** under `wasm/obxd/` (its own TUs;
 does not share the Octopus single-TU build):
@@ -206,7 +234,8 @@ See README "OB-Xf synth — WASM source" for the full file/function reference.
 
 ## How the firmware is reused unchanged
 
-The WASM build defines **`-D__linux__`** and **`-D__EMSCRIPTEN__`**:
+The WASM build defines **`-D__linux__`**, **`-D__EMSCRIPTEN__`**, and
+**`-DOCT_AWP`**:
 
 - `-D__linux__` makes the existing firmware preprocessor guards route
   `MIDI_send()` to our `midi_send_event()` and suppress hardware-specific code.
@@ -214,6 +243,10 @@ The WASM build defines **`-D__linux__`** and **`-D__EMSCRIPTEN__`**:
   `firmware/` (see the `patches/` history in the upstream fork).
 - `-D__EMSCRIPTEN__` routes platform-specific code to the WASM implementations
   in `hal_wasm.c`, `midi_wasm.c`, and `main_wasm.c` (via `hal_linux.h` guards).
+- `-DOCT_AWP` selects the single-threaded cooperative shim inside those files
+  (virtual clock, counter mutexes/semaphores, polled alarms — see "eCos
+  compatibility shim") instead of the pthread-backed implementations, which
+  remain in the source as a compile-time-legacy path.
 
 When you must touch a firmware file, use `#ifdef __linux__` /
 `#ifdef __EMSCRIPTEN__` / `#ifndef __linux__` guards — never unconditional edits.
@@ -351,11 +384,32 @@ kit with its deduped sample list) that drives the dual dropdown UI.
 `cyg_*` functions the firmware expects. This is the linchpin that lets ~50k
 lines of original firmware compile unchanged for the browser.
 
-Key mappings: `cyg_thread_*` → pthread (Emscripten pthreads → Web Workers),
-`cyg_mbox_*` → ring buffer (mutex + condition variable), `cyg_mutex_*` →
-`pthread_mutex_t` (recursive for the scheduler lock), `cyg_semaphore_*` →
-`sem_init/post/wait`, `cyg_alarm_*` → watcher threads with `nanosleep`,
-`diag_printf` → `vfprintf(stderr)`. In-memory flash buffer mirrors the native port.
+OCT_AWP (AudioWorklet) mode — the shim is single-threaded and cooperative,
+because the engine runs on the audio thread where blocking and thread creation
+are illegal:
+
+- **Virtual clock** — `hal_advance_clock(ms)` is called once per audio quantum
+  by `octopus_pump()`; `cyg_current_time()` reads it (1 eCos tick = 10 ms).
+- **Alarms** — `cyg_alarm_initialize` arms `deadline_ms`/`interval_ms` fields;
+  the clock poll fires due handlers inline (max 16 catch-up fires per alarm per
+  poll; a periodic alarm more than 500 ms in arrears re-anchors to now instead
+  of machine-gunning the backlog).
+- **Mutexes / scheduler lock** — recursion counters (a single thread never
+  contends; the depth keeps nested lock/unlock pairs balanced).
+- **Semaphores** — plain int counters; `wait` decrements only when positive and
+  never blocks.
+- **Mailboxes** — same ring storage, no mutex/condvar; `cyg_mbox_get` returns
+  NULL immediately when empty.
+- **Threads** — descriptors are recorded (entry/data/name) but nothing is ever
+  spawned; the work the firmware's 10 threads did is driven cooperatively from
+  the pump. (`engine_init` never called the firmware's `init_threads`, so no
+  consumer ever blocked on a mailbox/semaphore.)
+- `diag_printf` → `vfprintf(stderr)`. In-memory flash buffer mirrors the native
+  port.
+
+The pthread-backed implementations (real threads, condvar mailboxes, nanosleep
+alarm watchers) remain in the sources behind `#ifndef OCT_AWP` as a
+compile-time-legacy path; the Makefile always defines OCT_AWP.
 
 **HANDLE conflict:** the firmware defines `HANDLE` as 5 (a display mode constant
 in `defs_general.h`). Don't rely on a Win32-style `HANDLE` here.
@@ -365,63 +419,110 @@ in `defs_general.h`). Don't rely on a Win32-style `HANDLE` here.
 ```
 Browser (COOP/COEP/CORP cross-origin isolated)
 ├── Main Thread
-│   ├── Octopus UI (classic panel or modern grid)
+│   ├── bootOctopusEngine() (src/octopus-awp.ts) — creates the shared
+│   │   128 MiB WebAssembly.Memory + fetches octopus_wasm.wasm + brings up
+│   │   the combined worklet node AT STARTUP; holds zero-copy views over the
+│   │   shared heap (processed MIR, status block) and window.__octopus
+│   ├── Octopus UI (classic panel or modern grid) — posts oct_* messages;
+│   │   renders the MIR view at 60 Hz RAF
 │   ├── Drum UI (kit selector, 8 pads × 4 layers, knob strips)
-│   ├── MIR rendering (60Hz RAF → reads WASM heap via HEAPU8)
-│   ├── OB-Xf rack + editor UI (instance selector, knobs, meters, .fxp loader, MIDI-learn)
-│   ├── Single 60Hz MIDI drain loop (RAF) → fans each batch out to:
-│   │   • HardwareMidiOutput  → Web MIDI output port
-│   │   • OB-Xf bridge (obxd-bridge.ts) → AudioWorklet (per-instance)
-│   └── Transport controls + state persistence (Tab cycles 4 views)
-├── WASM Module — Octopus engine  (octopus_wasm.wasm)
-│   ├── Firmware core (~50k lines, unchanged)
-│   ├── hal_wasm.c / midi_wasm.c / main_wasm.c
-└── Web Worker (pthread)
-    └── Sequencer thread (48 PPQN, nanosleep timing)
-
-AudioWorklet — OB-Xf synth  (obxd_wasm.wasm, separate emcc build)
-├── main_obxd.cpp — 10 SynthEngine instances summed + soft-clipped
-│   └── Instance 9 = dedicated drum sampler (32 voices, 8 pads × 4 layers,
-│       PCM sample playback mixed into the OB-Xf filter/amp chain)
-└── PCM sample bank (pcmBank[8][4] in Motherboard.h, float mono samples)
+│   ├── OB-Xf rack + editor UI (instance selector, knobs, meters, .fxp
+│   │   loader, MIDI-learn)
+│   ├── Hardware MIDI out — hw_midi messages from the worklet →
+│   │   attachHwMidiForwarding (midi-output.ts) → Web MIDI port
+│   ├── RAF fallback pump — while the AudioContext is suspended (autoplay
+│   │   policy), posts oct_pump (wall-delta ms) per frame; stops when the
+│   │   context runs, restarts on re-suspend
+│   └── Transport controls + project persistence (Tab cycles 5 views)
+│
+└── AudioWorklet — ONE combined node (obxd-processor.js), TWO WASM modules
+    ├── octopus_wasm.wasm — Octopus sequencer engine (imports the shared
+    │   memory; firmware core ~50k lines unchanged + hal_wasm.c /
+    │   midi_wasm.c / main_wasm.c)
+    │   ├── octopus_pump(128) at the top of every process() quantum —
+    │   │   fires 48-PPQN ticks on a ms accumulator vs g_tick_ns, advances
+    │   │   the cooperative eCos clock/alarms, refreshes processed MIR +
+    │   │   status block at ~60 Hz (15 ms accumulator)
+    │   └── emits firmware MIDI into midi_synth_ring (SPSC, shared memory)
+    ├── obxd_wasm.wasm — OB-Xf synth (separate emcc build)
+    │   ├── main_obxd.cpp — 10 SynthEngine instances summed + soft-clipped
+    │   │   └── Instance 9 = dedicated drum sampler (32 voices, 8 pads ×
+    │   │       4 layers, PCM in the OB-Xf filter/amp chain)
+    │   └── pcmBank[8][4] in Motherboard.h (float mono samples)
+    └── process() order: octopus_pump → synth MIDI ring drain (same quantum
+        as the tick that produced it) → pendingMidi → AWP task queue →
+        obxd_render
 ```
 
-- **pthreads** — the sequencer runs in a Web Worker via Emscripten pthreads.
-  Requires SharedArrayBuffer, which requires COOP/COEP/CORP headers on a secure
-  context (HTTPS or localhost). Both `vite.config.ts` and `serve.py` send these
-  headers; the self-signed certs live in `certs/` (gitignored, regenerate per
-  machine — see README).
-- **Single drain loop, multiple consumers** — one 60Hz RAF in `midi-output.ts`
-  pulls batches from the WASM ring buffer (`wasm_drain_midi_batch`) and feeds
-  hardware MIDI output when the AudioWorklet is NOT running. When the AWP is
-  up, events are forwarded at audio-quantum rate via `hw_midi` messages
-  (tighter timing) and the RAF drain only prevents overflow; the OB-Xf synth
-  reads the SAB ring directly inside the AudioWorklet
-  (`obxd-processor.tail.js`) — it is NOT a drain-loop consumer. Additional
-  consumers plug in via the `BatchDrainHandler` type in `main.ts`.
-- **Direct MIR access** — JS reads the 170-byte MIR array
-  (`unsigned char MIR[2][17][5]`) directly from WASM linear memory via `HEAPU8`.
-  No serialization. `VIEWER_show_MIR()` is a no-op in the WASM build.
-- **OB-Xf in a separate WASM module inside an AudioWorklet** — the synth has
-  its own emcc build (`-sENVIRONMENT=worker`, no pthreads). WASM bytes are
-  pre-fetched on the main thread and passed via `processorOptions.wasmBinary`
-  to sidestep emcc's broken-in-AWP fetch paths.
+- **Sample-driven sequencer pump** — `process()` calls `_octopus_pump(128)` at
+  the top of every render quantum, so a tick's MIDI lands in the synth in the
+  same quantum (tightest timing possible in the app; see "Sequencer timing").
+  While the AudioContext is suspended (autoplay policy before the first
+  gesture), process() does not run; `octopus-awp.ts` runs an RAF loop posting
+  `oct_pump` messages (wall-delta ms, clamped 1–100) so the engine stays alive
+  pre-gesture. The loop stops when the context runs and restarts on re-suspend.
+  The shared `WebAssembly.Memory` still requires SharedArrayBuffer, which
+  requires COOP/COEP/CORP headers on a secure context (HTTPS or localhost).
+  Both `vite.config.ts` and `serve.py` send these headers; the self-signed
+  certs live in `certs/` (gitignored, regenerate per machine — see README).
+- **Hardware MIDI via `hw_midi` only** — the worklet drains the engine's synth
+  MIDI ring inside process() at audio-quantum rate and posts packed batches as
+  `hw_midi` messages; `attachHwMidiForwarding` (midi-output.ts) is the only
+  path to hardware output. The OB-Xf synth reads the same ring in the same
+  quantum (per-instance channel routing applied in the worklet).
+- **Direct MIR access via shared memory** — JS reads the 170-byte processed
+  MIR array (`unsigned char MIR[2][17][5]`) as a `Uint8Array` view over the
+  shared `WebAssembly.Memory`. No serialization, no message passing. The pump
+  refreshes the processed snapshot + status block at ~60 Hz; panels no longer
+  call `_wasm_check_refresh`. `VIEWER_show_MIR()` is a no-op in the WASM build.
+- **Two WASM modules in ONE AudioWorklet** — the synth keeps its own emcc
+  build (`-sENVIRONMENT=worker`, no pthreads); the Octopus engine is a second
+  module over the shared memory. Both glues are concatenated with the
+  processor tail into one classic script (build.sh). WASM bytes are
+  pre-fetched on the main thread and passed via `processorOptions`
+  (`wasmBinary` / `octopusWasmBinary` + `octopusMemory`) to sidestep emcc's
+  broken-in-AWP fetch paths.
 
 ## Exported C functions (`EMSCRIPTEN_KEEPALIVE`)
+
+All Octopus exports are called from the combined worklet's processor tail
+(`obxd-processor.tail.js`), never directly from the JS main thread — the UI
+talks to the engine through `oct_*` port messages (see `src/octopus-awp.ts`):
+`oct_key`, `oct_rotary`, `oct_transport`, `oct_pause`, `oct_tempo`,
+`oct_zoom`, `oct_midi_in`, `oct_pump`, `oct_save_state`, `oct_load_state`,
+`oct_shutdown`, `oct_snapshot` in; `oct_ready` (carrying the
+`mirPtr`/`processedMirPtr`/`statusPtr` byte offsets), `oct_state_saved`
+(internal GRID+PGM saves, with the state bytes), `oct_state_bytes`,
+`oct_state_loaded`, `oct_snapshot` out.
 
 **Octopus engine** (`main_wasm.c`):
 
 Input/state: `engine_init`, `wasm_key_press`, `wasm_rotary`, `wasm_transport`,
 `wasm_set_tempo`, `wasm_set_zoom`, `wasm_pause`, `wasm_shutdown`,
-`wasm_save_state`, `wasm_load_state`.
+`wasm_save_state`, `wasm_load_state` (several of these also refresh the status
+block under `#ifdef OCT_AWP`).
 
 MIR/state out: `get_mir_ptr`, `get_processed_mir_ptr`, `get_run_bit`,
-`get_tempo`, `get_zoom_level`, `page_refresh`, `wasm_get_tick_ns`,
-`wasm_get_sequencer_running`, `wasm_get_tick_count`.
+`get_tempo`, `get_zoom_level`, `page_refresh`, `wasm_check_refresh`,
+`wasm_consume_state_saved`, `wasm_get_tick_ns`, `wasm_get_sequencer_running`,
+`wasm_get_tick_count`.
+
+Pump/status (OCT_AWP): `octopus_pump(sample_delta)` — called once per
+128-sample quantum by `process()` (and per `oct_pump` message while the
+context is suspended); `octopus_set_sample_rate(double)` — pump timebase;
+`get_status_ptr()` — pointer to the shared status block, an `int32[7]` array:
+`[0]` engine_ready, `[1]` run_bit, `[2]` tempo, `[3]` zoom_level, `[4]`
+tick_count, `[5]` midi_dropped, `[6]` midi_synth_dropped, plus an `f64`
+tick_ns at byte offset +32. The pump refreshes it at ~60 Hz (and the mutating
+exports refresh it eagerly).
 
 **Octopus engine** (`midi_wasm.c`): `wasm_has_midi_event`, `wasm_get_midi_event`,
 `wasm_midi_input`, `wasm_drain_midi_batch`, `get_midi_batch_events_ptr`,
-`get_midi_batch_ts_ptr`, `wasm_get_midi_dropped_count`.
+`get_midi_batch_ts_ptr`, `wasm_get_midi_dropped_count` (single-event/batch API
+retained from the pthread build), plus the synth SPSC ring surface the worklet
+drains every quantum: `get_midi_synth_ring_ptr`,
+`get_midi_synth_ring_head_ptr`, `get_midi_synth_ring_tail_ptr`,
+`wasm_get_midi_synth_dropped_count`.
 
 **OB-XD synth** (`wasm/obxd/main_obxd.cpp`): `obxd_init`, `obxd_render`,
 `get_buf_l_ptr` / `get_buf_r_ptr`, `obxd_set_active` / `obxd_get_active`,
@@ -454,13 +555,14 @@ via `apply_param_instance(9, …)`). Instance 9 is the dedicated drum instance
 > `obxd_load_fxp` parses both the legacy OB-Xd integer schema AND the native
 > OB-Xf named-attribute XML schema (`Volume="0.5"` …), plus the `VC2!` wrapper.
 
-The `EMSCRIPTEN_KEEPALIVE` functions are mirrored by the TypeScript interface in
-`src/octopus-types.ts` and must be listed in `-sEXPORTED_FUNCTIONS` in the
-Makefile. **When you add or rename an Octopus export, update all three places**
-(the C definition, `octopus-types.ts`, and the Makefile `EXPORTED_FUNCTIONS`
-list), then rebuild the WASM module. (OB-XD exports are looked up dynamically by
-name in `obxd-audio.ts`, so they don't need to be in the Octopus Makefile's
-`EXPORTED_FUNCTIONS`.)
+The `EMSCRIPTEN_KEEPALIVE` functions must be listed in `-sEXPORTED_FUNCTIONS`
+in the Makefile. **When you add or rename an Octopus export, update both
+places** (the C definition and the Makefile `EXPORTED_FUNCTIONS` list) plus the
+`oct_*` message handler that calls it in `obxd-processor.tail.js`, then rebuild
+the WASM module. (OB-XD exports are looked up dynamically by name in the
+worklet tail, so they don't need to be in the Octopus Makefile's
+`EXPORTED_FUNCTIONS`; `src/octopus-types.ts` no longer mirrors the Octopus
+surface — the controller interface in `src/octopus-awp.ts` replaced it.)
 
 Note: the firmware MIDI input interpreters (`G_midi_interpret_NOTE_ON`,
 `G_midi_interpret_BENDER`, `G_midi_interpret_CONTROL`) are byte-at-a-time state
@@ -471,17 +573,17 @@ sequentially after setting the running status byte.
 
 | File | Role |
 |---|---|
-| `main.ts` | Entry point: SharedArrayBuffer check → load WASM → `engine_init()` → build UI → transport/persistence → hardware MIDI → OB-XD rack → drum module mount. The single 60Hz MIDI drain loop is started before the panel so events flow before any DOM update consumes the frame. Tab key cycles the 5 views (classic → modern → synth → drums → mixer); Shift+Tab reverses. Skips when focus is on a form control (`<input>`/`<select>`/`<textarea>`). |
-| `octopus-types.ts` | TS interface matching the C `EMSCRIPTEN_KEEPALIVE` exports |
-| `octopus-module.ts` | Loads the WASM module (dynamic `<script>`, `locateFile`, IDBFS mount attempt) |
-| `classic-panel.ts` | Faithful port of the Octopus control surface (same DOM/IDs as `web_gui.html`); direct WASM calls instead of WebSocket |
-| `octopus-panel.ts` | Simplified modern grid view (alternative panel) |
+| `main.ts` | Entry point: SharedArrayBuffer check → `bootOctopusEngine()` (creates the shared memory + the combined worklet node) → build UI → transport/persistence → hardware MIDI (`attachHwMidiForwarding` attached before the panel) → OB-XD rack → drum module mount. Tab key cycles the 5 views (classic → modern → synth → drums → mixer); Shift+Tab reverses. Skips when focus is on a form control (`<input>`/`<select>`/`<textarea>`). |
+| `octopus-awp.ts` | Main-thread controller for the engine inside the combined OB-Xf AudioWorklet. `bootOctopusEngine()` creates the shared 128 MiB `WebAssembly.Memory`, fetches `octopus_wasm.wasm`, reads the initial state from the active project (idb-projects), brings up the worklet node via `setupObxdAudio({octopusWasmBinary, octopusMemory, octopusInitialState})`, and exposes `OctopusController` + `window.__octopus`. Holds the zero-copy MIR/status views, the request/reply slots (`saveState`/`loadState`/`snapshot`), the internal-save fan-out, and the RAF fallback pump used while the AudioContext is suspended. |
+| `octopus-types.ts` | Slimmed shared declarations — only the OB-Xf module types remain; the Octopus surface is the `OctopusController` interface in `octopus-awp.ts`. |
+| `classic-panel.ts` | Faithful port of the Octopus control surface (same DOM/IDs as `web_gui.html`); drives the engine through `OctopusController` `oct_*` messages, renders MIR from the shared-memory view at 60 Hz. |
+| `octopus-panel.ts` | Simplified modern grid view (alternative panel); same controller + shared MIR view. |
 | `midi-access.ts` | Shared `openMidiAccess()` + `pollForPorts()` — works around the Chrome-on-Linux late port-enumeration quirk (see MIDI section). |
-| `midi-output.ts` | Web MIDI API **output** (Chrome/Edge); `frameMidi()` emits correct 1/2/3-byte messages; owns the single 60Hz RAF drain loop (`drainMidiToHardware`) that fans batches out to parallel consumers via `BatchDrainHandler`; `rescan()`. |
-| `midi-input.ts` | Web MIDI API **input** (Chrome/Edge); forwards hardware messages to `wasm_midi_input()`; `rescan()`. |
-| `obxd-audio.ts` | Main-thread bootstrap + per-instance API for the OB-XD AudioWorklet (10 SynthEngine instances). Pre-fetches WASM bytes, passes via `processorOptions.wasmBinary`; one-shot reply router for async worklet RPCs. Adds `setObxdInstanceMpe` for per-instance MPE flag mirroring to `g_mpe_enabled[id]`. |
-| `obxd-bridge.ts` | Drain-loop consumer → OB-XD AudioWorklet. Channel→instance routing (default 1–10 → 0–9, reassignable), now MPE-aware via `buildChannelToInstance()` — an instance with MPE enabled claims a lower zone (master + N voice channels) before non-MPE instances fill the remaining channels. Re-exports `BatchDrainHandler`. |
-| `obxd-rack.ts` | OB-XD panel UI: instance selector, power/polyphony/channel, meter (30Hz ping/pong), `.fxp` loader, Reset/Panic/Panic-All. Adds per-instance MPE toggle + bend-range UI. Lazy AudioContext init on first PLAY. |
+| `midi-output.ts` | Web MIDI API **output** (Chrome/Edge); `frameMidi()` emits correct 1/2/3-byte messages. Hardware events arrive only as `hw_midi` batches forwarded from the worklet — `attachHwMidiForwarding()` registers the one handler (small +5 ms forward offset); there is no RAF drain loop any more. `rescan()`. |
+| `midi-input.ts` | Web MIDI API **input** (Chrome/Edge); forwards hardware messages to `ctl.midiInput()` → `oct_midi_in` messages; `rescan()`. |
+| `obxd-audio.ts` | Main-thread bootstrap + per-instance API for the combined OB-Xf/Octopus AudioWorklet. The node is created AT STARTUP by `bootOctopusEngine()`; `setupObxdAudio(octopusAssets?)` is idempotent (later rack calls are no-ops that just re-resume the AudioContext). Pre-fetches both WASM binaries, passes them via `processorOptions` (`wasmBinary` + `octopusWasmBinary`/`octopusMemory`/`octopusInitialState`); `addWorkletMessageListener` registry + one-shot reply router for async worklet RPCs. Adds `setObxdInstanceMpe` for per-instance MPE flag mirroring to `g_mpe_enabled[id]`. |
+| `obxd-bridge.ts` | Channel→instance routing state (default 1–10 → 0–9, reassignable), MPE-aware via `buildChannelToInstance()` — an instance with MPE enabled claims a lower zone (master + N voice channels) before non-MPE instances fill the remaining channels. Pushes the routing table to the worklet via `sendObxdMidiRouting()`; the synth consumes MIDI itself from the shared ring inside process(). |
+| `obxd-rack.ts` | OB-XD panel UI: instance selector, power/polyphony/channel, meter (30Hz ping/pong), `.fxp` loader, Reset/Panic/Panic-All. Adds per-instance MPE toggle + bend-range UI. The worklet node is already up at boot; first PLAY just resumes the suspended AudioContext (autoplay gesture). |
 | `obxd-synth-ui.ts` | Data-driven OB-Xf editor panel (104 parameter-bound controls) rendered from `obxf-layout.ts`; absolute-positioned inside a 1150×576 canvas. Legacy-indexed controls dispatch via `setObxdInstanceParam(idx, v)`; OB-Xf-only controls get a sentinel `200 + canonical ordinal`, assigned NAME-KEYED from the generated `canonicalNewParamOrder` (matches the C engine's dispatch by construction; `RingModVol`→`RingModMix` alias handled). `syncObxdControlsFromEngine(instanceId)` re-seeds widget positions from `g_param_mirror` (legacy) and `g_new_param_mirror` (NEW params) on instance switch / patch load. Exports `newParamSentinel(name)` consumed by drum-rack. |
 | `obxd-knob.ts` | Vanilla SVG widget factories (no deps): `createObxdKnob`, `createObxdToggle`, `createTriStateButton`, `createSelector`, `createSlider`, `createButton`. Drag/wheel/double-click (reset) on knobs; bipolar knobs supported. |
 | `obxf-layout.ts` | OB-Xf editor UI layout spec — read-only data module auto-extracted from the OB-Xf source tree (theme.xml + `ObxfEditorLayout.cpp` + `SynthParam.h` + `ParameterList.h`). 173 `ControlSpec` entries (104 parameter-bound + 69 special widgets) across 13 sections, plus `obxfTheme` color tokens and the 1150×576 canvas geometry. See the file header for the explorer provenance + "do not edit by hand" warning. |
@@ -493,10 +595,10 @@ sequentially after setting the running status byte.
 | `obxf-popup.ts` | OB-Xf-themed popup menu singleton — one reusable DOM element in `document.body` (visual tokens from OB-Xf `LookAndFeel.h`) that renders parameter selectors, knob context menus, and the main menu. |
 | `patch-catalog.ts` | AUTO-GENERATED by build.sh from wasm/obxd/patches/*.fxp — the factory-patch name+category catalog the UI patch browser renders at module load. |
 | `mixer.ts` | 10-channel-strip mixer view. Vertical faders drive the legacy VOLUME param (idx 2) via `setObxdInstanceParam`; VU meters read the 30Hz RMS array from `getObxdInstanceMeters()`; master fader + AnalyserNode VU via `setObxdMasterGain`/`getObxdMasterLevel`. Exports `createVuMeter` (reused by drum-rack). |
-| `obxd-processor.tail.js` | Plain JS appended to emcc output to form `obxd-processor.js` for `audioWorklet.addModule()`. Subclasses `AudioWorkletProcessor`. Heavy messages (fxp load, factory patch, PCM load/clear, bulk restores) run through the deferred AWP task queue (`awp-task-queue.js`), budgeted per 128-sample quantum by `process()`. |
+| `obxd-processor.tail.js` | Plain JS appended to the emcc output(s) to form `obxd-processor.js` for `audioWorklet.addModule()`. Subclasses `AudioWorkletProcessor`. `ensureOctopus()` boots the Octopus engine in this same worklet against the shared memory; `process()` calls `_octopus_pump(128)` FIRST, then drains the synth MIDI ring (same quantum), pendingMidi, the deferred AWP task queue, and finally `obxd_render`. Hosts the `oct_*` message handlers. Heavy messages (fxp load, factory patch, PCM load/clear, bulk restores, oct_save_state/oct_load_state) run through the task queue (`awp-task-queue.js`), budgeted per 128-sample quantum. |
 | `obxd-awp-shim.js` | Plain JS prepended to emcc output; polyfills `self`/`location`/`fetch`/`performance` for AudioWorkletGlobalScope. |
-| `transport-sync.ts` | Wires PLAY/STOP/BPM to the Octopus engine + transport indicator. |
-| `state-persistence.ts` | Octopus sequencer state save/load via IDBFS (Emscripten's IndexedDB FS). SAVE triggers `_wasm_save_state` → MEMFS + `FS.syncfs(false)` → IDBFS. Shift+SAVE also downloads .bin + JSON. LOAD imports .bin files. Shift+LOAD clears IDBFS + app state. Project payloads (binary + app-state JSON) now live in IndexedDB via `idb-projects.ts`; localStorage holds only the index and active-project name. |
+| `transport-sync.ts` | Wires PLAY/STOP/BPM to the Octopus engine (controller `oct_*` messages) + transport indicator; seeds the tempo display from the shared status block. |
+| `state-persistence.ts` | Octopus sequencer state save/load as BYTES through the worklet (`ctl.saveState()`/`ctl.loadState()`), stored in the octobx projects IndexedDB (idb-projects.ts); localStorage holds only the project index + active name. Internal GRID+PGM saves arrive as `oct_state_saved` bytes → `onStateSavedBytes` (auto-save + download). LOAD imports .bin files via `ctl.loadState()`. Shift+LOAD purges legacy `EM_FS_*` IDBFS leftovers + app state. Boot auto-load comes from the active project inside `bootOctopusEngine()`. |
 | `idb-projects.ts` | Raw IndexedDB wrapper for project storage (db `octobx`, store `projects`). Projects moved out of localStorage to avoid the ~5MB base64 quota; localStorage keeps only the project index + active name. `migrateLegacyProjects()` does the one-time move. |
 | `app-state.ts` | Synth + drum state persistence. Dumps all synth (10×108) and drum (8×4×108) params from the AWP in bulk, plus per-instance settings and drum kit, to localStorage JSON (schema v2). Restores after AWP ready via `onAWPReady`: kit load → ONE `restoreAllSynthAndDrumState` (the engine-owned staged restore) → per-instance settings + routing. `migrateParamsV1ToV2` migrates pre-canonical saves using the frozen `tools/new-param-order-v1.json`. |
 | `drum-rack.ts` | Drum module UI: kit selector, 8 pads × 4 layers with dual sample-kit + sample dropdowns (cross-kit sample mixing via `DrumLayer.sourceUrl` + `SAMPLE_CATALOG`), mute/enable toggles, and per-layer knob strips (48 controls: 8 global + 40 per-layer). SVG arc knobs with iOS-style toggle pills and tri-state LFO-routing pills. Layer section has Gain/Pan/Pitch knobs with custom dispatch (bypass `g_drum_layer_params`, update `DrumLayer` TS object + `pushLayer` → `set_pcm_layer`). `syncEditor`/`syncKnobStrips` re-seed knob positions from the worklet mirror on pad/layer switch. |
@@ -504,9 +606,9 @@ sequentially after setting the running status byte.
 | `drum-state.ts` | Pure data layer: `DrumLayer` / `DrumPad` / `DrumKit` interfaces + factory functions. No project dependencies. `DrumLayer` fields: enabled, sampleName, sourceUrl (optional — when set, sample loads from this URL prefix instead of the loaded kit's source; enables cross-kit sample mixing), gain, filterCutoff/Resonance/Mode, amp ADSR, pan, pitch (0..1, 0.5=original), muted, `_seeded` flag. |
 | `drum-kits.ts` | 10 drum-kit presets sourced from the Public Domain smpldsnds CDN. Each kit maps its samples onto 8 GM pads (Kick, Snare, Closed HH, Open HH, Tom Lo, Clap, Cowbell, Ride). Secondary layers get `gain: 0.55, filterCutoff: 0.8` (quieter + darker than primary `0.85 / 1.0`). Closed HH + Open HH share choke group 0. Also exports `SAMPLE_CATALOG` (one entry per kit with deduped sample list + source URL) that drives the layer-editor dual dropdown UI for cross-kit sample mixing. |
 
-Input conventions: `skey(key, press)` → `module._wasm_key_press(key, press)`;
-rotary knobs → `module._wasm_rotary(idx, dir)`; drag-paint step pads
-(mouse + touch); Ctrl-click hold mode.
+Input conventions: `skey(key, press)` → `ctl.key()` → `oct_key` message →
+`_wasm_key_press`; rotary knobs → `ctl.rotary()` → `oct_rotary`; drag-paint
+step pads (mouse + touch); Ctrl-click hold mode.
 
 ## MIDI (hardware I/O)
 
@@ -514,23 +616,28 @@ Real MIDI is a first-class feature, wired through the Web MIDI API (Chrome/Edge
 only). Two independent directions, plus the OB-XD bridge fan-out and the MIDI-learn
 overlay:
 
-- **Output** (`midi-output.ts`) — `drainMidiToHardware()` is a 60Hz RAF loop that
-  pulls 32-bit packed events from the WASM ring buffer and sends them to the
-  selected Web MIDI output port. **Framing matters**: `frameMidi()` emits 1-byte
-  system real-time (clock `0xF8`, start `0xFA`, stop `0xFC`), 2-byte (program
-  change `0xC0` / channel pressure `0xD0`), and 3-byte channel voice. Sending the
-  wrong length corrupts the stream to hardware synths.
+- **Output** (`midi-output.ts`) — hardware events arrive ONLY as `hw_midi`
+  batches the worklet posts each quantum while draining the synth ring;
+  `attachHwMidiForwarding()` registers the single handler that frames and
+  sends them to the selected Web MIDI output port. **Framing matters**:
+  `frameMidi()` emits 1-byte system real-time (clock `0xF8`, start `0xFA`,
+  stop `0xFC`), 2-byte (program change `0xC0` / channel pressure `0xD0`), and
+  3-byte channel voice. Sending the wrong length corrupts the stream to
+  hardware synths.
 - **Input** (`midi-input.ts`) — `HardwareMidiInput` attaches `onmidimessage` to the
-  selected input port and forwards `(status, d1, d2)` to `wasm_midi_input()`,
-  which drives the firmware's `G_midi_interpret_*` byte-at-a-time interpreters.
+  selected input port and forwards `(status, d1, d2)` to `ctl.midiInput()`
+  (`oct_midi_in` messages → `_wasm_midi_input`), which drives the firmware's
+  `G_midi_interpret_*` byte-at-a-time interpreters.
   Sysex / active-sensing / tune-request are dropped. The browser decodes
   running-status, so every message arrives with an explicit status byte. CCs are
   also fed to `processHardwareCC()` (MIDI-learn) *before* forwarding — see below.
-- **OB-XD bridge** (`obxd-bridge.ts`) — same drain loop, fans out to the
-  AudioWorklet synth by channel → instance routing. Non-MPE: default 1–10 → 0–9;
-  MPE-aware: an instance with MPE enabled claims a lower zone (master + N voice
-  channels) via `buildChannelToInstance()` before non-MPE instances fill the rest.
-  No-ops while the synth is unpowered / not yet booted.
+- **OB-Xf synth routing** (`obxd-bridge.ts`) — the synth is NOT a main-thread
+  consumer: the worklet drains the engine's synth SAB ring inside process()
+  (same quantum as the pump that produced it) and dispatches per channel via
+  the routing table `obxd-bridge.ts` pushes (`sendObxdMidiRouting()`).
+  Non-MPE: default 1–10 → 0–9; MPE-aware: an instance with MPE enabled claims
+  a lower zone (master + N voice channels) via `buildChannelToInstance()`
+  before non-MPE instances fill the rest.
 
 **MIDI learn** (OB-Xf port) — `obxf-midi-learn.ts` is a standalone port of the
 OB-Xf `MidiHandler`/`MidiMap` state machine; `obxf-midi-learn-integration.ts` is
@@ -575,21 +682,31 @@ UI selectors: `#oct-midi-output`, `#oct-midi-input`, `#oct-midi-rescan`
 (17 per set, 2 sets) is 5 bytes: byte 0 = blink/selector flags, byte 1 = red LED
 bits (8 columns), byte 2 = green LED bits, bytes 3–4 = additional flags.
 
-JS access: `const mb = (s, r, c) => mir[s * 85 + r * 5 + c];` LED color values:
+JS reads the processed snapshot as a `Uint8Array` view over the shared
+`WebAssembly.Memory` (handed over as `processedMirPtr` in the worklet's
+`oct_ready` message); the pump refreshes it at ~60 Hz:
+`const mb = (s, r, c) => mir[s * 85 + r * 5 + c];` LED color values:
 0 = off, 2 = red, 4 = green, 6 = amber.
 
 ## Sequencer timing
 
-48 PPQN. At 120 BPM one tick ≈ 10.4 ms (`g_tick_ns = 10416667`). The sequencer
-pthread uses relative `nanosleep` (Emscripten implements via `Atomics.wait`,
-~1 ms resolution). No busy-wait.
+48 PPQN, sample-driven. `octopus_pump()` converts each render quantum to
+milliseconds (via `octopus_set_sample_rate`) and accumulates against
+`g_tick_ns`; at 120 BPM one tick ≈ 10.4 ms (`g_tick_ns = 10416667`). At 48 kHz
+a 128-sample quantum is ~2.67 ms, so a tick fires roughly every 4 quanta. A
+backlog guard caps catch-up at 8 ticks per pump, skips the remainder, and logs
+rate-limited (once per 10 s). No `Atomics.wait`/nanosleep, no sequencer thread,
+and no background-tab stalls while the context runs (audio render is exempt
+from tab throttling); while the context is suspended the RAF fallback pump
+keeps the engine alive at display rate.
 
 ## C language and compiler flags
 
 Standard: **gnu89** (not C99+). Many warnings suppressed in the Makefile:
 `-Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
 -Wno-implicit-int -Wno-int-conversion`. Cross-variant via `-DNEMO`. Cross-platform
-via the `__linux__` / `__EMSCRIPTEN__` defines.
+via the `__linux__` / `__EMSCRIPTEN__` defines; the AudioWorklet build mode via
+`OCT_AWP`.
 
 ## Production deployment (supervisord, front.vyidd.com)
 
@@ -633,10 +750,13 @@ staged restore, audio smoke). Run it after any `main_obxd.cpp` /
 engine WASM in headless Chromium (system `/usr/bin/chromium` + `playwright-core`), serving
 `dist/` with COOP/COEP and asserting 10 manual-grounded behaviors ported from the native
 Octopus repo's `tests/test_manual.py`: page-selection toggle, transport start/stop +
-pause/continue, the four zoom indicators, record arm, state save, and tempo responsiveness. LED
-assertions use blink-safe window-OR captures of the 170-byte MIR read from the WASM heap. Prereqs:
-`dist/` built and current (`./build.sh app`) and `playwright-core` installed; run it after
-any `main_wasm.c` or firmware change. (The native suite's 11th test, name-based OSC dispatch,
+pause/continue, the four zoom indicators, record arm, state save, and tempo responsiveness.
+Since the engine moved into the worklet, the harness drives it through the
+`window.__octopus` controller (`oct_*` messages) and reads the processed MIR / status
+block from the shared memory (autoplay-muted context; the RAF fallback pump or an
+autoplay flag keeps the engine ticking). Prereqs: `dist/` built and current
+(`./build.sh app`) and `playwright-core` installed; run it after any `main_wasm.c` or
+firmware change. (The native suite's 11th test, name-based OSC dispatch,
 is N/A — OctOBX has no OSC surface.)
 
 **Manual:** build the WASM modules, run the dev server, and verify in the
@@ -646,17 +766,21 @@ browser console:
 - MIDI events appear in the ring buffer
   (`wasm_get_midi_dropped_count()` stays at 0 under normal load).
 - Hardware MIDI output via Web MIDI (Chrome/Edge) reaches a synth.
-- Hardware MIDI input drives the sequencer (controller → `wasm_midi_input`
+- Hardware MIDI input drives the sequencer (controller → `ctl.midiInput()`
   → `G_midi_interpret_*`).
-- OB-Xf: clicking PLAY brings up the AudioWorklet, Octopus channels 1–10
-  drive the 10 instances, switching the instance selector re-syncs knob
-  positions, loading a `.fxp` changes one instance's sound only.
+- OB-Xf: the worklet is up from page load; PLAY resumes the suspended
+  AudioContext, Octopus channels 1–10 drive the 10 instances, switching the
+  instance selector re-syncs knob positions, loading a `.fxp` changes one
+  instance's sound only.
 
 ## Known issues
 
-1. **IDBFS** — fixed. Was accessing `module.IDBFS` (undefined — not in
-   `EXPORTED_RUNTIME_METHODS`) instead of `FS.filesystems.IDBFS`. Now
-   mounts IDBFS at `/persistent/` and persists automatically.
+1. **IDBFS — removed.** The Octopus engine no longer mounts Emscripten's
+   IDBFS (there is no `indexedDB` inside AudioWorkletGlobalScope). Engine
+   state is saved/loaded as bytes through the worklet
+   (`ctl.saveState()`/`ctl.loadState()`) and stored in the octobx projects
+   IndexedDB (idb-projects.ts); boot auto-load comes from the active project.
+   Shift+LOAD still purges legacy `EM_FS_*` IDBFS leftovers from older builds.
 2. **OB-Xf factory patches now ship** — 10 CC0/Public Domain OB-Xf presets
    live in `wasm/obxd/patches/` (`01_pad.fxp` … `10_kick.fxp`), sourced from
    the Surge Synth Team OB-Xf factory library. `build.sh synth` runs `xxd -i`
@@ -681,9 +805,9 @@ browser console:
    (10 tests: transport, zoom indicators, page-selection toggle, record
    arm, state save, tempo — ported from the native Octopus repo's
    `tests/test_manual.py`; name-based OSC dispatch N/A — no OSC surface).
-   Still manual-only (see `MANUAL_TEST_PLAN.md`): drum audio, Web MIDI
-   hardware I/O, IDBFS save/reload round-trip, and the AudioWorklet
-   integration paths.
+    Still manual-only (see `MANUAL_TEST_PLAN.md`): drum audio, Web MIDI
+    hardware I/O, project save/reload round-trip, and the AudioWorklet
+    integration paths.
 
 ## License
 

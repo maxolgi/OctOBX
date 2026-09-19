@@ -3,7 +3,11 @@
  *
  * Replaces main_linux.c for the Emscripten build. No blocking main() loop —
  * JavaScript drives initialization via engine_init() and calls exported
- * functions for key/rotary/transport input. The sequencer runs in a pthread.
+ * functions for key/rotary/transport input. By default the sequencer runs
+ * in a pthread. Under OCT_AWP the engine instead lives on the single audio
+ * thread of an AudioWorklet: no pthread exists, and the sequencer is driven
+ * sample-block by sample-block via octopus_pump(), called once per 128-sample
+ * quantum.
  */
 
 /* Pull in the entire firmware — same include chain as main_linux.c */
@@ -27,18 +31,22 @@
 /* ============================================================ */
 
 static volatile int sequencer_running = 0;
-static pthread_t sequencer_pthread;
 volatile long g_tick_ns = 0;
 volatile int g_seq_tick_count = 0;
+
+#ifndef OCT_AWP
+static pthread_t sequencer_pthread;
 
 /* Late-recovery log aggregation (see sequencer_thread_func) */
 static long late_log_pending = 0;
 static long late_log_last_ms = 0;
+#endif
 
 /* Set to 1 when the firmware's internal save (GRID+PGM) writes to MEMFS.
  * JS polls this after each key press to trigger a browser download. */
 static volatile int g_state_saved = 0;
 
+#ifndef OCT_AWP
 static void *sequencer_thread_func(void *arg) {
     (void)arg;
 
@@ -150,6 +158,7 @@ static void start_sequencer_thread(void) {
     sequencer_running = 1;
     pthread_create(&sequencer_pthread, NULL, sequencer_thread_func, NULL);
 }
+#endif /* !OCT_AWP */
 
 /* ============================================================ */
 /* VIEWER_show_MIR — replaces firmware's hardware version        */
@@ -306,6 +315,156 @@ static void handle_key_press(int keyNdx, int press) {
     }
 }
 
+#ifdef OCT_AWP
+/* ============================================================ */
+/* AudioWorklet pump mode (OCT_AWP)                             */
+/*                                                              */
+/* No sequencer pthread: the engine runs on the single audio    */
+/* thread inside the AudioWorklet, and the worklet's process()  */
+/* loop calls octopus_pump(sample_delta) once per audio         */
+/* quantum. The pump advances the cooperative eCos clock, runs  */
+/* due sequencer ticks, and refreshes the shared-memory UI      */
+/* snapshot (processed_mir + status block) for the JS main      */
+/* thread, which never calls into the engine directly.         */
+/* ============================================================ */
+
+static double g_sample_rate = 48000.0;
+static double g_tick_acc = 0.0;       /* fractional tick carry, in ms */
+static double g_refresh_acc = 0.0;    /* UI refresh accumulator, in ms */
+static int engine_ready = 0;
+
+/* Status block (shared-memory readable by the JS main thread).
+ * Fixed layout: 7 int32 followed by one double at byte offset 32. */
+typedef struct {
+    int32_t engine_ready;
+    int32_t run_bit;
+    int32_t tempo;
+    int32_t zoom_level;
+    int32_t tick_count;
+    int32_t midi_dropped;
+    int32_t midi_synth_dropped;
+    double  tick_ns;                  /* offset 32 */
+} oct_status_t;
+static oct_status_t g_oct_status;
+
+/* Plain C dropped-counter accessors owned by midi_wasm.c */
+extern unsigned int midi_get_dropped_count(void);
+extern unsigned int midi_get_synth_dropped_count(void);
+
+/* Defined further down (next to the processed_mir buffer / the
+ * dirty-checked refresh export). */
+static void oct_update_processed_mir(void);
+int wasm_check_refresh(void);
+
+static void oct_status_update(void) {
+    g_oct_status.engine_ready = engine_ready;
+    g_oct_status.run_bit = G_run_bit;
+    g_oct_status.tempo = G_master_tempo;
+    g_oct_status.zoom_level = G_zoom_level;
+    g_oct_status.tick_count = g_seq_tick_count;
+    g_oct_status.midi_dropped = (int32_t)midi_get_dropped_count();
+    g_oct_status.midi_synth_dropped = (int32_t)midi_get_synth_dropped_count();
+    g_oct_status.tick_ns = (double)g_tick_ns;
+}
+
+int32_t* EMSCRIPTEN_KEEPALIVE get_status_ptr(void) {
+    return (int32_t*)&g_oct_status;
+}
+
+void EMSCRIPTEN_KEEPALIVE octopus_set_sample_rate(double rate) {
+    if (rate < 8000.0) rate = 8000.0;
+    if (rate > 384000.0) rate = 384000.0;
+    g_sample_rate = rate;
+}
+
+void EMSCRIPTEN_KEEPALIVE octopus_pump(int sample_delta) {
+    static long late_log_pending = 0;
+    static long late_log_last_ms = 0;
+    double ms;
+    double period_ms;
+    int fired;
+
+    if (!engine_ready) return;
+
+    if (sample_delta < 1) sample_delta = 1;
+    if (sample_delta > 100000) sample_delta = 100000;
+    ms = (double)sample_delta * 1000.0 / g_sample_rate;
+
+    /* Advance the cooperative eCos clock — fires due alarms */
+    hal_advance_clock(ms);
+
+    /* Sequencer ticks */
+    g_tick_acc += ms;
+    period_ms = (double)g_tick_ns / 1e6;
+
+    fired = 0;
+    if (period_ms > 0.0) {
+        while (g_tick_acc >= period_ms && fired < 8) {
+            g_tick_acc -= period_ms;
+            fired++;
+
+            g_seq_tick_count++;
+
+            /* Send MIDI clock BEFORE acquiring the scheduler lock.
+             *
+             * Gated on G_run_bit: without the gate the internal clock generator
+             * streams 0xF8 at 48/sec while the transport is STOPPED (the tick
+             * source ticks at 48 PPQN regardless). That floods the synth SAB ring —
+             * which has no consumer until the AudioWorklet boots on first PLAY —
+             * producing the "Synth MIDI ring (AWP) dropped" spam, and would send
+             * a 48Hz clock stream to a selected hardware MIDI output while idle.
+             * Per MIDI spec, clock only streams between Start and Stop. */
+            if (G_run_bit) {
+                unsigned char next_ttc = (G_TTC_abs_value % 12) + 1;
+                if (next_ttc % 2 == 1) {
+                    if (G_clock_source == INT ||
+                        (G_clock_source == EXT && MIDICLOCK_PASSTHROUGH == TRUE)) {
+                        MIDI_send(MIDI_CLOCK, MIDICLOCK_CLOCK, 0, 0);
+                    }
+                }
+            }
+
+            cyg_scheduler_lock();
+            driveSequencer();
+            cyg_scheduler_unlock();
+        }
+    }
+
+    /* Guard tripped with backlog remaining — drop the backlog (no
+     * machine-gun catch-up ticks through the MIDI ring), reset the
+     * carry, and say so rate-limited (one line per 10 s max). */
+    if (fired >= 8 && g_tick_acc >= period_ms) {
+        long skipped = 0;
+        struct timespec now;
+        long now_ms;
+
+        while (g_tick_acc >= period_ms) {
+            g_tick_acc -= period_ms;
+            skipped++;
+        }
+        g_tick_acc = 0.0;
+
+        late_log_pending += skipped;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        now_ms = now.tv_sec * 1000L + now.tv_nsec / 1000000L;
+        if (late_log_last_ms == 0 || now_ms - late_log_last_ms >= 10000) {
+            fprintf(stderr, "sequencer: late tick(s) skipped: %ld\n", late_log_pending);
+            late_log_pending = 0;
+            late_log_last_ms = now_ms;
+        }
+    }
+
+    /* UI refresh at ~60 Hz */
+    g_refresh_acc += ms;
+    if (g_refresh_acc >= 15.0) {
+        g_refresh_acc = 0.0;
+        wasm_check_refresh();
+        oct_update_processed_mir();
+        oct_status_update();
+    }
+}
+#endif /* OCT_AWP */
+
 /* ============================================================ */
 /* Exported API — called from JavaScript                        */
 /* ============================================================ */
@@ -365,9 +524,23 @@ int EMSCRIPTEN_KEEPALIVE engine_init(void) {
      * interacts (e.g. pressing ESC). */
     Page_requestRefresh();
 
+#ifdef OCT_AWP
+    /* AWP mode: no sequencer pthread — the AudioWorklet drives the engine
+     * via octopus_pump() once per 128-sample quantum. sequencer_running
+     * doubles as "engine initialized" for wasm_get_sequencer_running().
+     * (The load_state() above is expected to find nothing: the worklet's
+     * MEMFS is empty at boot; the JS layer writes the state bytes and
+     * calls wasm_load_state() right after engine_init.) */
+    sequencer_running = 1;
+    engine_ready = 1;
+    g_tick_acc = 0.0;
+    g_refresh_acc = 0.0;
+    oct_status_update();
+#else
     /* Start the sequencer thread (G_run_bit stays 0 until the user
      * presses PLAY — don't auto-start playback on page load). */
     start_sequencer_thread();
+#endif
 
     return 0;
 }
@@ -376,6 +549,9 @@ void EMSCRIPTEN_KEEPALIVE wasm_key_press(int keyNdx, int press) {
     cyg_scheduler_lock();
     handle_key_press(keyNdx, press);
     cyg_scheduler_unlock();
+#ifdef OCT_AWP
+    oct_status_update();
+#endif
 }
 
 void EMSCRIPTEN_KEEPALIVE wasm_rotary(int rotNdx, int dir) {
@@ -392,6 +568,9 @@ void EMSCRIPTEN_KEEPALIVE wasm_transport(int running) {
         sequencer_STOP(true);
     }
     cyg_scheduler_unlock();
+#ifdef OCT_AWP
+    oct_status_update();
+#endif
 }
 
 void EMSCRIPTEN_KEEPALIVE wasm_set_tempo(int bpm) {
@@ -401,6 +580,9 @@ void EMSCRIPTEN_KEEPALIVE wasm_set_tempo(int bpm) {
         G_TIMER_REFILL_update();
         cyg_scheduler_unlock();
     }
+#ifdef OCT_AWP
+    oct_status_update();
+#endif
 }
 
 void EMSCRIPTEN_KEEPALIVE wasm_pause(void) {
@@ -408,6 +590,9 @@ void EMSCRIPTEN_KEEPALIVE wasm_pause(void) {
     if (G_run_bit) sequencer_HALT();
     else sequencer_UNHALT();
     cyg_scheduler_unlock();
+#ifdef OCT_AWP
+    oct_status_update();
+#endif
 }
 
 /* MIR access — returns pointer into WASM linear memory */
@@ -418,7 +603,10 @@ unsigned char* EMSCRIPTEN_KEEPALIVE get_mir_ptr(void) {
 /* Processed MIR buffer with blink applied (170 bytes) */
 static unsigned char processed_mir[170];
 
-unsigned char* EMSCRIPTEN_KEEPALIVE get_processed_mir_ptr(void) {
+/* Refresh the processed MIR snapshot (memcpy + blink mask). In AWP mode
+ * the pump keeps this fresh so the JS main thread can read the static
+ * buffer directly from shared memory. */
+static void oct_update_processed_mir(void) {
     memcpy(processed_mir, MIR, sizeof(MIR));
 
     if (G_master_blinker == 0) {
@@ -431,6 +619,10 @@ unsigned char* EMSCRIPTEN_KEEPALIVE get_processed_mir_ptr(void) {
             }
         }
     }
+}
+
+unsigned char* EMSCRIPTEN_KEEPALIVE get_processed_mir_ptr(void) {
+    oct_update_processed_mir();
     return processed_mir;
 }
 
@@ -456,6 +648,9 @@ void EMSCRIPTEN_KEEPALIVE wasm_set_zoom(int level) {
     G_zoom_level = level;
     Page_requestRefresh();
     cyg_scheduler_unlock();
+#ifdef OCT_AWP
+    oct_status_update();
+#endif
 }
 
 /* Page refresh — called from JS at ~60Hz via requestAnimationFrame.
@@ -533,8 +728,9 @@ void EMSCRIPTEN_KEEPALIVE wasm_save_state(void) {
 }
 
 void EMSCRIPTEN_KEEPALIVE wasm_load_state(void) {
-    /* Hold the scheduler lock for the entire load so the sequencer
-     * pthread can't read Page/Track/Step repositories mid-overwrite. */
+    /* Hold the scheduler lock for the entire load so no concurrent
+     * reader (the sequencer pthread in non-AWP builds) can read
+     * Page/Track/Step repositories mid-overwrite. */
     cyg_scheduler_lock();
     load_state("/persistent/octopus_state.bin");
 
@@ -554,6 +750,9 @@ void EMSCRIPTEN_KEEPALIVE wasm_load_state(void) {
     G_TIMER_REFILL_update();
     Page_requestRefresh();
     cyg_scheduler_unlock();
+#ifdef OCT_AWP
+    oct_status_update();
+#endif
 }
 
 /* Returns 1 if the firmware's internal save (GRID+PGM) wrote to MEMFS
@@ -567,8 +766,13 @@ int EMSCRIPTEN_KEEPALIVE wasm_consume_state_saved(void) {
 
 /* Sequencer running state for JS cleanup */
 void EMSCRIPTEN_KEEPALIVE wasm_shutdown(void) {
+#ifdef OCT_AWP
+    sequencer_STOP(true);
+    sequencer_running = 0;
+#else
     sequencer_running = 0;
     sequencer_STOP(true);
+#endif
 }
 
 long EMSCRIPTEN_KEEPALIVE wasm_get_tick_ns(void) {

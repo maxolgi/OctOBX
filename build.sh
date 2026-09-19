@@ -232,12 +232,20 @@ case "${1:-all}" in
         # synthesizing a minimal location lets the emcc output run unchanged.
         #
         # Splice the AWP task queue between the emcc output and the processor
-        # tail (shim -> emcc JS -> restore layout -> task queue -> tail): the
-        # tail references the AwpTaskQueue binding AND the generated
-        # restore-layout consts, and everything ships as one classic
-        # script, so both must ride along in the same concatenation.
+        # tail (shim -> octopus emcc JS -> obxd emcc JS -> restore layout ->
+        # task queue -> tail): the tail references the AwpTaskQueue binding
+        # AND the generated restore-layout consts, and everything ships as
+        # one classic script, so both must ride along in the same
+        # concatenation.
+        #
+        # The Octopus engine glue (wasm/build/octopus_wasm.js, MODULARIZE'd
+        # with EXPORT_NAME=OctopusModuleFactory) is concatenated in ahead of
+        # the obxd emcc output, so the combined worklet script defines
+        # OctopusModuleFactory alongside ObxdModuleFactory — the sequencer
+        # engine boots inside the SAME AudioWorklet as the synth (see
+        # ensureOctopus in src/obxd-processor.tail.js).
         cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
-        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
+        cat wasm/build/_awp_shim.js wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
         rm wasm/build/_awp_shim.js
         echo "=== Synth build complete ==="
         echo "Output: wasm/build/obxd_wasm.{js,wasm} + wasm/build/obxd-processor.js (combined)"
@@ -270,8 +278,11 @@ case "${1:-all}" in
         # `synth` case above (same step, shared outputs + --check gate).
         node tools/gen-param-table.mjs
         make -C wasm/obxd -f Makefile
+        # Combined worklet concatenation — same layout as the `synth` case
+        # above: the octopus glue (OctopusModuleFactory) rides in ahead of
+        # the obxd glue so ensureOctopus can boot the sequencer in-worklet.
         cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
-        cat wasm/build/_awp_shim.js wasm/build/obxd_wasm.js src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
+        cat wasm/build/_awp_shim.js wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
         rm wasm/build/_awp_shim.js
         echo ""
         echo "=== Building OctOBX TypeScript app ==="

@@ -1,45 +1,23 @@
 /*
- * midi-output.ts — Web MIDI API output for hardware synthesizers and the
- * single 60Hz RAF drain loop that owns WASM ring-buffer access.
+ * midi-output.ts — Web MIDI API output for hardware synthesizers.
  *
- * Drains the Octopus engine's MIDI ring buffer in batches (up to 128 events
- * per frame) and fans each batch out to whatever consumers are attached
- * via the `onBatchDrained` callback. Today the only consumer is the OB-Xf
- * synth bridge (`obxd-bridge.ts`); earlier revisions also routed to an
- * openDAW NoteSignal bridge — openDAW has since been removed.
+ * Hardware MIDI events now only arrive as `hw_midi` messages posted by
+ * the combined AudioWorklet (the engine's MIDI ring is drained inside
+ * process() at audio-quantum rate). attachHwMidiForwarding() wires the
+ * worklet's forwarded batches into a HardwareMidiOutput.
  */
 
-import type { OctopusWasmModule } from "./octopus-types";
 import { openMidiAccess, pollForPorts } from "./midi-access";
-import { isObxdReady, setHwMidiHandler } from "./obxd-audio";
-import { frameMidi, normalizeMidiTimestamp } from "./midi-framing";
+import { setHwMidiHandler } from "./obxd-audio";
+import { frameMidi } from "./midi-framing";
 
 /*
- * Handler invoked once per frame with the batch of events drained from the
- * WASM ring buffer. `events` and `timestamps` are direct typed-array views
- * into WASM linear memory (or static batch buffers in the case of events);
- * consumers MUST copy any data they need to retain past the handler return.
+ * Forward offset added to the worklet's post time before passing each
+ * event to MIDIOutput.send(data, ts). The worklet forwards at
+ * audio-quantum rate (~2.9ms), so a small 5ms head start keeps events
+ * ahead of "now" for the browser's MIDI scheduler while preserving the
+ * sequencer's inter-event timing with near-zero jitter.
  */
-export type BatchDrainHandler = (
-    events: Uint32Array,
-    timestamps: Float64Array,
-    count: number,
-) => void;
-
-/*
- * Forward offset added to each event's push-time timestamp before passing
- * it to MIDIOutput.send(data, ts). This shifts all events into the future
- * so the browser's high-priority MIDI scheduler can deliver them with
- * correct relative spacing even though they were drained in a batch.
- *
- * At 60Hz RAF, the drain interval is ~16.67ms. A 20ms offset ensures
- * even the oldest event in a batch is still slightly ahead of "now",
- * preserving the sequencer's intended inter-event timing.
- *
- * Trade-off: events arrive ~20ms after generation, but with near-zero
- * jitter instead of up to ±16.67ms of batch jitter.
- */
-const MIDI_FORWARD_OFFSET_MS = 20;
 const HW_FORWARD_OFFSET_AWP_MS = 5;
 
 export class HardwareMidiOutput {
@@ -131,105 +109,17 @@ export class HardwareMidiOutput {
     }
 }
 
-export function drainMidiToHardware(
-    module: OctopusWasmModule,
-    output: HardwareMidiOutput,
-    onBatchDrained?: (events: Uint32Array, timestamps: Float64Array, count: number) => void,
-): () => void {
-    let running = true;
-    let eventsPtr = 0;
-    let tsPtr = 0;
-    let prevDropped = 0;
-    let prevSynthDropped = 0;
-    let frameSinceCheck = 0;
-
-    /*
-     * Epoch offset: emscripten_get_now() in the sequencer worker may return
-     * Date.now()-based epoch ms (~1.78T) or performance.now()-epoch ms,
-     * depending on platform. normalizeMidiTimestamp() detects the epoch by
-     * magnitude (values > 1e9 get EPOCH_OFFSET subtracted), then sanity-
-     * clamps the result to [now-50, now+5000] ms — if a timestamp lands
-     * outside that window (clock drift, epoch flip), it falls back to
-     * now + forward offset so delivery stays self-healing instead of
-     * sending wildly wrong timestamps to MIDIOutput.send().
-     */
-    const EPOCH_OFFSET = Date.now() - performance.now();
-
-    function drain() {
-        if (!running) return;
-
-        if (!eventsPtr) eventsPtr = module._get_midi_batch_events_ptr();
-        if (!tsPtr) tsPtr = module._get_midi_batch_ts_ptr();
-
-        if (eventsPtr && tsPtr) {
-            const count = module._wasm_drain_midi_batch(128);
-            // When the AudioWorklet is up it forwards events at audio-quantum
-            // rate (~2.9ms) via hw_midi messages. We still drain midi_ring to
-            // prevent overflow, but skip the hardware send — the hw_midi
-            // handler does it with tighter timing.
-            if (count > 0 && !isObxdReady()) {
-                const events = new Uint32Array(module.HEAPU32.buffer, eventsPtr, count);
-                const timestamps = new Float64Array(module.HEAPF64.buffer, tsPtr, count);
-
-                for (let i = 0; i < count; i++) {
-                    const packed = events[i];
-                    const status = packed & 0xff;
-                    const data1 = (packed >> 8) & 0xff;
-                    const data2 = (packed >> 16) & 0xff;
-                    const deliveryTime = normalizeMidiTimestamp(
-                        timestamps[i],
-                        performance.now(),
-                        EPOCH_OFFSET,
-                        MIDI_FORWARD_OFFSET_MS,
-                    );
-                    output.send(status, data1, data2, deliveryTime);
-                }
-
-                if (onBatchDrained) {
-                    onBatchDrained(events, timestamps, count);
-                }
-            }
-        }
-
-        /* Overflow telemetry — check every ~60 frames (1s at 60Hz) */
-        if (++frameSinceCheck >= 60) {
-            frameSinceCheck = 0;
-            const dropped = module._wasm_get_midi_dropped_count();
-            if (dropped !== prevDropped) {
-                console.warn(`[octobx] MIDI ring buffer dropped ${dropped - prevDropped} events (total: ${dropped})`);
-                prevDropped = dropped;
-            }
-            // Same pattern for the SPSC synth ring the AudioWorklet reads
-            // (drop-newest counter added when producer head-writes were removed).
-            const synthDropFn = (module as unknown as { _wasm_get_midi_synth_dropped_count?: () => number })
-                ._wasm_get_midi_synth_dropped_count;
-            if (typeof synthDropFn === "function") {
-                const synthDropped = synthDropFn.call(module);
-                if (synthDropped !== prevSynthDropped) {
-                    console.warn(`[octobx] Synth MIDI ring (AWP) dropped ${synthDropped - prevSynthDropped} events (total: ${synthDropped})`);
-                    prevSynthDropped = synthDropped;
-                }
-            }
-        }
-
-        requestAnimationFrame(drain);
-    }
-
-    // Register handler for events forwarded by the AudioWorklet at
-    // audio-quantum rate (~2.9ms). Tighter than the 60Hz RAF fallback.
+/*
+ * Route the AudioWorklet's hw_midi batches (packed 32-bit events) into a
+ * hardware MIDI output. This is now the ONLY path hardware output is fed
+ * from — the old 60Hz RAF drain loop is gone. Returns a detach function.
+ */
+export function attachHwMidiForwarding(output: HardwareMidiOutput): () => void {
     setHwMidiHandler((packed: number[]) => {
-        const deliveryTime = performance.now() + HW_FORWARD_OFFSET_AWP_MS;
+        const t = performance.now() + HW_FORWARD_OFFSET_AWP_MS;
         for (const ev of packed) {
-            const status = ev & 0xff;
-            const data1 = (ev >> 8) & 0xff;
-            const data2 = (ev >> 16) & 0xff;
-            output.send(status, data1, data2, deliveryTime);
+            output.send(ev & 0xff, (ev >> 8) & 0xff, (ev >> 16) & 0xff, t);
         }
     });
-
-    requestAnimationFrame(drain);
-    return () => {
-        running = false;
-        setHwMidiHandler(null);
-    };
+    return () => setHwMidiHandler(null);
 }

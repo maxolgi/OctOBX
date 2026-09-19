@@ -6,15 +6,21 @@
  *
  * The native suite drives a running octopus_gui over OSC (UDP 8000) in and
  * MIR/transport (WS 8089) out. OctOBX has no OSC/WS surface: the engine is
- * the Emscripten WASM module inside the shipped dist/ app. This suite drives
- * the SAME firmware (identical submodule commit) through the browser's C
- * exports in headless Chromium:
+ * the Emscripten WASM module running INSIDE the combined OB-Xf AudioWorklet
+ * in the shipped dist/ app. This suite drives the SAME firmware (identical
+ * submodule commit) through the main-thread controller (src/octopus-awp.ts,
+ * exposed as window.__octopus) in headless Chromium:
  *
- *   input  -> window.__module._wasm_key_press / _wasm_transport / _wasm_pause
- *             / _wasm_set_tempo / _wasm_set_zoom / _wasm_save_state
- *   output -> 170-byte MIR read from the WASM heap (_get_processed_mir_ptr,
- *             blinker pre-applied — exactly what the UI paints), plus
- *             _get_run_bit / _get_zoom_level / _get_tempo.
+ *   input  -> window.__octopus.key / .transport / .pause / .setTempo
+ *             / .setZoom — each posts an oct_* port message the worklet's
+ *             onmessage turns into the C exports (_wasm_key_press,
+ *             _wasm_transport, _wasm_pause, _wasm_set_tempo, _wasm_set_zoom).
+ *   output -> window.__octopus.mir(): a live 170-byte Uint8Array view over
+ *             the engine's shared WebAssembly.Memory at the processed-MIR
+ *             buffer (blinker pre-applied — exactly what the UI paints),
+ *             refreshed by the worklet pump at ~60 Hz. Status reads
+ *             (.status.runBit()/.tempo()/.zoom()/.tickCount()) are the same
+ *             zero-copy int32 views over the shared status block.
  *
  * Ported 1:1 (same LED coordinate table from MIR_write_dot(), same key
  * indices, same blink-safe window-OR captures, same Grid-Clear prelude):
@@ -30,20 +36,34 @@
  *      feature (Octopus src/osc_server.c); OctOBX has no OSC surface.
  *
  * Transport-layer differences from the native suite:
- *   * /zoom OSC  -> _wasm_set_zoom (test-only export in main_wasm.c that
- *     mirrors the native handler: G_zoom_level = level; Page_requestRefresh()).
- *     Physical zoom keys are play-mode dependent, so a deterministic setter
- *     is needed for the zoom-indicator tests (same reason the native suite
- *     used /zoom).
- *   * /save OSC  -> _wasm_save_state + FS check on /persistent/octopus_state.bin
- *     (MEMFS under ?nosync; the C save_state() path is identical).
- *   * /transport -> _wasm_transport(1|0) + _wasm_pause (the WASM pause is
- *     the same HALT/UNHALT toggle as the native "pause" command; "continue"
- *     is the same call when halted).
- *   * WS /mir frames -> heap reads; the blink-safe window-OR is implemented
- *     by driving _wasm_check_refresh() ourselves (each call advances the
- *     blink frame; the blinker toggles every 10 calls), so captures are
- *     deterministic and RAF-independent.
+ *   * /zoom OSC  -> window.__octopus.setZoom (test-only _wasm_set_zoom
+ *     export in main_wasm.c that mirrors the native handler:
+ *     G_zoom_level = level; Page_requestRefresh()). Physical zoom keys are
+ *     play-mode dependent, so a deterministic setter is needed for the
+ *     zoom-indicator tests (same reason the native suite used /zoom).
+ *   * /save OSC  -> window.__octopus.saveState() (oct_save_state message;
+ *     the worklet runs the identical C save_state() into MEMFS and posts
+ *     the bytes back). Assert non-null + non-empty length — replaces the
+ *     old FS check on /persistent/octopus_state.bin.
+ *   * /transport -> window.__octopus.transport(true|false) / .pause() (the
+ *     WASM pause is the same HALT/UNHALT toggle as the native "pause"
+ *     command; "continue" is the same call when halted).
+ *   * WS /mir frames -> shared-memory reads. The blink-safe window-OR is
+ *     now TIME-based: the worklet pump refreshes the processed-MIR buffer
+ *     every ~15 ms and toggles the blinker every 10 refreshes (~300 ms
+ *     full blink period), so OR-ing every frame seen during a >= 1 s poll
+ *     window spans >= 3 blink periods. The first suite revision drove
+ *     _wasm_check_refresh() itself from the main thread; those exports
+ *     live behind the worklet now, so the poll relies on the pump (the
+ *     audio path when the AudioContext runs, the RAF oct_pump fallback
+ *     while it is suspended — either way the engine must tick or the
+ *     tests fail, which is exactly the seam under test).
+ *
+ * Chromium is launched with --autoplay-policy=no-user-gesture-required so
+ * the AudioContext starts running and process() drives the pump (the real
+ * AWP path). All waits are written to be robust to either driver: polls
+ * with generous timeouts (2-5 s), never single-shot reads for values that
+ * settle asynchronously.
  *
  * Prereqs:
  *   - dist/ built and current:  ./build.sh app   (or `npm run build`)
@@ -67,7 +87,7 @@ const CHROMIUM = process.env.CHROMIUM_BIN || '/usr/bin/chromium';
 // ---------------------------------------------------------------------------
 // Artifact check — never build from here, just tell the user how.
 // ---------------------------------------------------------------------------
-for (const p of ['index.html', 'octopus_wasm.js', 'octopus_wasm.wasm']) {
+for (const p of ['index.html', 'octopus_wasm.wasm', 'obxd-processor.js']) {
   if (!fs.existsSync(path.join(dist, p))) {
     console.error(`error: dist/${p} not found. Run \`./build.sh app\` (or \`npm run build\`) first.`);
     process.exit(1);
@@ -77,15 +97,23 @@ if (!fs.existsSync(CHROMIUM)) {
   console.error(`error: Chromium not found at ${CHROMIUM}. Set CHROMIUM_BIN or install chromium.`);
   process.exit(1);
 }
-// Staleness guard: the suite needs the test-only _wasm_set_zoom export.
-if (!fs.readFileSync(path.join(dist, 'octopus_wasm.js'), 'utf8').includes('wasm_set_zoom')) {
-  console.error('error: dist/octopus_wasm.js is stale (missing wasm_set_zoom). Rebuild: `make -C wasm && npm run build`.');
-  process.exit(1);
+// Staleness guard: the suite drives the engine through the combined worklet.
+// dist/obxd-processor.js must carry BOTH emcc glues (octopus first, obxd
+// second — build.sh concat order) and the oct_ready handshake message.
+{
+  const processorSrc = fs.readFileSync(path.join(dist, 'obxd-processor.js'), 'utf8');
+  for (const needle of ['OctopusModuleFactory', 'oct_ready']) {
+    if (!processorSrc.includes(needle)) {
+      console.error(`error: dist/obxd-processor.js is stale (missing ${needle}). Rebuild: \`./build.sh wasm && ./build.sh synth && ./build.sh app\`.`);
+      process.exit(1);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Static server for dist/ with the COOP/COEP/CORP headers that
-// SharedArrayBuffer (Emscripten pthreads) requires. dist/ is self-contained.
+// SharedArrayBuffer (the engine's shared WebAssembly.Memory) requires.
+// dist/ is self-contained.
 // ---------------------------------------------------------------------------
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
                '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png',
@@ -108,14 +136,16 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
 
 // ---------------------------------------------------------------------------
-// In-page harness. All engine access goes through window.__module (set by
-// main.ts after engine_init). The blink-safe window-OR mirrors the native
-// harness's capture_or/led_or: OR of every processed-MIR frame in a window
-// spanning >= 2 blink periods, so blinking LEDs are caught in their on phase.
+// In-page harness. All engine access goes through window.__octopus (set by
+// main.ts once bootOctopusEngine resolves). The blink-safe window-OR mirrors
+// the native harness's capture_or/led_or: OR of every processed-MIR frame in
+// a window spanning >= 2 blink periods, so blinking LEDs are caught in their
+// on phase. The pump refreshes the shared buffer every ~15 ms and the blinker
+// toggles every 10 refreshes, so a 1000 ms poll window spans ~3 periods.
 // ---------------------------------------------------------------------------
 const HARNESS_SRC = `
 window.__H = (function () {
-  const m = () => window.__module;
+  const o = () => window.__octopus;
   const PLANE = { blink: 0, red: 1, green: 2 };
   // name -> [set, row, bit]; from firmware MIR_write_dot() (identical in both repos)
   const LED = {
@@ -134,90 +164,108 @@ window.__H = (function () {
                 REC: 223, STP: 231, P1: 241, CLR: 189 };
   const ZOOM = { GRID: 2, PAGE: 3, TRACK: 4, MAP: 5, STEP: 6, PLAY: 7 };
 
-  function key(ndx, press = true) { m()._wasm_key_press(ndx, press ? 1 : 0); }
+  function key(ndx, press = true) { o().key(ndx, press); }
   function transport(cmd) {
-    if (cmd === 'start') m()._wasm_transport(1);
-    else if (cmd === 'stop') m()._wasm_transport(0);
-    else if (cmd === 'pause' || cmd === 'continue') m()._wasm_pause();
+    if (cmd === 'start') o().transport(true);
+    else if (cmd === 'stop') o().transport(false);
+    else if (cmd === 'pause' || cmd === 'continue') o().pause();
     else throw new Error('unknown transport cmd ' + cmd);
   }
-  function zoom(level) { m()._wasm_set_zoom(level); }
-  function tempo(bpm) { m()._wasm_set_tempo(bpm); }
-  function runBit() { return m()._get_run_bit(); }
-  function zoomLevel() { return m()._get_zoom_level(); }
-  function tempoNow() { return m()._get_tempo(); }
+  function zoom(level) { o().setZoom(level); }
+  function tempo(bpm) { o().setTempo(bpm); }
+  function runBit() { return o().status.runBit(); }
+  function zoomLevel() { return o().status.zoom(); }
+  function tempoNow() { return o().status.tempo(); }
 
-  // OR of the processed MIR over n blink-frames (n >= 20 spans >= 2 blink
-  // periods; the blinker toggles every 10 _wasm_check_refresh calls).
-  function blinkOr(n) {
-    const mm = m();
+  // OR of the shared-memory processed MIR over a ~ms poll window (>= 2 blink
+  // periods; the pump refreshes every ~15 ms, the blinker toggles every 10
+  // refreshes). Async — callers await.
+  async function blinkOr(ms) {
+    const oc = o();
     const acc = new Uint8Array(170);
-    for (let i = 0; i < n; i++) {
-      mm._wasm_check_refresh();
-      const p = mm._get_processed_mir_ptr();
-      for (let j = 0; j < 170; j++) acc[j] |= mm.HEAPU8[p + j];
+    const t0 = performance.now();
+    while (performance.now() - t0 < ms) {
+      const mir = oc.mir();
+      for (let j = 0; j < 170; j++) acc[j] |= mir[j];
+      await new Promise((r) => setTimeout(r, 12));
     }
     return Array.from(acc);
   }
-  function ledOr(name, color, n = 30) {
-    const mir = blinkOr(n);
+  async function ledOr(name, color, ms = 1000) {
+    const mir = await blinkOr(ms);
     const [s, r, b] = LED[name];
     return !!(mir[s * 85 + r * 5 + PLANE[color]] & (1 << b));
   }
   // Green plane of the matrix region (rows 0-9, both sides).
-  function matrixGreenOr(n = 30) {
-    const mir = blinkOr(n);
+  async function matrixGreenOr(ms = 1000) {
+    const mir = await blinkOr(ms);
     const out = [];
     for (let s = 0; s < 2; s++)
       for (let r = 0; r < 10; r++) out.push(mir[s * 85 + r * 5 + PLANE.green]);
     return out;
   }
-  function saveState() {
-    const mm = m();
-    if (!mm.FS.analyzePath('/persistent').exists) mm.FS.mkdir('/persistent');
-    mm._wasm_save_state();
-    const p = '/persistent/octopus_state.bin';
-    if (!mm.FS.analyzePath(p).exists) return { exists: false, size: 0 };
-    return { exists: true, size: mm.FS.stat(p).size };
+  // Deterministic single-shot: the worklet copies its OWN processed-MIR
+  // snapshot + status into the reply (one round-trip, no RAF dependence).
+  async function snapshot() { return o().snapshot(); }
+  async function saveState() {
+    const bytes = await o().saveState();
+    if (!bytes || !bytes.length) return { exists: false, size: 0 };
+    return { exists: true, size: bytes.length };
   }
   return { key, transport, zoom, tempo, runBit, zoomLevel, tempoNow,
-           blinkOr, ledOr, matrixGreenOr, saveState, KEY, ZOOM };
+           blinkOr, ledOr, matrixGreenOr, snapshot, saveState, KEY, ZOOM };
 })();
 `;
 
-const browser = await chromium.launch({ executablePath: CHROMIUM });
+// --autoplay-policy=no-user-gesture-required: let the AudioContext start on
+// its own so process() drives the pump (real AWP path). If headless still
+// starts suspended, the main thread's RAF oct_pump fallback covers ticking.
+const browser = await chromium.launch({
+  executablePath: CHROMIUM,
+  args: ['--autoplay-policy=no-user-gesture-required'],
+});
 const page = await browser.newPage();
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
+const consoleErrors = [];
+page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 
-// ?nosync: skip IDBFS — state stays in MEMFS (hermetic; the C save path is
-// identical, only the FS backend differs from the shipped IDBFS path).
+// ?nosync: skip the IDBFS/IndexedDB initial-state read — the worklet's MEMFS
+// is empty at boot (hermetic; the C save path is identical, only where the
+// initial bytes would come from differs from the shipped path).
 const resp = await page.goto('http://127.0.0.1:' + PORT + '/?nosync',
                              { waitUntil: 'load', timeout: 60000 });
 if (!resp || resp.status() !== 200) {
   throw new Error('page load failed: ' + (resp && resp.status()));
 }
-await page.waitForFunction(() => !!(window.__module && window.__module._get_mir_ptr),
-                           null, { timeout: 90000 });
+
+// Boot wait: the controller appears once bootOctopusEngine has created the
+// worklet node; its `ready` promise resolves on the oct_ready handshake.
+await page.waitForFunction(() => !!window.__octopus, null, { timeout: 90000 });
+await page.evaluate(() => Promise.race([
+  window.__octopus.ready,
+  new Promise((_, rej) => setTimeout(() => rej(new Error('oct_ready timeout (60 s)')), 60000)),
+]));
 await page.evaluate(HARNESS_SRC);
 
-// Engine-ready gate: wait until the MIR is populated (engine_init calls
-// Page_requestRefresh at the end).
+// Engine-ready gate: poll worklet snapshots until the MIR is populated
+// (engine_init calls Page_requestRefresh at the end; the pump services it).
 const mirReady = await page.evaluate(async () => {
-  const m = window.__module;
-  for (let i = 0; i < 300; i++) {
-    m._wasm_check_refresh();
-    const p = m._get_mir_ptr();
-    let nz = 0;
-    for (let j = 0; j < 170; j++) if (m.HEAPU8[p + j]) nz++;
-    if (nz > 0) return nz;
-    await new Promise((r) => setTimeout(r, 50));
+  const H = window.__H;
+  for (let i = 0; i < 100; i++) {
+    const s = await H.snapshot();
+    if (s && Array.isArray(s.mir)) {
+      const nz = s.mir.filter((b) => b > 0).length;
+      if (nz > 0) return { nz, engineReady: window.__octopus.status.engineReady() };
+    }
+    await new Promise((r) => setTimeout(r, 150));
   }
-  return 0;
+  return null;
 });
-if (mirReady === 0) throw new Error('engine did not populate the MIR within 15 s');
-console.log('engine up (MIR nonzero bytes: ' + mirReady + '), run_bit=' +
-  (await page.evaluate(() => window.__H.runBit())));
+if (!mirReady) throw new Error('engine did not populate the MIR within 15 s');
+if (mirReady.engineReady !== 1) throw new Error('status.engineReady != 1 after boot');
+console.log('engine up in worklet (MIR nonzero bytes: ' + mirReady.nz + '), run_bit=' +
+  (await page.evaluate(() => window.__octopus.status.runBit())));
 
 const settle = (ms) => page.waitForTimeout(ms);
 const H = (fn, ...args) =>
@@ -236,7 +284,7 @@ async function resetState() {
   await H('key', 189, false); await settle(200);
   await H('key', 218, false); await settle(500);
   await H('zoom', 2); await settle(500);
-  if (await H('ledOr', 'PLAY', 'red', 30)) {      // perform mode -> toggle to edit
+  if (await H('ledOr', 'PLAY', 'red')) {          // perform mode -> toggle to edit
     await H('key', 229, true); await settle(200);
     await H('key', 229, false); await settle(600);
   }
@@ -248,11 +296,11 @@ async function resetState() {
 async function testPageSelectionToggle() {
   await H('transport', 'stop'); await settle(500);
   await H('zoom', 3); await settle(800);          // PAGE zoom
-  const base = await H('matrixGreenOr', 30);
+  const base = await H('matrixGreenOr');
   for (const k of [11, 22, 33, 12, 44]) {
     await H('key', k, true); await settle(200);
     await H('key', k, false); await settle(400);
-    const after = await H('matrixGreenOr', 30);
+    const after = await H('matrixGreenOr');
     if (JSON.stringify(after) !== JSON.stringify(base)) {
       // restore: flip back (beyond the double-click window)
       await H('key', k, true); await settle(200);
@@ -268,7 +316,7 @@ async function testTransportStartStop() {
   if ((await H('runBit')) !== 0) return { ok: false, msg: 'run_bit != 0 after stop' };
   await H('transport', 'start'); await settle(800);
   if ((await H('runBit')) !== 1) return { ok: false, msg: 'run_bit != 1 after start' };
-  if (!(await H('ledOr', 'P1', 'green', 30))) return { ok: false, msg: 'P1 LED not green while playing' };
+  if (!(await H('ledOr', 'P1', 'green'))) return { ok: false, msg: 'P1 LED not green while playing' };
   await H('transport', 'stop'); await settle(800);
   if ((await H('runBit')) !== 0) return { ok: false, msg: 'run_bit != 0 after second stop' };
   return { ok: true, msg: '' };
@@ -290,7 +338,7 @@ async function zoomIndicator(zoomName, zoomLevel, ledName) {
   await H('zoom', zoomLevel); await settle(800);
   // selected-zoom indicators blink (red+green+blink); a >= 5-period window-OR
   // reliably catches the red phase.
-  if (!(await H('ledOr', ledName, 'red', 50)))
+  if (!(await H('ledOr', ledName, 'red', 1200)))
     return { ok: false, msg: zoomName + ' zoom indicator never lit red' };
   return { ok: true, msg: '' };
 }
@@ -298,7 +346,7 @@ async function zoomIndicator(zoomName, zoomLevel, ledName) {
 async function testRecordArm() {
   await H('key', 223, true); await settle(200);   // REC
   await H('key', 223, false); await settle(400);
-  const armed = await H('ledOr', 'REC', 'red', 50);
+  const armed = await H('ledOr', 'REC', 'red', 1200);
   // disarm again (press REC) to restore
   await H('key', 223, true); await settle(200);
   await H('key', 223, false); await settle(600);
@@ -308,15 +356,15 @@ async function testRecordArm() {
 
 async function testSaveState() {
   const r = await H('saveState');
-  if (!r.exists) return { ok: false, msg: '/persistent/octopus_state.bin not created' };
-  if (r.size <= 0) return { ok: false, msg: 'state file is empty' };
-  return { ok: true, msg: 'state file written (' + r.size + ' bytes)' };
+  if (!r.exists) return { ok: false, msg: 'saveState() returned no bytes' };
+  if (r.size <= 0) return { ok: false, msg: 'state bytes are empty' };
+  return { ok: true, msg: 'state bytes received (' + r.size + ' bytes)' };
 }
 
 async function testTempoResponsive() {
   await H('tempo', 140); await settle(600);
   if ((await H('tempoNow')) !== 140)
-    return { ok: false, msg: '_get_tempo() != 140 after _wasm_set_tempo(140)' };
+    return { ok: false, msg: 'status.tempo() != 140 after setTempo(140)' };
   await H('transport', 'start'); await settle(600);
   const ok = (await H('runBit')) === 1;
   await H('transport', 'stop'); await settle(400);
@@ -353,8 +401,9 @@ await H('transport', 'stop'); await settle(300);
 await H('zoom', 2); await settle(300);
 
 if (pageErrors.length) console.log('page errors: ' + pageErrors.join(' | '));
+if (consoleErrors.length) console.log('console errors: ' + consoleErrors.slice(0, 10).join(' | '));
 await browser.close();
 server.close();
-console.log('\\n' + passed + ' passed, ' + failed + ' failed, ' + TESTS.length +
+console.log('\n' + passed + ' passed, ' + failed + ' failed, ' + TESTS.length +
             ' total (+1 documented N/A: name-based OSC dispatch — native-launcher feature)');
 process.exit(failed === 0 ? 0 : 1);

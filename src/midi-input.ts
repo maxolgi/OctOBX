@@ -2,8 +2,8 @@
  * midi-input.ts — Web MIDI API input from hardware controllers.
  *
  * Captures incoming MIDI from a selected input port and forwards it to the
- * Octopus engine via wasm_midi_input(), which feeds the firmware's
- * byte-at-a-time interpreters (G_midi_interpret_*).
+ * Octopus engine via ctl.midiInput(), which feeds the firmware's
+ * byte-at-a-time interpreters (G_midi_interpret_*) inside the worklet.
  *
  * The browser decodes running-status for us, so every MIDIMessageEvent arrives
  * with an explicit status byte. We pass (status, data1, data2) to the engine,
@@ -13,7 +13,7 @@
  * Chrome/Edge only.
  */
 
-import type { OctopusWasmModule } from "./octopus-types";
+import type { OctopusController } from "./octopus-awp";
 import { openMidiAccess, pollForPorts } from "./midi-access";
 import { processHardwareCC } from "./obxf-midi-learn-integration";
 
@@ -22,7 +22,7 @@ export class HardwareMidiInput {
     private inputPort: MIDIInput | null = null;
     private enabled = false;
 
-    constructor(private readonly module: OctopusWasmModule) {}
+    constructor(private readonly ctl: OctopusController) {}
 
     async init(): Promise<boolean> {
         if (!navigator.requestMIDIAccess) {
@@ -115,7 +115,7 @@ export class HardwareMidiInput {
 
         // System real-time (0xF8..0xFF): single-byte messages.
         if (status >= 0xf8) {
-            this.module._wasm_midi_input(status, 0, 0);
+            this.ctl.midiInput(status, 0, 0);
             return;
         }
 
@@ -150,7 +150,7 @@ export class HardwareMidiInput {
             }
         }
 
-        this.module._wasm_midi_input(status, d1, d2);
+        this.ctl.midiInput(status, d1, d2);
     }
 
     get isEnabled(): boolean {

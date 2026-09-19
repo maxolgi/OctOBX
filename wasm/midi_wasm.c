@@ -7,6 +7,12 @@
  * hardware output.
  *
  * MIDI input from JS is fed back to the firmware via wasm_midi_input().
+ *
+ * Under OCT_AWP the engine runs on the single audio thread of an
+ * AudioWorklet: the sample-driven pump is the only producer AND the only
+ * consumer of the primary ring, so it needs no mutex — the JS main thread
+ * never touches it and reads the dropped counters via the status block.
+ * The synth SPSC ring keeps its __atomic_* discipline in both builds.
  */
 
 #include "hal_linux.h"
@@ -50,7 +56,9 @@ static volatile int midi_ring_head = 0;
 static volatile int midi_ring_tail = 0;
 static volatile uint32_t midi_dropped_count = 0;
 
+#ifndef OCT_AWP
 static pthread_mutex_t midi_ring_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 /* ============================================================ */
 /* Synth ring buffer — read directly by AudioWorklet via SAB    */
@@ -66,8 +74,24 @@ static volatile int midi_synth_ring_tail = 0;
  * JS telemetry via wasm_get_midi_synth_dropped_count(). */
 static volatile uint32_t midi_synth_dropped_count = 0;
 
+/* Plain C dropped-counter accessors — no EMSCRIPTEN_KEEPALIVE, callable
+ * from engine code. The AWP status block (main_wasm.c oct_status_update)
+ * reads them as plain C calls; the keepalive exports below delegate here. */
+unsigned int midi_get_dropped_count(void) {
+    return midi_dropped_count;
+}
+
+unsigned int midi_get_synth_dropped_count(void) {
+    /* Atomic load — in the pthread build the sequencer thread increments
+     * this; a plain read would be a formal C11 data race (benign on
+     * wasm32, but free to fix). */
+    return __atomic_load_n(&midi_synth_dropped_count, __ATOMIC_RELAXED);
+}
+
 static void midi_ring_push(uint8_t status, uint8_t data1, uint8_t data2, uint8_t channel) {
+#ifndef OCT_AWP
     pthread_mutex_lock(&midi_ring_mutex);
+#endif
     int next = (midi_ring_tail + 1) & MIDI_RING_MASK;
     if (next == midi_ring_head) {
         midi_ring_head = (midi_ring_head + 1) & MIDI_RING_MASK;
@@ -79,7 +103,9 @@ static void midi_ring_push(uint8_t status, uint8_t data1, uint8_t data2, uint8_t
                               | ((uint32_t)channel << 24);
     midi_ring_ts[midi_ring_tail] = emscripten_get_now();
     midi_ring_tail = next;
+#ifndef OCT_AWP
     pthread_mutex_unlock(&midi_ring_mutex);
+#endif
 
     /* Also push to the synth ring buffer (lock-free SPSC, read by AudioWorklet).
      *
@@ -116,21 +142,32 @@ int EMSCRIPTEN_KEEPALIVE wasm_has_midi_event(void) {
 }
 
 uint32_t EMSCRIPTEN_KEEPALIVE wasm_get_midi_event(void) {
+    uint32_t event;
+
+#ifdef OCT_AWP
+    if (midi_ring_head == midi_ring_tail) {
+        return 0;
+    }
+    event = midi_ring[midi_ring_head];
+    midi_ring_head = (midi_ring_head + 1) & MIDI_RING_MASK;
+    return event;
+#else
     pthread_mutex_lock(&midi_ring_mutex);
     if (midi_ring_head == midi_ring_tail) {
         pthread_mutex_unlock(&midi_ring_mutex);
         return 0;
     }
-    uint32_t event = midi_ring[midi_ring_head];
+    event = midi_ring[midi_ring_head];
     midi_ring_head = (midi_ring_head + 1) & MIDI_RING_MASK;
     pthread_mutex_unlock(&midi_ring_mutex);
     return event;
+#endif
 }
 
 /* Batch drain: copies up to max_count events + timestamps into static
- * buffers and advances head in a single mutex acquisition. JS reads the
- * results via get_midi_batch_events_ptr() / get_midi_batch_ts_ptr().
- * Returns the number of events copied. */
+ * buffers and advances head in a single pass (mutex-protected outside
+ * AWP builds). JS reads the results via get_midi_batch_events_ptr() /
+ * get_midi_batch_ts_ptr(). Returns the number of events copied. */
 #define MIDI_BATCH_MAX 128
 static uint32_t midi_batch_events[MIDI_BATCH_MAX];
 static double   midi_batch_ts[MIDI_BATCH_MAX];
@@ -139,7 +176,9 @@ int EMSCRIPTEN_KEEPALIVE wasm_drain_midi_batch(int max_count) {
     if (max_count > MIDI_BATCH_MAX) max_count = MIDI_BATCH_MAX;
     if (max_count < 0) max_count = 0;
 
+#ifndef OCT_AWP
     pthread_mutex_lock(&midi_ring_mutex);
+#endif
     int count = 0;
     while (count < max_count && midi_ring_head != midi_ring_tail) {
         midi_batch_events[count] = midi_ring[midi_ring_head];
@@ -147,7 +186,9 @@ int EMSCRIPTEN_KEEPALIVE wasm_drain_midi_batch(int max_count) {
         midi_ring_head = (midi_ring_head + 1) & MIDI_RING_MASK;
         count++;
     }
+#ifndef OCT_AWP
     pthread_mutex_unlock(&midi_ring_mutex);
+#endif
     return count;
 }
 
@@ -172,13 +213,11 @@ int* EMSCRIPTEN_KEEPALIVE get_midi_synth_ring_tail_ptr(void) {
 }
 
 uint32_t EMSCRIPTEN_KEEPALIVE wasm_get_midi_dropped_count(void) {
-    return midi_dropped_count;
+    return midi_get_dropped_count();
 }
 
 uint32_t EMSCRIPTEN_KEEPALIVE wasm_get_midi_synth_dropped_count(void) {
-    /* Atomic load — the sequencer pthread increments this; a plain read
-     * would be a formal C11 data race (benign on wasm32, but free to fix). */
-    return __atomic_load_n(&midi_synth_dropped_count, __ATOMIC_RELAXED);
+    return midi_get_synth_dropped_count();
 }
 
 /* ============================================================ */
