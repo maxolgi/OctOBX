@@ -1,8 +1,18 @@
 /*
  * hal_wasm.c — WASM/Emscripten implementation of the eCos compatibility shim.
  *
- * Backs all cyg_* APIs with pthreads (Emscripten pthreads → Web Workers),
- * ring-buffer mailboxes, and nanosleep-based alarms.
+ * Two compile modes:
+ *
+ *  - Default (pthread build): backs the cyg_* APIs with pthreads
+ *    (Emscripten pthreads → Web Workers), ring-buffer mailboxes with
+ *    mutex+condvar, and nanosleep-based alarm watcher threads.
+ *
+ *  - OCT_AWP (AudioWorklet build): the engine runs single-threaded on the
+ *    audio thread, where blocking and thread creation are illegal. Threads
+ *    are recorded but never spawned; mutexes/semaphores become recursion
+ *    counters / plain counters; mailboxes keep their ring storage but never
+ *    wait; alarms fire cooperatively from a virtual clock that main_wasm.c
+ *    advances once per audio quantum via hal_advance_clock().
  */
 
 #include "hal_linux.h"
@@ -17,6 +27,17 @@ unsigned char *hal_flash_base = NULL;
 #define HAL_SCRATCH_SIZE 4096
 static unsigned char hal_scratch[HAL_SCRATCH_SIZE];
 static unsigned long long hal_last_oob_warn_ms = 0;
+
+#ifdef OCT_AWP
+/*
+ * OCT_AWP virtual clock: wall-clock time and sleeps do not exist on the
+ * audio thread. The engine pump (main_wasm.c) advances this clock by one
+ * audio quantum per hal_advance_clock() call; cyg_current_time() and the
+ * alarm deadlines all live on this timeline. Declared up here because the
+ * alarm API below reads and writes it.
+ */
+static double hal_virtual_now_ms = 0;
+#endif
 
 /* ============================================================ */
 /* Flash API — backed by in-memory buffer                       */
@@ -138,8 +159,58 @@ int flash_program(void *dest, void *src, unsigned int len, void **err_addr) {
 }
 
 /* ============================================================ */
-/* Thread API — backed by pthreads                              */
+/* Thread API                                                   */
+/*                                                              */
+/* OCT_AWP: the audio thread may not create threads or block.   */
+/* Descriptors (entry/data/name) are recorded so engine init    */
+/* bookkeeping still works, but nothing is ever spawned — the   */
+/* work those threads did is driven cooperatively from the      */
+/* pump in main_wasm.c / hal_advance_clock() instead.           */
+/*                                                              */
+/* Default: backed by pthreads (Web Workers).                   */
 /* ============================================================ */
+
+#ifdef OCT_AWP
+
+void cyg_thread_create(
+    unsigned int        priority,
+    void              (*entry)(cyg_addrword_t),
+    cyg_addrword_t      data,
+    const char         *name,
+    void               *stack_base,
+    unsigned int        stack_size,
+    cyg_handle_t       *handle,
+    cyg_thread         *thread_obj
+) {
+    (void)priority;
+    (void)stack_base;
+    (void)stack_size;
+
+    /* Record the descriptor exactly as the pthread build does, but
+     * never spawn — thread creation is illegal on the audio thread. */
+    thread_obj->entry = entry;
+    thread_obj->data = data;
+    thread_obj->priority = (int)priority;
+    thread_obj->started = 1;
+    strncpy(thread_obj->name, name ? name : "unnamed", sizeof(thread_obj->name) - 1);
+    thread_obj->name[sizeof(thread_obj->name) - 1] = '\0';
+
+    *handle = (cyg_handle_t)(unsigned long long)thread_obj;
+}
+
+void cyg_thread_resume(cyg_handle_t handle) {
+    cyg_thread *thread_obj = (cyg_thread *)(unsigned long long)handle;
+
+    /* Mark started only — spawning here would violate the
+     * AudioWorklet contract. */
+    thread_obj->started = 1;
+}
+
+void cyg_thread_delay(unsigned int ticks) {
+    (void)ticks;  /* sleeping would block the audio thread — no-op */
+}
+
+#else /* pthread-backed legacy path */
 
 typedef struct {
     void (*entry)(cyg_addrword_t);
@@ -197,6 +268,8 @@ void cyg_thread_delay(unsigned int ticks) {
     usleep(ticks * 10000);
 }
 
+#endif /* OCT_AWP */
+
 cyg_bool cyg_thread_get_next(cyg_handle_t *thread, unsigned short *id) {
     (void)thread;
     (void)id;
@@ -211,7 +284,14 @@ cyg_bool cyg_thread_get_info(cyg_handle_t thread, unsigned short id, cyg_thread_
 }
 
 /* ============================================================ */
-/* Mailbox API — ring buffer + mutex + condvar                  */
+/* Mailbox API — ring buffer                                    */
+/*                                                              */
+/* OCT_AWP: same ring storage, but no mutex/condvar (no other   */
+/* thread exists to synchronize with) and cyg_mbox_get() never  */
+/* waits — the firmware consumer threads are never started in   */
+/* this build, so an empty mailbox simply yields NULL.          */
+/*                                                              */
+/* Default: ring buffer + mutex + condvar.                      */
 /* ============================================================ */
 
 #define HAL_MAX_MBOXS 16
@@ -219,8 +299,10 @@ static cyg_mbox *hal_mbox_registry[HAL_MAX_MBOXS];
 static int hal_mbox_count = 0;
 
 void cyg_mbox_create(cyg_handle_t *handle, cyg_mbox *mbox) {
+#ifndef OCT_AWP
     pthread_mutex_init(&mbox->mutex, NULL);
     pthread_cond_init(&mbox->cond, NULL);
+#endif
     mbox->head = 0;
     mbox->tail = 0;
     mbox->count = 0;
@@ -242,23 +324,46 @@ static cyg_mbox *hal_mbox_lookup(cyg_handle_t handle) {
 
 void *cyg_mbox_get(cyg_handle_t handle) {
     cyg_mbox *mbox = hal_mbox_lookup(handle);
+    void *item;
+
     if (!mbox) return NULL;
 
+#ifdef OCT_AWP
+    /* Non-blocking: an empty mailbox returns NULL immediately. The
+     * firmware threads that would block here are never started in
+     * this build — waiting on the audio thread is not an option. */
+    if (mbox->count == 0) return NULL;
+    item = mbox->items[mbox->head];
+    mbox->head = (mbox->head + 1) % 64;
+    mbox->count--;
+    return item;
+#else
     pthread_mutex_lock(&mbox->mutex);
     while (mbox->count == 0) {
         pthread_cond_wait(&mbox->cond, &mbox->mutex);
     }
-    void *item = mbox->items[mbox->head];
+    item = mbox->items[mbox->head];
     mbox->head = (mbox->head + 1) % 64;
     mbox->count--;
     pthread_mutex_unlock(&mbox->mutex);
     return item;
+#endif
 }
 
 cyg_bool cyg_mbox_tryput(cyg_handle_t handle, void *item) {
     cyg_mbox *mbox = hal_mbox_lookup(handle);
     if (!mbox) return 0;
 
+#ifdef OCT_AWP
+    /* Unlocked ring push — single thread, nothing to signal. */
+    if (mbox->count >= 64) {
+        return 0;
+    }
+    mbox->items[mbox->tail] = item;
+    mbox->tail = (mbox->tail + 1) % 64;
+    mbox->count++;
+    return 1;
+#else
     pthread_mutex_lock(&mbox->mutex);
     if (mbox->count >= 64) {
         pthread_mutex_unlock(&mbox->mutex);
@@ -270,6 +375,7 @@ cyg_bool cyg_mbox_tryput(cyg_handle_t handle, void *item) {
     pthread_cond_signal(&mbox->cond);
     pthread_mutex_unlock(&mbox->mutex);
     return 1;
+#endif
 }
 
 int cyg_mbox_peek_item(cyg_handle_t handle) {
@@ -280,48 +386,113 @@ int cyg_mbox_peek_item(cyg_handle_t handle) {
 
 /* ============================================================ */
 /* Mutex API                                                    */
+/*                                                              */
+/* OCT_AWP: cyg_mutex_t is a recursion counter (see hal_linux.h). */
+/* With a single thread a lock can never contend; the depth      */
+/* counter keeps nested (recursive) lock/unlock pairs balanced.  */
+/*                                                              */
+/* Default: pthread mutex.                                      */
 /* ============================================================ */
 
 void cyg_mutex_init(cyg_mutex_t *mutex) {
+#ifdef OCT_AWP
+    mutex->depth = 0;
+#else
     pthread_mutex_init(mutex, NULL);
+#endif
 }
 
 void cyg_mutex_lock(cyg_mutex_t *mutex) {
+#ifdef OCT_AWP
+    mutex->depth++;
+#else
     pthread_mutex_lock(mutex);
+#endif
 }
 
 void cyg_mutex_unlock(cyg_mutex_t *mutex) {
+#ifdef OCT_AWP
+    if (mutex->depth > 0) {
+        mutex->depth--;
+    }
+#else
     pthread_mutex_unlock(mutex);
+#endif
 }
 
 /* ============================================================ */
 /* Semaphore API                                                */
+/*                                                              */
+/* OCT_AWP: plain int counters. post() increments; wait()       */
+/* decrements only when positive and ALWAYS returns immediately */
+/* — blocking (or spinning) here would stall the audio thread.  */
+/* This is safe because the only firmware threads that waited   */
+/* on semaphores are never started in this build.               */
+/*                                                              */
+/* Default: POSIX semaphores.                                   */
 /* ============================================================ */
 
 void cyg_semaphore_init(cyg_sem_t *sem, unsigned int val) {
+#ifdef OCT_AWP
+    sem->count = (int)val;
+#else
     sem_init(sem, 0, val);
+#endif
 }
 
 void cyg_semaphore_post(cyg_sem_t *sem) {
+#ifdef OCT_AWP
+    sem->count++;
+#else
     sem_post(sem);
+#endif
 }
 
 void cyg_semaphore_wait(cyg_sem_t *sem) {
+#ifdef OCT_AWP
+    /* NEVER blocks — see section comment above. A zero count simply
+     * leaves the counter alone and returns. */
+    if (sem->count > 0) {
+        sem->count--;
+    }
+#else
     sem_wait(sem);
+#endif
 }
 
 int cyg_semaphore_trywait(cyg_sem_t *sem) {
+#ifdef OCT_AWP
+    /* Same convention as sem_trywait(): 0 = acquired, -1 = would block. */
+    if (sem->count > 0) {
+        sem->count--;
+        return 0;
+    }
+    return -1;
+#else
     return sem_trywait(sem);
+#endif
 }
 
 void cyg_semaphore_peek(cyg_sem_t *sem, int *count) {
+#ifdef OCT_AWP
+    if (count) *count = sem->count;
+#else
     int val = 0;
     sem_getvalue(sem, &val);
     if (count) *count = val;
+#endif
 }
 
 /* ============================================================ */
-/* Alarm API — nanosleep-based watcher threads                  */
+/* Alarm API                                                    */
+/*                                                              */
+/* OCT_AWP: cooperative alarms on the virtual clock. The        */
+/* registry / create / disable keep their shape; initialize     */
+/* arms deadline_ms / interval_ms and hal_advance_clock()       */
+/* (see the Virtual clock section below) fires due handlers     */
+/* inline on the audio thread.                                  */
+/*                                                              */
+/* Default: nanosleep-based watcher threads.                    */
 /* ============================================================ */
 
 #define HAL_MAX_ALARMS 16
@@ -338,6 +509,8 @@ void cyg_clock_to_counter(cyg_handle_t clock, cyg_handle_t *counter) {
     (void)clock;
     *counter = hal_counter_handle;
 }
+
+#ifndef OCT_AWP /* legacy watcher thread — not built in OCT_AWP */
 
 static void *hal_alarm_watcher(void *arg) {
     cyg_alarm *alarm = (cyg_alarm *)arg;
@@ -378,6 +551,8 @@ static void *hal_alarm_watcher(void *arg) {
     return NULL;
 }
 
+#endif /* !OCT_AWP */
+
 void cyg_alarm_create(
     cyg_handle_t    counter,
     cyg_alarm_t    *alarm_fn,
@@ -390,8 +565,10 @@ void cyg_alarm_create(
     alarm_obj->handler = alarm_fn;
     alarm_obj->data = data;
     alarm_obj->active = 0;
+#ifndef OCT_AWP
     alarm_obj->generation = 0;
     alarm_obj->watcher_alive = 0;
+#endif
 
     int idx = hal_alarm_count++;
     if (idx >= HAL_MAX_ALARMS) {
@@ -410,6 +587,14 @@ void cyg_alarm_initialize(cyg_handle_t handle, cyg_tick_count_t trigger, cyg_tic
 
     (void)trigger;
 
+#ifdef OCT_AWP
+    /* 1 eCos tick = 10 ms (matches cyg_current_time: virtual clock / 10.0).
+     * The legacy watcher also ignored `trigger` and first-fired one
+     * interval after initialize — preserve that schedule. */
+    alarm->interval_ms = (double)interval * 10.0;
+    alarm->deadline_ms = hal_virtual_now_ms + (double)(interval > 0 ? interval : 1) * 10.0;
+    alarm->active = 1;
+#else
     /* 1 eCos tick = 10ms (matches cyg_current_time: emscripten_get_now()/10.0) */
     alarm->interval_ns = (long)(interval * 10 * 1000000ULL);
 
@@ -426,16 +611,84 @@ void cyg_alarm_initialize(cyg_handle_t handle, cyg_tick_count_t trigger, cyg_tic
         alarm->watcher_alive = 1;
         pthread_create(&alarm->watcher_tid, NULL, hal_alarm_watcher, alarm);
     }
+#endif
 }
 
 void cyg_alarm_disable(cyg_handle_t handle) {
     if (handle >= (cyg_handle_t)hal_alarm_count) return;
     cyg_alarm *alarm = hal_alarm_registry[handle];
     if (!alarm) return;
+#ifndef OCT_AWP
     /* watcher_alive is left alone: the watcher thread is still winding
      * down and will release the liveness slot (or hand off) on exit. */
+#endif
+    /* OCT_AWP: no watcher to wind down — deactivating is all it takes. */
     alarm->active = 0;
 }
+
+/* ============================================================ */
+/* Virtual clock + alarm polling — OCT_AWP only                 */
+/*                                                              */
+/* main_wasm.c calls hal_advance_clock() once per audio         */
+/* quantum; due alarms fire inline, here, on the audio thread.  */
+/* Handlers must therefore not block.                           */
+/* ============================================================ */
+
+#ifdef OCT_AWP
+
+/* Catch-up policy: at most this many fires per alarm per poll, and
+ * if an alarm fell more than HAL_ALARM_REANCHOR_BEHIND_MS behind
+ * (audio context suspended, tab backgrounded), re-anchor its
+ * schedule to now instead of machine-gunning the missed fires. */
+#define HAL_ALARM_MAX_FIRES_PER_POLL 16
+#define HAL_ALARM_REANCHOR_BEHIND_MS 500.0
+
+/* Fire all alarms due at the current (already advanced) virtual time. */
+static void hal_poll_alarms(void) {
+    int i;
+
+    for (i = 0; i < hal_alarm_count && i < HAL_MAX_ALARMS; i++) {
+        cyg_alarm *alarm = hal_alarm_registry[i];
+        int fires;
+
+        if (!alarm || !alarm->active || !alarm->handler) continue;
+
+        /* More than HAL_ALARM_REANCHOR_BEHIND_MS in arrears (periodic
+         * alarms only): skip the backlog, restart from now. */
+        if (alarm->interval_ms > 0.0 &&
+            hal_virtual_now_ms - alarm->deadline_ms > HAL_ALARM_REANCHOR_BEHIND_MS) {
+            alarm->deadline_ms = hal_virtual_now_ms + alarm->interval_ms;
+        }
+
+        fires = 0;
+        while (alarm->active && alarm->deadline_ms <= hal_virtual_now_ms) {
+            alarm->handler(alarm->handle, alarm->data);
+            fires++;
+            if (alarm->interval_ms <= 0.0) {
+                /* One-shot: fire once then self-disable (same as the
+                 * legacy watcher thread). */
+                alarm->active = 0;
+                break;
+            }
+            alarm->deadline_ms += alarm->interval_ms;
+            if (fires >= HAL_ALARM_MAX_FIRES_PER_POLL) {
+                /* Hard cap on catch-up fires per alarm per poll; the
+                 * remainder catches up over subsequent quanta. */
+                break;
+            }
+        }
+    }
+}
+
+void hal_advance_clock(double ms) {
+    if (ms <= 0.0) return;          /* ignore non-progress */
+    if (ms > 1000.0) ms = 1000.0;   /* clamp absurd jumps */
+
+    hal_virtual_now_ms += ms;
+    hal_poll_alarms();
+}
+
+#endif /* OCT_AWP */
 
 /* ============================================================ */
 /* Interrupt API — no-ops                                       */
@@ -477,8 +730,30 @@ void cyg_interrupt_disable(void) {
 void cyg_interrupt_acknowledge(cyg_vector_t vector) { (void)vector; }
 
 /* ============================================================ */
-/* Scheduler lock — global recursive mutex                      */
+/* Scheduler lock                                               */
+/*                                                              */
+/* OCT_AWP: plain recursion counter — a single thread never     */
+/* contends; the depth keeps nested lock/unlock balanced (the   */
+/* firmware relies on this lock being logically recursive).     */
+/*                                                              */
+/* Default: global recursive pthread mutex.                     */
 /* ============================================================ */
+
+#ifdef OCT_AWP
+
+static int hal_scheduler_lock_depth = 0;
+
+void cyg_scheduler_lock(void) {
+    hal_scheduler_lock_depth++;
+}
+
+void cyg_scheduler_unlock(void) {
+    if (hal_scheduler_lock_depth > 0) {
+        hal_scheduler_lock_depth--;
+    }
+}
+
+#else /* pthread-backed legacy path */
 
 static pthread_mutex_t hal_scheduler_mutex;
 static int hal_scheduler_initialized = 0;
@@ -504,10 +779,18 @@ void cyg_scheduler_unlock(void) {
     pthread_mutex_unlock(&hal_scheduler_mutex);
 }
 
+#endif /* OCT_AWP */
+
 /* ============================================================ */
 /* Time functions                                               */
 /* ============================================================ */
 
 cyg_tick_count_t cyg_current_time(void) {
+#ifdef OCT_AWP
+    /* Virtual clock advanced by hal_advance_clock() — 1 eCos tick = 10 ms,
+     * same scale as the legacy emscripten_get_now()/10.0 mapping. */
+    return (cyg_tick_count_t)(hal_virtual_now_ms / 10.0);
+#else
     return (cyg_tick_count_t)(emscripten_get_now() / 10.0);
+#endif
 }

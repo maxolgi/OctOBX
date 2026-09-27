@@ -1,19 +1,19 @@
 /*
  * main.ts — OctOBX entry point.
  *
- * Loads the Octopus WASM engine, starts the grid panel, brings up the
- * OB-Xf synth rack, and wires transport + hardware MIDI. The drain loop
- * is started early so MIDI events reach the hardware output before the
- * panel's DOM updates consume the frame. The OB-Xf AudioWorklet reads
- * MIDI directly from the SharedArrayBuffer, so it is not wired into the
- * drain loop.
+ * Boots the Octopus engine inside the combined OB-Xf AudioWorklet via
+ * bootOctopusEngine() (which also creates the worklet node), starts the
+ * grid panel, brings up the OB-Xf synth rack, and wires transport +
+ * hardware MIDI. Hardware MIDI output is fed exclusively by hw_midi
+ * messages forwarded from the worklet (attachHwMidiForwarding).
  */
 
-import { loadOctopusModule } from "./octopus-module";
+import { bootOctopusEngine } from "./octopus-awp";
+import type { OctopusController } from "./octopus-awp";
 import { setupTransportSync } from "./transport-sync";
 import { startOctopusPanel } from "./octopus-panel";
 import { buildClassicPanel } from "./classic-panel";
-import { HardwareMidiOutput, drainMidiToHardware } from "./midi-output";
+import { HardwareMidiOutput, attachHwMidiForwarding } from "./midi-output";
 import { HardwareMidiInput } from "./midi-input";
 import { setupStatePersistence } from "./state-persistence";
 import { setupObxdRack } from "./obxd-rack";
@@ -22,41 +22,39 @@ import { mountMixer } from "./mixer";
 import { getObxdSelectedInstance, isObxdReady } from "./obxd-audio";
 import { syncObxdControlsFromEngine } from "./obxd-synth-ui";
 import { loadAppState, registerAWPReadyCallback } from "./app-state";
-import type { OctopusWasmModule } from "./octopus-types";
 
 let activePanelCleanup: (() => void) | null = null;
-let wasmModule: OctopusWasmModule | null = null;
+let ctl: OctopusController | null = null;
 
 async function main() {
-    logStatus("Loading Octopus engine...");
+    logStatus("Booting Octopus engine...");
 
     if (typeof SharedArrayBuffer === "undefined") {
         logStatus("ERROR: SharedArrayBuffer not available. Server needs COOP/COEP headers.");
         return;
     }
 
-    wasmModule = await loadOctopusModule("./octopus_wasm.js");
-    window.__module = wasmModule;
+    // Boots the engine inside the combined OB-Xf AudioWorklet (creating
+    // the worklet node) and resolves once the engine reports ready.
+    ctl = await bootOctopusEngine();
+    window.__octopus = ctl;
 
-    logStatus("Initializing engine...");
-    wasmModule._engine_init();
-
-    // --- Start MIDI drain FIRST (before panel build) ---
-    // RAF callbacks execute in registration order within each frame.
-    // Registering drain before render guarantees MIDI events are
-    // dispatched before the 300+ DOM-element LED update consumes the frame.
+    // --- Hardware MIDI output ---
+    // Events now arrive only as hw_midi messages from the worklet (the
+    // engine's MIDI ring is drained inside process() at audio-quantum
+    // rate); attach the forwarder before the panel so nothing is missed.
     const hardwareOutput = new HardwareMidiOutput();
-    drainMidiToHardware(wasmModule, hardwareOutput);
+    attachHwMidiForwarding(hardwareOutput);
 
     logStatus("Starting panel...");
     switchPanel("classic");
-    setupTransportSync(wasmModule);
-    setupStatePersistence(wasmModule);
+    setupTransportSync(ctl);
+    setupStatePersistence(ctl);
 
     setupViewToggle();
     setupMobileToggle();
 
-    // --- Hardware MIDI port enumeration (async, non-blocking to drain) ---
+    // --- Hardware MIDI port enumeration (async, non-blocking) ---
     // NOT awaited: requestMIDIAccess() can block indefinitely while the
     // origin's MIDI permission prompt sits unanswered — that would stall
     // the rest of boot (synth rack, drum rack, state restore) on any
@@ -69,7 +67,7 @@ async function main() {
     });
 
     // Real MIDI input: hardware controller → Octopus engine
-    const hardwareInput = new HardwareMidiInput(wasmModule);
+    const hardwareInput = new HardwareMidiInput(ctl);
     void hardwareInput.init().then(() => {
         const midiInSelect = document.getElementById("oct-midi-input") as HTMLSelectElement | null;
         midiInSelect?.addEventListener("change", () => hardwareInput.selectInput(midiInSelect.value));
@@ -83,11 +81,10 @@ async function main() {
 
     // --- In-browser OB-Xf synth rack (Phase C: 10 instances, one visible) ---
     // The rack builds the knob grid eagerly (defaults baked in), wires all
-    // header controls, and lazy-inits the AudioContext on the first PLAY
+    // header controls, and lazy-resumes the AudioContext on the first PLAY
     // click — Octopus already needs PLAY to make sound, and that click is
     // the user gesture the suspended AudioContext needs for autoplay
-    // compliance. The AudioWorklet reads MIDI directly from the
-    // SharedArrayBuffer, so no drain-loop wiring is needed here.
+    // compliance. The worklet node itself is already up (created at boot).
     setupObxdRack();
 
     // Load saved synth + drum state from localStorage (cached for restore
@@ -100,7 +97,7 @@ async function main() {
 }
 
 function switchPanel(view: "classic" | "modern" | "synth" | "drums" | "mixer") {
-    if (!wasmModule) return;
+    if (!ctl) return;
     if (activePanelCleanup) { activePanelCleanup(); activePanelCleanup = null; }
 
     const classicEl = document.getElementById("view-classic")!;
@@ -126,14 +123,14 @@ function switchPanel(view: "classic" | "modern" | "synth" | "drums" | "mixer") {
         obxdEl.style.display = "none";
         drumEl.style.display = "none";
         mixerEl.style.display = "none";
-        activePanelCleanup = buildClassicPanel(wasmModule);
+        activePanelCleanup = buildClassicPanel(ctl);
     } else if (view === "modern") {
         classicEl.style.display = "none";
         modernEl.style.display = "";
         obxdEl.style.display = "none";
         drumEl.style.display = "none";
         mixerEl.style.display = "none";
-        activePanelCleanup = startOctopusPanel(wasmModule);
+        activePanelCleanup = startOctopusPanel(ctl);
     } else if (view === "mixer") {
         classicEl.style.display = "none";
         modernEl.style.display = "none";

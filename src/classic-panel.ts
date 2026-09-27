@@ -1,11 +1,12 @@
 /*
  * classic-panel.ts — Full Octopus control surface, faithful port of web_gui.html.
  * Generates the same DOM structure with the same element IDs so MIR rendering
- * maps are identical. Replaces WebSocket with direct WASM calls.
+ * maps are identical. Drives the engine through the OctopusController (the
+ * engine lives inside the AudioWorklet; MIR is read from a shared-memory view).
  */
 
-import type { OctopusWasmModule } from "./octopus-types";
-import { onStateSaved } from "./state-persistence";
+import type { OctopusController } from "./octopus-awp";
+import { onStateSavedBytes } from "./state-persistence";
 
 const MIR_SIZE = 170;
 
@@ -67,7 +68,12 @@ const CLASSIC_CSS = `
 const keyNames: Record<string, number> = {MIX:21,SEL:32,ATR:43,VOL:54,PAN:65,MOD:76,EXP:87,U0:98,U1:109,U2:120,U3:131,U4:142,U5:153,MUT:164,EDT:175,ESC:186,TGGL:187,SOLO:188,CLR:189,RND:190,FLT:191,RMX:192,EFF:193,ZOOM:194,CPY:195,PST:196,VEL:1,PIT:2,LEN:3,STR:4,POS:5,DIR:6,AMT:7,GRV:8,MCC:9,MCH:10,BK1:201,BK2:200,BK3:199,BK4:198,BK5:197,BK6:207,BK7:206,BK8:216,BK9:215,BK100:224,BK200:233,CH1:205,CH2:204,CH3:203,CH4:202,CHN:213,FLW:214,MY:243,PEN:244,WHL:245,MAJ:246,MIN:247,DIM:248,CHR:249,SSEL:222,SMOD:221,CAD:230,PGM:242,TPO:234,REC:223,STP:231,PSE:232,P1:241,P2:240,P4:250,GRID:218,PAGE:219,TRK:220,STEP:227,MAP:228,PLAY:229,C:212,"C#":211,D:210,"D#":209,E:208,F:217,"F#":225,G:226,"G#":235,A:236,"A#":237,B:238,CUP:239,ALN:251,CHORD0:258,CHORD1:257,CHORD2:256,CHORD3:255,CHORD4:254,CHORD5:253,CHORD6:252};
 const mkey = (r: number, c: number) => 11 + c * 11 + r;
 
-export function buildClassicPanel(module: OctopusWasmModule): () => void {
+// The engine's internal-save notification (worklet-initiated state dump) is
+// hooked ONCE per controller, not per panel build — switchPanel can rebuild
+// this panel many times per session.
+let internalSaveHooked = false;
+
+export function buildClassicPanel(ctl: OctopusController): () => void {
     const root = document.getElementById("view-classic")!;
     root.className = "octo-classic-root";
 
@@ -76,10 +82,14 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
     document.head.appendChild(style);
 
     const skey = (i: number, p: number | boolean) => {
-        module._wasm_key_press(i, p ? 1 : 0);
-        if (module._wasm_consume_state_saved()) onStateSaved(module);
+        ctl.key(i, p);
     };
-    const rrot = (i: number, d: number) => module._wasm_rotary(i, d);
+    const rrot = (i: number, d: number) => ctl.rotary(i, d);
+
+    if (!internalSaveHooked) {
+        internalSaveHooked = true;
+        ctl.onInternalSave((bytes) => onStateSavedBytes(bytes));
+    }
 
     function setTip(el: HTMLElement, text: string) { el.dataset.tip = text; }
 
@@ -363,7 +373,6 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
     fitToWidth();
     alignChordButtons();
 
-    let mirAddr = 0;
     let running = true;
     let renderFrame = 0;
     const prevMir = new Uint8Array(MIR_SIZE);
@@ -379,16 +388,14 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
         if (!running) return;
         renderFrame++;
 
-        updateTransportIndicator(module);
+        updateTransportIndicator(ctl);
 
-        module._wasm_check_refresh();
-        mirAddr = module._get_processed_mir_ptr();
-        if (mirAddr) {
-            const mir = new Uint8Array(module.HEAPU8.buffer, mirAddr, MIR_SIZE);
-            if (mirChanged(mir)) {
-                paintLeds(mir);
-                prevMir.set(mir);
-            }
+        // Live 170-byte processed-MIR view on shared memory; the worklet's
+        // process() pump refreshes it at ~60 Hz.
+        const mir = ctl.mir();
+        if (mirChanged(mir)) {
+            paintLeds(mir);
+            prevMir.set(mir);
         }
         requestAnimationFrame(renderLoop);
     }
@@ -541,10 +548,10 @@ export function buildClassicPanel(module: OctopusWasmModule): () => void {
     };
 }
 
-function updateTransportIndicator(module: OctopusWasmModule) {
+function updateTransportIndicator(ctl: OctopusController) {
     const indicator = document.getElementById("oct-transport-indicator");
     if (!indicator) return;
-    const playing = module._get_run_bit() !== 0;
+    const playing = ctl.status.runBit() !== 0;
     const text = playing ? "PLAYING" : "STOPPED";
     if (indicator.textContent !== text) {
         indicator.textContent = text;

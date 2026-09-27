@@ -1,7 +1,8 @@
 /*
- * obxd-processor.tail.js — appended to the emcc-generated obxd_wasm.js at
- * build time to produce a single wasm/build/obxd-processor.js fed to
- * audioWorklet.addModule().
+ * obxd-processor.tail.js — appended to the emcc-generated obxd_wasm.js
+ * (and, since the combined-worklet migration, the emcc-generated
+ * octopus_wasm.js concatenated ahead of it) at build time to produce a
+ * single wasm/build/obxd-processor.js fed to audioWorklet.addModule().
  *
  * AudioWorkletGlobalScope disallows `importScripts()` (removed in Chrome 105+)
  * AND dynamic `import()` (rejected with "import() is disallowed on
@@ -14,6 +15,20 @@
  * property of `self` in worklet scope). We invoke it; it returns a Promise
  * that resolves with the WASM module instance. Until that resolves, process()
  * returns silence.
+ *
+ * Combined worklet: the concatenated octopus_wasm.js also defines
+ * `OctopusModuleFactory` in this same classic script. ensureOctopus()
+ * (below) instantiates the sequencer against the shared WebAssembly.Memory
+ * passed via processorOptions.octopusMemory (the glue is built with
+ * -sIMPORTED_MEMORY), runs engine_init, optionally replays an initial
+ * state blob, and builds the synth-ring views over the octopus module's
+ * own heap. From then on the sequencer lives in this worklet: process()
+ * pumps it once per 128-sample quantum BEFORE draining the synth ring (a
+ * tick's MIDI lands in the synth in the same quantum), and while the
+ * context is SUSPENDED (process() not yet called) the main thread drives
+ * it with 'oct_pump' messages at RAF rate — ignored once audioDriven. An
+ * octopus init failure posts {type:'error'} but never retires the node:
+ * the synth path is independent and keeps running.
  *
  * Multi-instance (Phase A): _obxd_init creates 10 SynthEngine instances
  * in one WASM heap. Every MIDI/param/gain/fxp/etc message carries an
@@ -32,8 +47,11 @@
  * set_param enqueued after a load_fxp applying AFTER it. Reply messages
  * (fxp_loaded, param_value, patch_name, the bulk dump/restored acks) are
  * posted from INSIDE the queued tasks so replies stay ordered relative
- * to the work. Only 'midi' (pendingMidi array) and 'ping' (30Hz liveness
- * / meter read) bypass the queue.
+ * to the work. Only 'midi' (pendingMidi array), 'ping' (30Hz liveness
+ * / meter read) and the cheap Octopus control messages (oct_key /
+ * oct_rotary / ... — see the oct_* cases in port.onmessage) bypass the
+ * queue; the two heavy Octopus FS round-trips (oct_save_state /
+ * oct_load_state) go through it like every other load.
  *
  * IMPORTANT: This file is plain JS (not an ES module, not TypeScript) so it
  * can be loaded via AudioWorklet.addModule() which expects a classic script.
@@ -58,8 +76,14 @@ let pendingMidi = [];   // queued via port.onmessage, drained in process()
 
 const taskQueue = new AwpTaskQueue();   // from src/awp-task-queue.js (concatenated above us)
 
-// SAB-based MIDI ring buffer (direct from Octopus sequencer, no main thread)
-let midiSabRing = null;      // Uint32Array view over SAB
+// SAB-based MIDI ring buffer (direct from Octopus sequencer, no main thread).
+// Since the combined-worklet migration these views are built inside
+// ensureOctopus() over the OCTOPUS module's own heap — the shared memory the
+// main thread passes as processorOptions.octopusMemory — using the C-side
+// ring/head/tail getters. The old processorOptions midiSab +
+// midiSynth*Offset handoff is gone. The imported shared memory is not
+// expected to grow, so the views are built once.
+let midiSabRing = null;      // Uint32Array view over the octopus shared memory
 let midiSabHead = null;      // Int32Array view (1 element)
 let midiSabTail = null;      // Int32Array view (1 element)
 const MIDI_SYNTH_RING_SIZE = 512;
@@ -78,6 +102,18 @@ let bufLView = null;       // Float32Array view over g_master_l
 let bufRView = null;       // Float32Array view over g_master_r
 
 const RENDER_QUANTUM = 128;   // AWP quantum is fixed at 128 frames by spec
+
+// --- Octopus sequencer engine state (combined worklet) ---
+let octModule = null;        // Octopus WASM module (shared memory, engine)
+let octReady = false;        // engine_init done, pointers valid
+let audioDriven = false;     // true after first process() call; oct_pump ignored then
+let octInitPromise = null;   // memoized ensureOctopus promise (mirrors initPromise)
+
+// The pristine WebAssembly.instantiate, captured the first time any of our
+// loader patches runs (see ensureModule / ensureOctopus). Patched variants
+// must ALWAYS bottom out here — never in another patch — so the two
+// factories can never substitute each other's WASM bytes.
+let realInstantiate = null;
 
 function ensureModule(wasmBytesArg) {
     if (initPromise) return initPromise;
@@ -112,6 +148,7 @@ function ensureModule(wasmBytesArg) {
                 // to its ArrayBuffer path: when called with imports object
                 // (not a Module), swap in our bytes.
                 const originalInstantiate = WebAssembly.instantiate;
+                realInstantiate = originalInstantiate;   // shared with ensureOctopus (see its comment)
                 WebAssembly.instantiate = async function (binaryOrModule, imports) {
                     if (imports && (!binaryOrModule || !(binaryOrModule instanceof WebAssembly.Module))) {
                         return originalInstantiate(prefetchedBytes, imports);
@@ -156,6 +193,141 @@ function ensureModule(wasmBytesArg) {
     return initPromise;
 }
 
+// ---------------------------------------------------------------------------
+// Octopus sequencer engine (combined-worklet migration)
+// ---------------------------------------------------------------------------
+
+// Async init for the Octopus engine, mirroring ensureModule above. Key
+// differences from the obxd path:
+//
+//   * bytes AND memory arrive via processorOptions (octopusWasmBinary /
+//     octopusMemory) — the octopus glue is built with -sIMPORTED_MEMORY, so
+//     the factory config takes `wasmMemory` and the module imports the main
+//     thread's shared WebAssembly.Memory. From then on one heap is shared
+//     between the main thread (MIR/status rendering) and this worklet.
+//   * after engine_init we optionally replay an initial state blob, then
+//     build the synth-ring views over the module's OWN heap — the ring the
+//     pump writes and process() drains lives in that same shared memory.
+//   * failure rethrows to the constructor's .catch, which posts
+//     {type:'error'} WITHOUT setting alive=false — the synth path must
+//     survive a sequencer-only failure.
+//
+// Loader patching mirrors ensureModule's trick (patch the WebAssembly
+// globals emcc's inner loader calls — its closure vars are unreachable from
+// outside the factory), but SCOPED: installed right before the factory call
+// and restored in a finally. We also await the obxd initPromise FIRST:
+// ensureModule's patches stay installed forever and close over the obxd
+// bytes, so if both factories were in flight at once, whichever patch was
+// installed when a factory's instantiate fired would win and could hand the
+// OTHER module the wrong bytes. Serializing after obxd settles and
+// restoring afterwards closes that window; both patched variants bottom out
+// at `realInstantiate` (the pristine builtin captured at first patch) so
+// they can never chain into each other even if the timing assumptions
+// change.
+function ensureOctopus(opts) {
+    if (octInitPromise) return octInitPromise;
+    octInitPromise = (async () => {
+        const port = opts && opts.port;
+        try {
+            // Let the obxd instantiate finish first (see the function
+            // comment). A rejected obxd init must not block the sequencer —
+            // swallow and continue.
+            try { if (initPromise) await initPromise; } catch (e) { /* obxd failed; octopus still boots */ }
+
+            console.log('[obxd-processor] locating OctopusModuleFactory...');
+            const factory = (typeof OctopusModuleFactory !== 'undefined') ? OctopusModuleFactory : null;
+            if (typeof factory !== 'function') {
+                throw new Error('OctopusModuleFactory not found after combined-script load (typeof=' + typeof factory + ')');
+            }
+
+            const octBytes = opts.wasmBinary instanceof Uint8Array
+                ? opts.wasmBinary
+                : new Uint8Array(opts.wasmBinary);
+
+            const prevStreaming = WebAssembly.instantiateStreaming;
+            const prevInstantiate = WebAssembly.instantiate;
+            if (!realInstantiate) realInstantiate = prevInstantiate;
+            WebAssembly.instantiateStreaming = async function (_response, imports) {
+                console.log('[obxd-processor] octopus instantiateStreaming patched -> using pre-fetched bytes');
+                return realInstantiate(octBytes, imports);
+            };
+            // Same fall-through guard as ensureModule's plain-instantiate
+            // patch: when called with real bytes (wasmBinary was in the
+            // factory config), pass them through untouched.
+            WebAssembly.instantiate = async function (binaryOrModule, imports) {
+                if (imports && (!binaryOrModule || !(binaryOrModule instanceof WebAssembly.Module))) {
+                    return realInstantiate(octBytes, imports);
+                }
+                return realInstantiate(binaryOrModule, imports);
+            };
+            console.log('[obxd-processor] octopus loader patched (' + octBytes.byteLength + ' pre-fetched bytes, imported shared memory)');
+
+            try {
+                const m = await factory({
+                    wasmBinary: octBytes,
+                    wasmMemory: opts.memory,
+                    locateFile: (p) => '/' + p,
+                });
+
+                // Sequencer timebase: _octopus_pump converts audio-quantum
+                // sample deltas into 48-PPQN ticks, so it needs the exact
+                // context sample rate.
+                m._octopus_set_sample_rate(sampleRate || 48000);
+
+                // /persistent is the engine's state slot (the octopus glue
+                // keeps -sFORCE_FILESYSTEM=1). mkdir throws when the dir
+                // already exists — swallow and move on.
+                try { m.FS.mkdir('/persistent'); } catch (e) { /* already exists */ }
+
+                m._engine_init();
+
+                // Optional initial state (saved project handed over by the
+                // main thread): stage the bytes into the FS, then replay
+                // through the engine's normal load path.
+                const initialState = opts.initialState;
+                if (initialState && initialState.length) {
+                    m.FS.writeFile('/persistent/octopus_state.bin', initialState);
+                    m._wasm_load_state();
+                }
+
+                // Synth-ring views, built over the octopus module's own heap
+                // (HEAPU8.buffer IS the shared memory's buffer) from the
+                // C-side getters. process() drains this ring right after
+                // pumping the engine — same quantum, same memory.
+                midiSabRing = new Uint32Array(m.HEAPU8.buffer, m._get_midi_synth_ring_ptr(), MIDI_SYNTH_RING_SIZE);
+                midiSabHead = new Int32Array(m.HEAPU8.buffer, m._get_midi_synth_ring_head_ptr(), 1);
+                midiSabTail = new Int32Array(m.HEAPU8.buffer, m._get_midi_synth_ring_tail_ptr(), 1);
+                console.log('[obxd-processor] octopus synth-ring views connected (ring ptr ' + m._get_midi_synth_ring_ptr() + ')');
+
+                octModule = m;
+                octReady = true;
+
+                // Engine is up — tell the main thread. It builds its OWN
+                // views (MIR rendering, status reads) over the SAME shared
+                // memory it passed as processorOptions.octopusMemory, using
+                // these byte offsets; no per-frame posting needed.
+                port.postMessage({
+                    type: 'oct_ready',
+                    mirPtr: m._get_mir_ptr(),
+                    processedMirPtr: m._get_processed_mir_ptr(),
+                    statusPtr: m._get_status_ptr(),
+                });
+                console.log('[obxd-processor] octopus engine ready');
+            } finally {
+                // Restore whatever was installed before us (the obxd-era
+                // patches, or the pristine builtins) — see the function
+                // comment for why the patch must be scoped.
+                WebAssembly.instantiateStreaming = prevStreaming;
+                WebAssembly.instantiate = prevInstantiate;
+            }
+        } catch (e) {
+            console.error('[obxd-processor] octopus WASM load failed:', e && e.message, e && e.stack);
+            throw e;
+        }
+    })();
+    return octInitPromise;
+}
+
 class ObxdProcessor extends AudioWorkletProcessor {
     constructor(options) {
         super(options);
@@ -177,21 +349,6 @@ class ObxdProcessor extends AudioWorkletProcessor {
             '; wasmBytesArg type:', typeof wasmBytesArg,
             '; byteLength:', wasmBytesArg ? wasmBytesArg.byteLength : 0);
 
-        // Wire up the Octopus engine's SAB-backed MIDI ring. The main thread
-        // passes the SharedArrayBuffer (octopusModule.HEAPU8.buffer) plus the
-        // three byte offsets returned by the C getters. We build typed-array
-        // views over them and read events directly in process().
-        const midiSabArg = options && options.processorOptions && options.processorOptions.midiSab;
-        if (midiSabArg) {
-            try {
-                midiSabRing = new Uint32Array(midiSabArg, options.processorOptions.midiSynthRingOffset, MIDI_SYNTH_RING_SIZE);
-                midiSabHead = new Int32Array(midiSabArg, options.processorOptions.midiSynthHeadOffset, 1);
-                midiSabTail = new Int32Array(midiSabArg, options.processorOptions.midiSynthTailOffset, 1);
-                console.log('[obxd-processor] SAB MIDI ring connected');
-            } catch (e) {
-                console.warn('[obxd-processor] SAB MIDI ring init failed:', e && e.message);
-            }
-        }
         // Default routing: channels 1-10 → instances 0-9 (bitmask: bit i = instance i)
         midiRouting = new Array(17).fill(0);
         for (let i = 0; i < OBXD_INSTANCE_COUNT; i++) midiRouting[i + 1] = (1 << i);
@@ -202,6 +359,29 @@ class ObxdProcessor extends AudioWorkletProcessor {
             reportError(e);
             this.alive = false;
         });
+
+        // Boot the Octopus sequencer engine in this same worklet. The main
+        // thread passes the pre-fetched octopus WASM bytes, the shared
+        // WebAssembly.Memory the module imports, and an optional initial
+        // state blob. ensureOctopus() (which waits for the obxd factory
+        // above to settle first — see its comment) builds the synth-ring
+        // views over the octopus heap itself; the old processorOptions
+        // midiSab/midiSynth*Offset keys are gone. A sequencer-only failure
+        // posts {type:'error'} but deliberately does NOT set alive=false.
+        const octProcOpts = options && options.processorOptions;
+        const octBytesArg = octProcOpts ? octProcOpts.octopusWasmBinary : null;
+        const octMemArg = octProcOpts ? octProcOpts.octopusMemory : null;
+        const octInitialState = octProcOpts ? octProcOpts.octopusInitialState : null;
+        if (octBytesArg && octMemArg) {
+            ensureOctopus({
+                wasmBinary: octBytesArg,
+                memory: octMemArg,
+                initialState: octInitialState,
+                port: this.port,
+            }).catch((e) => {
+                reportError(e);   // posts {type:'error',...}; alive stays true
+            });
+        }
 
         // Per-instance message routing. Every command carries an
         // instance_id (0..9) so the C side can dispatch to the right
@@ -588,6 +768,150 @@ class ObxdProcessor extends AudioWorkletProcessor {
                         if (wasmModule) wasmModule._obxd_clear_pcm(id);
                     }, true);
                     break;
+                // ------------------------------------------------------------------
+                // Octopus sequencer engine messages (combined worklet).
+                //
+                // These are cheap and latency-sensitive, so they run INLINE
+                // — NOT through taskQueue — EXCEPT the two heavy FS
+                // round-trips further down (oct_save_state / oct_load_state).
+                // Every handler null-guards on octModule/octReady so a
+                // failed (or not-yet-finished) sequencer init is a silent
+                // no-op for the synth path.
+                // ------------------------------------------------------------------
+                case 'oct_key':
+                    // UI key press → firmware interpreter. The SAVE key
+                    // latches a one-shot "state saved" flag inside the
+                    // engine; when it fires we forward the persisted bytes
+                    // to the main thread in the same message turn.
+                    if (!octModule || !octReady) return;
+                    try {
+                        octModule._wasm_key_press(msg.key | 0, msg.press ? 1 : 0);
+                        if (octModule._wasm_consume_state_saved()) {
+                            const savedBytes = octModule.FS.readFile('/persistent/octopus_state.bin');
+                            this.port.postMessage({ type: 'oct_state_saved', bytes: savedBytes });
+                        }
+                    } catch (e) {
+                        console.error('[obxd-processor] oct_key threw:', e && e.message);
+                    }
+                    break;
+                case 'oct_rotary':
+                    if (!octModule || !octReady) return;
+                    octModule._wasm_rotary(msg.idx | 0, msg.dir | 0);
+                    break;
+                case 'oct_transport':
+                    if (!octModule || !octReady) return;
+                    octModule._wasm_transport(msg.running ? 1 : 0);
+                    break;
+                case 'oct_pause':
+                    if (!octModule || !octReady) return;
+                    octModule._wasm_pause();
+                    break;
+                case 'oct_tempo':
+                    if (!octModule || !octReady) return;
+                    if (typeof msg.bpm === 'number') octModule._wasm_set_tempo(+msg.bpm);
+                    break;
+                case 'oct_zoom':
+                    if (!octModule || !octReady) return;
+                    octModule._wasm_set_zoom(msg.level | 0);
+                    break;
+                case 'oct_midi_in':
+                    // Hardware MIDI in: feeds the firmware's byte-at-a-time
+                    // running-status interpreters.
+                    if (!octModule || !octReady) return;
+                    octModule._wasm_midi_input(msg.status | 0, msg.d1 | 0, msg.d2 | 0);
+                    break;
+                case 'oct_shutdown':
+                    if (!octModule || !octReady) return;
+                    octModule._wasm_shutdown();
+                    break;
+                case 'oct_pump':
+                    // RAF-rate pump for the SUSPENDED-context case: while
+                    // process() is not being called (context suspended, e.g.
+                    // before the first user gesture), the main thread posts
+                    // elapsed-milliseconds messages and we convert them to
+                    // sample deltas at the context rate. Clamped to 1..100ms
+                    // so a stalled main thread can't request a huge catch-up
+                    // burst. Once process() has run at least once
+                    // (audioDriven) audio owns the clock and these are
+                    // dropped on the floor.
+                    if (!audioDriven && octModule && octReady) {
+                        const ms = Math.max(1, Math.min(100, +msg.ms | 0));
+                        octModule._octopus_pump(Math.round(ms / 1000 * (sampleRate || 48000)));
+                        // process() is the ONLY other drain site for the
+                        // deferred task queue — while the context is
+                        // suspended nothing runs it, so oct_save_state /
+                        // oct_load_state (and the synth-side bulk restores)
+                        // would sit queued forever and their main-thread
+                        // requesters would time out. Drain with the same
+                        // per-call budget process() uses; once audio drives
+                        // the pump this branch (and drain) stops firing.
+                        taskQueue.drain(1);
+                    }
+                    break;
+                case 'oct_save_state':
+                    // HEAVY: full sequencer state flush into MEMFS + the
+                    // file read back across the heap — deferred, one per
+                    // drain. Always replies; bytes:null on any failure
+                    // (including engine-not-ready) so the requester can't
+                    // hang waiting for bytes.
+                    taskQueue.push(() => {
+                        let outBytes = null;
+                        try {
+                            if (octModule && octReady) {
+                                octModule._wasm_save_state();
+                                outBytes = octModule.FS.readFile('/persistent/octopus_state.bin');
+                            }
+                        } catch (e) {
+                            console.error('[obxd-processor] oct_save_state threw:', e && e.message);
+                            outBytes = null;
+                        }
+                        this.port.postMessage({ type: 'oct_state_bytes', bytes: outBytes });
+                    }, true);
+                    break;
+                case 'oct_load_state': {
+                    // HEAVY: heap copy in + full engine replay — deferred,
+                    // one per drain. Always replies with ok (false covers
+                    // missing bytes, not-ready, and throws).
+                    const inBytes = msg.bytes;
+                    taskQueue.push(() => {
+                        let ok = false;
+                        try {
+                            if (octModule && octReady && inBytes && inBytes.length) {
+                                octModule.FS.writeFile('/persistent/octopus_state.bin', inBytes);
+                                octModule._wasm_load_state();
+                                ok = true;
+                            }
+                        } catch (e) {
+                            console.error('[obxd-processor] oct_load_state threw:', e && e.message);
+                            ok = false;
+                        }
+                        this.port.postMessage({ type: 'oct_state_loaded', ok });
+                    }, true);
+                    break;
+                }
+                case 'oct_snapshot':
+                    // Test hook: full processed-MIR + status readback. The
+                    // status block is an int32 array at _get_status_ptr()
+                    // ([0]=engine_ready, [1]=run_bit, [2]=tempo,
+                    // [3]=zoom_level, [4]=tick_count, [5]=midi_dropped,
+                    // [6]=midi_synth_dropped; double at byte offset 32 =
+                    // tick_ns). Read straight off the shared heap.
+                    if (!octModule || !octReady) return;
+                    try {
+                        const status = new Int32Array(octModule.HEAPU8.buffer, octModule._get_status_ptr(), 7);
+                        const mir = Array.from(new Uint8Array(octModule.HEAPU8.buffer, octModule._get_processed_mir_ptr(), 170));
+                        this.port.postMessage({
+                            type: 'oct_snapshot',
+                            mir,
+                            runBit: status[1],
+                            tempo: status[2],
+                            zoom: status[3],
+                            tickCount: status[4] >>> 0,
+                        });
+                    } catch (e) {
+                        console.error('[obxd-processor] oct_snapshot threw:', e && e.message);
+                    }
+                    break;
                 default:
                     break;
             }
@@ -597,6 +921,14 @@ class ObxdProcessor extends AudioWorkletProcessor {
     }
 
     process(_inputs, outputs) {
+        // Octopus sequencer pump — FIRST, before the synth-ring drain below,
+        // so a tick generated this quantum lands in the synth in this same
+        // quantum (the ring the pump writes into is the ring the drain
+        // reads). Also latches audioDriven: from now on the engine is
+        // clocked by audio and main-thread 'oct_pump' messages are ignored.
+        audioDriven = true;
+        if (octModule && octReady) octModule._octopus_pump(RENDER_QUANTUM);
+
         if (!this.alive) return false;   // retire node on fatal init failure
         if (!wasmModule) return true;    // still loading; output silence
 

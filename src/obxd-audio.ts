@@ -2,6 +2,13 @@
  * obxd-audio.ts — Main-thread bootstrap + per-instance API for the
  * multi-instance OB-Xf synth.
  *
+ * The combined AudioWorklet node is created AT STARTUP by
+ * bootOctopusEngine() (octopus-awp.ts), which calls setupObxdAudio()
+ * with the Octopus engine's WASM binary + memory. The Octopus sequencer
+ * engine lives in the SAME worklet and is pumped from process(); the
+ * later setupObxdAudio() calls from the rack (PLAY path) are fast
+ * no-ops that just re-resume the AudioContext.
+ *
  * The AudioWorklet + WASM loading strategy is unchanged from Phase 1:
  * AudioWorkletGlobalScope forbids importScripts() AND dynamic import(),
  * and Chrome's AWP also lacks XMLHttpRequest. We pre-fetch the WASM bytes
@@ -17,8 +24,6 @@
  * `selectedInstance`; the bridge / rack / knob-grid pass the id
  * explicitly so a future "multi-select" UI doesn't need an API change.
  */
-
-import { getOctopusModule } from "./octopus-module";
 
 let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
@@ -75,6 +80,22 @@ export function setHwMidiHandler(cb: ((packed: number[]) => void) | null): void 
     hwMidiHandler = cb;
 }
 
+/*
+ * Permanent message-listener registry. Every callback registered here is
+ * invoked for EVERY message the worklet posts (before the pendingReplies
+ * scan in ensureRouter). Used by octopus-awp.ts for the Octopus engine's
+ * async replies (oct_ready / oct_state_saved / oct_state_bytes /
+ * oct_state_loaded / oct_snapshot). No detach — registrations live for
+ * the lifetime of the page.
+ */
+const workletMessageListeners: ((msg: unknown) => void)[] = [];
+
+export function addWorkletMessageListener(cb: (msg: unknown) => void): void {
+    if (!workletMessageListeners.includes(cb)) {
+        workletMessageListeners.push(cb);
+    }
+}
+
 function ensureRouter(): void {
     if (routerInstalled || !workletNode) return;
     routerInstalled = true;
@@ -83,6 +104,13 @@ function ensureRouter(): void {
     workletNode.port.addEventListener("message", (ev: MessageEvent) => {
         const msg = ev.data;
         if (!msg || typeof msg !== "object") return;
+
+        // Permanent listeners first (octopus-awp controller, etc.) so
+        // they observe every message, including ones the reply router
+        // would otherwise claim.
+        for (const listener of workletMessageListeners) {
+            listener(msg);
+        }
 
         // Permanent meter listener: every pong refreshes lastMeters.
         // Independent of pendingReplies so a ping without an awaitReply
@@ -140,7 +168,20 @@ function awaitReply(predicate: (msg: unknown) => boolean, timeoutMs: number): Pr
     });
 }
 
-export async function setupObxdAudio(): Promise<void> {
+/*
+ * Octopus engine assets handed to the worklet at node creation. The
+ * combined processor instantiates the Octopus engine with the supplied
+ * WASM binary + shared memory inside the AudioWorkletGlobalScope (see
+ * octopus-awp.ts). `octopusInitialState` is the boot-time state blob
+ * from the active project, or null for a fresh engine.
+ */
+export interface OctopusWorkletAssets {
+    octopusWasmBinary: ArrayBuffer;
+    octopusMemory: WebAssembly.Memory;
+    octopusInitialState: Uint8Array | null;
+}
+
+export async function setupObxdAudio(octopusAssets?: OctopusWorkletAssets): Promise<void> {
     if (workletNode) return;   // already up
 
     if (!audioContext) {
@@ -148,7 +189,19 @@ export async function setupObxdAudio(): Promise<void> {
             window.AudioContext || window.webkitAudioContext!;
         audioContext = new Ctor();
     }
-    try { await audioContext.resume(); } catch { /* autoplay policy — non-fatal */ }
+    // Try to resume, but NEVER await resume() unbounded: on an autoplay-
+    // blocked context Chrome keeps the promise PENDING until the first user
+    // gesture (it does not reject — the catch below never fires), which
+    // used to stall the whole boot before the worklet node was created.
+    // Racing a short timeout lets the suspended-context boot proceed; the
+    // Octopus RAF fallback pump keeps the engine ticking until the context
+    // runs, and the rack's first PLAY click completes the resume.
+    try {
+        await Promise.race([
+            audioContext.resume(),
+            new Promise<void>((resolve) => setTimeout(resolve, 250)),
+        ]);
+    } catch { /* autoplay policy — non-fatal */ }
 
     if (!moduleAdded) {
         // Cache-busting query param: AudioWorklet module URLs are cached
@@ -168,20 +221,23 @@ export async function setupObxdAudio(): Promise<void> {
     }
     const wasmBinary = await wasmResponse.arrayBuffer();
 
-    // Gather the Octopus engine's SharedArrayBuffer-backed MIDI synth ring
-    // and its three byte offsets. The worklet reads events directly from
-    // this ring inside process() — no main-thread round trip per batch.
-    const octopusModule = getOctopusModule();
-    const midiSab = octopusModule.HEAPU8.buffer;
-    const midiSynthRingOffset = octopusModule._get_midi_synth_ring_ptr();
-    const midiSynthHeadOffset = octopusModule._get_midi_synth_ring_head_ptr();
-    const midiSynthTailOffset = octopusModule._get_midi_synth_ring_tail_ptr();
+    const processorOptions: {
+        wasmBinary: ArrayBuffer;
+        octopusWasmBinary?: ArrayBuffer;
+        octopusMemory?: WebAssembly.Memory;
+        octopusInitialState?: Uint8Array | null;
+    } = { wasmBinary };
+    if (octopusAssets) {
+        processorOptions.octopusWasmBinary = octopusAssets.octopusWasmBinary;
+        processorOptions.octopusMemory = octopusAssets.octopusMemory;
+        processorOptions.octopusInitialState = octopusAssets.octopusInitialState;
+    }
 
     workletNode = new AudioWorkletNode(audioContext, "obxd-processor", {
         numberOfInputs: 0,
         numberOfOutputs: 1,
         outputChannelCount: [2],
-        processorOptions: { wasmBinary, midiSab, midiSynthRingOffset, midiSynthHeadOffset, midiSynthTailOffset },
+        processorOptions,
     });
     // Master bus: worklet → masterGain → masterAnalyser → destination.
     // The GainNode is the master fader; the AnalyserNode feeds the master VU.
@@ -220,8 +276,18 @@ export async function setupObxdAudio(): Promise<void> {
             if (!msg) return;
             // Forward any non-ready/non-error messages to the previous handler
             // (defensive — there is none in practice today) before intercepting.
-            if (msg.type !== "ready" && msg.type !== "error" && typeof prevHandler === "function") {
-                prevHandler.call(port, ev);
+            // Permanent listeners (octopus-awp controller) also see handshake-
+            // window messages so an oct_ready racing the obxd ready is never
+            // missed before ensureRouter takes over.
+            if (msg.type !== "ready" && msg.type !== "error") {
+                if (msg && typeof msg === "object") {
+                    for (const listener of workletMessageListeners) {
+                        listener(msg);
+                    }
+                }
+                if (typeof prevHandler === "function") {
+                    prevHandler.call(port, ev);
+                }
                 return;
             }
             if (msg.type === "ready") {

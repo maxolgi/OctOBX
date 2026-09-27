@@ -1,12 +1,12 @@
 /*
- * obxd-bridge.ts — Channel-routed MIDI fan-out for the multi-instance
- * OB-Xf synth.
+ * obxd-bridge.ts — Channel-routed MIDI routing state for the
+ * multi-instance OB-Xf synth.
  *
- * Same plumbing pattern as a hypothetical external-synth bridge: the
- * single drain loop in midi-output.ts (drainMidiToHardware) owns
- * ring-buffer access and calls the handler returned here on each batch.
- * We are a parallel consumer — Web MIDI hardware output continues to
- * receive the same events independently.
+ * The OB-Xf synth reads MIDI directly from shared memory inside the
+ * AudioWorklet's process() (see obxd-processor.tail.js) using the
+ * channel→instance routing table we push via sendObxdMidiRouting(). The
+ * buildChannelToInstance() logic below governs that path; routing is
+ * computed once here and pushed to the worklet on every change.
  *
  * Routing:
  *   - Non-MPE (default): each Octopus MIDI channel (1..16) maps to at most
@@ -24,57 +24,23 @@
  *     hasn't already claimed.
  *
  * Events on unmapped channels are dropped (no instance to send them to).
- * Events on system common / real-time bytes (status >= 0xF0) are dropped
- * here as well — the C side would also reject them, but skipping the
- * postMessage round-trip is cheaper.
- *
- * The handler no-ops while the synth is uninitialized
- * (isObxdReady() === false), so it is safe to install before the user
- * clicks PLAY to bring up the audio engine.
- *
- * NOTE: the bridge handler returned by createObxdBridgeHandler() is the
- * SECONDARY path. The PRIMARY (and currently only active) OB-Xf path is
- * the SharedArrayBuffer ring read directly inside the AudioWorklet's
- * process() — see obxd-processor.tail.js. That path uses the SAME
- * channel→instance routing table we push via sendObxdMidiRouting(), so
- * the buildChannelToInstance() logic below governs both paths. Keeping
- * them in sync is why routing is computed once here and pushed to the
- * worklet on every change.
+ * The syncRoutingToAudioWorklet() push no-ops while the worklet is
+ * uninitialized (isObxdReady() === false) and the next change after boot
+ * delivers the full table.
  *
  * Channel preservation (MPE): the Octopus engine packs the full MIDI
- * status byte (0x90 | (channel & 0x0F)) into the ring, so the per-note
- * channel travels in the status byte's low nibble. obxd_midi_in() on the
- * C side currently hardcodes `channel = 0` regardless of that nibble;
+ * status byte (0x90 | (channel & 0x0F)) into its MIDI stream, so the
+ * per-note channel travels in the status byte's low nibble. obxd_midi_in()
+ * on the C side currently hardcodes `channel = 0` regardless of that nibble;
  * consuming `status & 0x0F` when g_mpe_enabled[id] is set is the engine
  * follow-up that makes processNoteOn(note, vel, channel) receive the real
  * per-voice channel. No JS change is needed for that — the channel is
- * already in the status byte we forward.
+ * already in the status byte the worklet reads.
  */
 
-import { isObxdReady, sendObxdMidiRouting, sendObxdInstanceMidi, setObxdInstanceMpe as setObxdInstanceMpeEngine } from "./obxd-audio";
+import { isObxdReady, sendObxdMidiRouting, setObxdInstanceMpe as setObxdInstanceMpeEngine } from "./obxd-audio";
 import { buildChannelToInstance as buildRouting, MAX_MPE_VOICE_CHANNELS } from "./channel-routing";
 import type { InstanceRoute } from "./channel-routing";
-
-// Re-exported so main.ts can import both the handler factory and the
-// BatchDrainHandler type from one place.
-export type { BatchDrainHandler } from "./midi-output";
-import type { BatchDrainHandler } from "./midi-output";
-
-/*
- * Pitch offset in semitones applied to NoteOn / NoteOff note numbers
- * before forwarding to the Obxd engine.
- *
- * The plan called for +12 based on the ObxdVoice.h `midiIndx - 81` index,
- * but empirical testing of the actual WASM build showed the synth is
- * already calibrated to standard MIDI semantics:
- *   - MIDI 60 -> fundamental at ~258 Hz (= C4)
- *   - MIDI 69 -> fundamental at ~445 Hz (= A4 = 440 Hz)
- *   - MIDI 81 -> fundamental at ~890 Hz (= A5 = 880 Hz)
- * So adding +12 would shift everything UP one octave. Value is left
- * configurable here in case a future Octopus firmware MIDI-base setting
- * or a per-track transpose needs compensating.
- */
-export const OBXD_TRANSPOSE_SEMITONES = 0;
 
 const INSTANCE_COUNT = 10;
 
@@ -203,53 +169,4 @@ function syncRoutingToAudioWorklet(): void {
 
 export function getObxdInstanceChannel(id: number): number {
     return instanceChannels.get(id) ?? (id + 1);
-}
-
-export function createObxdBridgeHandler(): BatchDrainHandler {
-    return (events, _timestamps, count) => {
-        if (!isObxdReady()) return;
-
-        // channel -> instance_id. Rebuilt each batch so a runtime
-        // setObxdInstanceChannel() / setObxdInstanceMpe() takes effect on
-        // the next drain without needing an invalidation signal. (≤16
-        // entries — cheap.) MPE-aware: an MPE instance appears under
-        // multiple channel keys.
-        const channelToInstance = buildChannelToInstance();
-
-        for (let i = 0; i < count; i++) {
-            const packed = events[i];
-            const status = packed & 0xff;
-            const data1 = (packed >> 8) & 0xff;
-            const data2 = (packed >> 16) & 0xff;
-            const channel = (packed >> 24) & 0xff;
-
-            // Drop system-common / system-real-time / sysex. The C side
-            // (_obxd_midi_in) also returns early for status >= 0xF0, but
-            // filtering here avoids the postMessage round-trip.
-            if (status >= 0xf0) continue;
-
-            const cmd = status & 0xf0;
-            // Keep channel-voice only: NoteOff, NoteOn, CC, PC, ChPressure, PitchBend.
-            if (cmd !== 0x80 && cmd !== 0x90 && cmd !== 0xb0 &&
-                cmd !== 0xc0 && cmd !== 0xd0 && cmd !== 0xe0) continue;
-
-            const instanceIds = channelToInstance.get(channel);
-            if (!instanceIds || instanceIds.length === 0) continue;
-
-            // Transpose NoteOn / NoteOff note numbers so the synth matches
-            // standard MIDI semantics (see OBXD_TRANSPOSE_SEMITONES).
-            let d1 = data1;
-            if ((cmd === 0x80 || cmd === 0x90) && d1 >= 0 && d1 <= 127) {
-                d1 = Math.max(0, Math.min(127, d1 + OBXD_TRANSPOSE_SEMITONES));
-            }
-
-            // Forward the FULL status byte (channel nibble intact). In MPE
-            // mode the per-voice channel lives in status & 0x0F; the engine
-            // follow-up consumes it for processNoteOn(note, vel, channel).
-            // Multiple instances on the same channel each get a copy.
-            for (const instanceId of instanceIds) {
-                sendObxdInstanceMidi(instanceId, status, d1, data2);
-            }
-        }
-    };
 }

@@ -1,20 +1,19 @@
 /*
  * octopus-panel.ts — Mounts the Octopus grid control surface and connects
- * it to the WASM engine. Replaces the WebSocket layer from web_gui.html
- * with direct Module.ccall / HEAPU8 reads.
+ * it to the engine via the OctopusController (octopus-awp.ts).
  *
- * The MIR (Matrix Intermediate Representation) is a 170-byte array in
- * WASM linear memory. JavaScript reads it at 60Hz via requestAnimationFrame
- * and updates the LED DOM elements.
+ * The MIR (Matrix Intermediate Representation) is a 170-byte shared-memory
+ * view owned by the worklet engine; the worklet pump refreshes it at ~60 Hz
+ * and this panel reads it via ctl.mir() on each animation frame to update
+ * the LED DOM elements.
  */
 
-import type { OctopusWasmModule } from "./octopus-types";
+import type { OctopusController } from "./octopus-awp";
 
 const MIR_SIZE = 170;
 
-export function startOctopusPanel(module: OctopusWasmModule): () => void {
+export function startOctopusPanel(ctl: OctopusController): () => void {
     let running = true;
-    let mirAddr = 0;
     let renderFrame = 0;
     const prevMir = new Uint8Array(MIR_SIZE);
 
@@ -29,7 +28,7 @@ export function startOctopusPanel(module: OctopusWasmModule): () => void {
         if (!running) return;
         renderFrame++;
 
-        const runBit = module._get_run_bit();
+        const runBit = ctl.status.runBit();
         const indicator = document.getElementById("oct-transport-indicator");
         if (indicator) {
             const playing = runBit !== 0;
@@ -39,16 +38,10 @@ export function startOctopusPanel(module: OctopusWasmModule): () => void {
             }
         }
 
-        module._wasm_check_refresh();
-
-        mirAddr = module._get_processed_mir_ptr();
-
-        if (mirAddr) {
-            const mir = new Uint8Array(module.HEAPU8.buffer, mirAddr, MIR_SIZE);
-            if (mirChanged(mir)) {
-                updateLEDs(mir);
-                prevMir.set(mir);
-            }
+        const mir = ctl.mir();
+        if (mirChanged(mir)) {
+            updateLEDs(mir);
+            prevMir.set(mir);
         }
 
         requestAnimationFrame(renderLoop);
@@ -56,7 +49,7 @@ export function startOctopusPanel(module: OctopusWasmModule): () => void {
 
     requestAnimationFrame(renderLoop);
 
-    wireInputHandlers(module);
+    wireInputHandlers(ctl);
 
     return () => {
         running = false;
@@ -120,7 +113,7 @@ function setLED(id: string, v: number) {
     ledEl.classList.toggle("on-a", r && g);
 }
 
-function wireInputHandlers(module: OctopusWasmModule) {
+function wireInputHandlers(ctl: OctopusController) {
     const heldKeys = new Map<number, HTMLElement>();
 
     document.querySelectorAll("[data-key]").forEach((el) => {
@@ -133,24 +126,24 @@ function wireInputHandlers(module: OctopusWasmModule) {
             if (e.ctrlKey || e.metaKey || e.button === 2) {
                 e.preventDefault();
                 if (heldKeys.has(key)) {
-                    module._wasm_key_press(key, 0);
+                    ctl.key(key, false);
                     htmlEl.classList.remove("held");
                     heldKeys.delete(key);
                 } else {
-                    module._wasm_key_press(key, 1);
+                    ctl.key(key, true);
                     htmlEl.classList.add("held");
                     heldKeys.set(key, htmlEl);
                 }
                 return;
             }
-            module._wasm_key_press(key, 1);
+            ctl.key(key, true);
         };
 
         htmlEl.onmouseup = () => {
             if (heldKeys.has(key)) return;
-            module._wasm_key_press(key, 0);
+            ctl.key(key, false);
             heldKeys.forEach((heldEl, k) => {
-                module._wasm_key_press(k, 0);
+                ctl.key(k, false);
                 heldEl.classList.remove("held");
             });
             heldKeys.clear();
@@ -158,12 +151,12 @@ function wireInputHandlers(module: OctopusWasmModule) {
 
         htmlEl.addEventListener("touchstart", (e) => {
             e.preventDefault();
-            module._wasm_key_press(key, 1);
+            ctl.key(key, true);
         }, { passive: false });
 
         htmlEl.addEventListener("touchend", (e) => {
             e.preventDefault();
-            module._wasm_key_press(key, 0);
+            ctl.key(key, false);
         }, { passive: false });
     });
 
@@ -179,11 +172,11 @@ function wireInputHandlers(module: OctopusWasmModule) {
             if (e.ctrlKey || e.metaKey || e.button === 2) {
                 e.preventDefault();
                 if (heldKeys.has(key)) {
-                    module._wasm_key_press(key, 0);
+                    ctl.key(key, false);
                     htmlEl.classList.remove("held");
                     heldKeys.delete(key);
                 } else {
-                    module._wasm_key_press(key, 1);
+                    ctl.key(key, true);
                     htmlEl.classList.add("held");
                     heldKeys.set(key, htmlEl);
                 }
@@ -191,15 +184,15 @@ function wireInputHandlers(module: OctopusWasmModule) {
             }
             e.preventDefault();
             dragVisited = new Set();
-            module._wasm_key_press(key, 1);
-            module._wasm_key_press(key, 0);
+            ctl.key(key, true);
+            ctl.key(key, false);
             dragVisited.add(htmlEl.id);
         };
 
         htmlEl.addEventListener("mouseenter", () => {
             if (dragVisited.size === 0 || dragVisited.has(htmlEl.id)) return;
-            module._wasm_key_press(key, 1);
-            module._wasm_key_press(key, 0);
+            ctl.key(key, true);
+            ctl.key(key, false);
             dragVisited.add(htmlEl.id);
         });
 
@@ -207,7 +200,7 @@ function wireInputHandlers(module: OctopusWasmModule) {
             if (heldKeys.has(key)) return;
             dragVisited = new Set();
             heldKeys.forEach((heldEl, k) => {
-                module._wasm_key_press(k, 0);
+                ctl.key(k, false);
                 heldEl.classList.remove("held");
             });
             heldKeys.clear();
@@ -223,7 +216,7 @@ function wireInputHandlers(module: OctopusWasmModule) {
         htmlEl.onwheel = (e) => {
             e.preventDefault();
             const dir = e.deltaY > 0 ? 1 : 2;
-            module._wasm_rotary(rotNdx, dir);
+            ctl.rotary(rotNdx, dir);
         };
     });
 }
