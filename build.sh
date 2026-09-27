@@ -7,10 +7,9 @@
 #   - Firmware submodule initialized (git submodule update --init)
 #
 # Usage:
-#   ./build.sh         # build everything
+#   ./build.sh         # build everything (WASM + synth + app + desktop launcher)
 #   ./build.sh wasm    # build only the WASM module
 #   ./build.sh app     # build only the TypeScript app
-#   ./build.sh desktop # app build + egui launcher with embedded dist/
 #   ./build.sh catalog # sync .fxp patches + generate src/patch-catalog.ts (no emcc)
 
 set -e
@@ -277,6 +276,11 @@ case "${1:-all}" in
         echo "=== Building OctOBX TypeScript app ==="
         npm install
         npm run build
+        echo ""
+        echo "=== Building desktop launcher (embedded dist) ==="
+        # rust-embed bakes dist/ into the binary at compile time, so the
+        # launcher must be rebuilt after every app build.
+        cargo build --release --manifest-path gui/Cargo.toml
         echo ""
         echo "=== All builds complete ==="
         echo "Run: python3 serve.py  (then open http://localhost:8080)"
