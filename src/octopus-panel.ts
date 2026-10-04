@@ -12,6 +12,11 @@ import type { OctopusController } from "./octopus-awp";
 
 const MIR_SIZE = 170;
 
+// Transport indicator is static markup — resolve it once per session. The
+// resolved latch keeps a null cached (missing element) without retrying.
+let transportIndicatorEl: HTMLElement | null = null;
+let transportIndicatorResolved = false;
+
 export function startOctopusPanel(ctl: OctopusController): () => void {
     let running = true;
     let renderFrame = 0;
@@ -29,7 +34,11 @@ export function startOctopusPanel(ctl: OctopusController): () => void {
         renderFrame++;
 
         const runBit = ctl.status.runBit();
-        const indicator = document.getElementById("oct-transport-indicator");
+        if (!transportIndicatorResolved) {
+            transportIndicatorEl = document.getElementById("oct-transport-indicator");
+            transportIndicatorResolved = true;
+        }
+        const indicator = transportIndicatorEl;
         if (indicator) {
             const playing = runBit !== 0;
             if (indicator.textContent !== (playing ? "PLAYING" : "STOPPED")) {
