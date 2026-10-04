@@ -245,7 +245,17 @@ extern unsigned long long hal_clock_counter;
 /* OCT_AWP: advance the virtual HAL clock by ms and poll alarms (one call per audio quantum). */
 void hal_advance_clock(double ms);
 
+/* OCT_AWP: current virtual-clock time in ms — the engine-timeline
+ * counterpart of emscripten_get_now() for code that must not touch wall
+ * time from the audio thread. */
+double hal_virtual_now_ms(void);
+
 #ifdef __EMSCRIPTEN__
+/* Deliberately WALL-CLOCK even under OCT_AWP: the only caller is the
+ * srand() seed in engine_init() (main_wasm.c), which runs before the
+ * first pump call — the virtual clock would read ~0 there and produce a
+ * constant seed (deterministic randomizer on every boot). Wall time
+ * preserves the entropy intent and matches the native builds. */
 #define HAL_CLOCK_READ(pval)  do { \
     *(pval) = (unsigned int)(emscripten_get_now() * 10000.0); \
 } while(0)

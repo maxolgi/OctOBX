@@ -101,7 +101,13 @@ static void midi_ring_push(uint8_t status, uint8_t data1, uint8_t data2, uint8_t
                               | ((uint32_t)data1 << 8)
                               | ((uint32_t)data2 << 16)
                               | ((uint32_t)channel << 24);
+#ifdef OCT_AWP
+    /* Timestamp on the engine's virtual clock — one timeline with tick
+     * time while the sequencer lives on the audio thread. */
+    midi_ring_ts[midi_ring_tail] = hal_virtual_now_ms();
+#else
     midi_ring_ts[midi_ring_tail] = emscripten_get_now();
+#endif
     midi_ring_tail = next;
 #ifndef OCT_AWP
     pthread_mutex_unlock(&midi_ring_mutex);

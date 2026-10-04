@@ -34,9 +34,10 @@ static unsigned long long hal_last_oob_warn_ms = 0;
  * audio thread. The engine pump (main_wasm.c) advances this clock by one
  * audio quantum per hal_advance_clock() call; cyg_current_time() and the
  * alarm deadlines all live on this timeline. Declared up here because the
- * alarm API below reads and writes it.
+ * alarm API below reads and writes it. Read outside this file via
+ * hal_virtual_now_ms() — the OCT_AWP counterpart of emscripten_get_now().
  */
-static double hal_virtual_now_ms = 0;
+static double hal_virtual_clock_ms = 0;
 #endif
 
 /* ============================================================ */
@@ -592,7 +593,7 @@ void cyg_alarm_initialize(cyg_handle_t handle, cyg_tick_count_t trigger, cyg_tic
      * The legacy watcher also ignored `trigger` and first-fired one
      * interval after initialize — preserve that schedule. */
     alarm->interval_ms = (double)interval * 10.0;
-    alarm->deadline_ms = hal_virtual_now_ms + (double)(interval > 0 ? interval : 1) * 10.0;
+    alarm->deadline_ms = hal_virtual_clock_ms + (double)(interval > 0 ? interval : 1) * 10.0;
     alarm->active = 1;
 #else
     /* 1 eCos tick = 10ms (matches cyg_current_time: emscripten_get_now()/10.0) */
@@ -656,12 +657,12 @@ static void hal_poll_alarms(void) {
         /* More than HAL_ALARM_REANCHOR_BEHIND_MS in arrears (periodic
          * alarms only): skip the backlog, restart from now. */
         if (alarm->interval_ms > 0.0 &&
-            hal_virtual_now_ms - alarm->deadline_ms > HAL_ALARM_REANCHOR_BEHIND_MS) {
-            alarm->deadline_ms = hal_virtual_now_ms + alarm->interval_ms;
+            hal_virtual_clock_ms - alarm->deadline_ms > HAL_ALARM_REANCHOR_BEHIND_MS) {
+            alarm->deadline_ms = hal_virtual_clock_ms + alarm->interval_ms;
         }
 
         fires = 0;
-        while (alarm->active && alarm->deadline_ms <= hal_virtual_now_ms) {
+        while (alarm->active && alarm->deadline_ms <= hal_virtual_clock_ms) {
             alarm->handler(alarm->handle, alarm->data);
             fires++;
             if (alarm->interval_ms <= 0.0) {
@@ -684,8 +685,12 @@ void hal_advance_clock(double ms) {
     if (ms <= 0.0) return;          /* ignore non-progress */
     if (ms > 1000.0) ms = 1000.0;   /* clamp absurd jumps */
 
-    hal_virtual_now_ms += ms;
+    hal_virtual_clock_ms += ms;
     hal_poll_alarms();
+}
+
+double hal_virtual_now_ms(void) {
+    return hal_virtual_clock_ms;
 }
 
 #endif /* OCT_AWP */
@@ -789,7 +794,7 @@ cyg_tick_count_t cyg_current_time(void) {
 #ifdef OCT_AWP
     /* Virtual clock advanced by hal_advance_clock() — 1 eCos tick = 10 ms,
      * same scale as the legacy emscripten_get_now()/10.0 mapping. */
-    return (cyg_tick_count_t)(hal_virtual_now_ms / 10.0);
+    return (cyg_tick_count_t)(hal_virtual_clock_ms / 10.0);
 #else
     return (cyg_tick_count_t)(emscripten_get_now() / 10.0);
 #endif

@@ -431,22 +431,22 @@ void EMSCRIPTEN_KEEPALIVE octopus_pump(int sample_delta) {
     }
 
     /* Guard tripped with backlog remaining — drop the backlog (no
-     * machine-gun catch-up ticks through the MIDI ring), reset the
-     * carry, and say so rate-limited (one line per 10 s max). */
+     * machine-gun catch-up ticks through the MIDI ring; the sub-period
+     * remainder stays in the carry) and say so rate-limited (one line
+     * per 10 s max). */
     if (fired >= 8 && g_tick_acc >= period_ms) {
         long skipped = 0;
-        struct timespec now;
         long now_ms;
 
         while (g_tick_acc >= period_ms) {
             g_tick_acc -= period_ms;
             skipped++;
         }
-        g_tick_acc = 0.0;
 
         late_log_pending += skipped;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        now_ms = now.tv_sec * 1000L + now.tv_nsec / 1000000L;
+        /* Rate-limit on the engine's virtual clock — one timeline, and no
+         * wall-clock syscall on the audio thread. */
+        now_ms = (long)hal_virtual_now_ms();
         if (late_log_last_ms == 0 || now_ms - late_log_last_ms >= 10000) {
             fprintf(stderr, "sequencer: late tick(s) skipped: %ld\n", late_log_pending);
             late_log_pending = 0;
