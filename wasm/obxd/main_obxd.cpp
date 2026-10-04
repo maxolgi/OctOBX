@@ -276,6 +276,14 @@ static char g_patch_name[INSTANCE_COUNT][64] = {};
 static float g_master_l[BUF_FRAMES];
 static float g_master_r[BUF_FRAMES];
 
+// Per-instance stereo taps — each active engine's PRE-sum output, captured
+// during the same obxd_render() pass. The CakeMix mixer worklet reads these
+// (via get_track_l_ptr/get_track_r_ptr Float32Array views over the heap)
+// and feeds instance e into mixer track e (0..9 of 16 stereo tracks).
+// Inactive engines' rows are zeroed each render so the mixer sees silence.
+static float g_track_l[INSTANCE_COUNT][BUF_FRAMES];
+static float g_track_r[INSTANCE_COUNT][BUF_FRAMES];
+
 // =========================================================================
 // OB-Xd → OB-Xf rescale helpers (verbatim from ObxdImporter.cpp)
 //
@@ -1281,6 +1289,8 @@ void obxd_render(int n) {
     for (int e = 0; e < INSTANCE_COUNT; ++e) {
         if (!g_engines[e] || !g_engine_active[e]) {
             g_engine_rms[e] = 0.0f;
+            memset(g_track_l[e], 0, (size_t)n * sizeof(float));
+            memset(g_track_r[e], 0, (size_t)n * sizeof(float));
             continue;
         }
         float sum_sq = 0.0f;
@@ -1288,6 +1298,8 @@ void obxd_render(int n) {
             g_engines[e]->processSample(&tmp_l, &tmp_r);
             g_master_l[i] += tmp_l;
             g_master_r[i] += tmp_r;
+            g_track_l[e][i] = tmp_l;
+            g_track_r[e][i] = tmp_r;
             sum_sq += tmp_l * tmp_l + tmp_r * tmp_r;
         }
         g_engine_rms[e] = sqrtf(sum_sq / (2.0f * (float)n));
@@ -1306,6 +1318,22 @@ float* get_buf_l_ptr(void) { return g_master_l; }
 
 EMSCRIPTEN_KEEPALIVE
 float* get_buf_r_ptr(void) { return g_master_r; }
+
+// Per-instance stereo tap pointers (mixer track feeds). e in 0..9; the
+// worklet wraps these in Float32Array(buf, ptr, 128) views once at init
+// (refreshed on heap growth) and passes them straight to the CakeMix
+// mixer's set_channel_input — zero-copy across the two WASM modules.
+EMSCRIPTEN_KEEPALIVE
+float* get_track_l_ptr(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return g_master_l;
+    return g_track_l[instance_id];
+}
+
+EMSCRIPTEN_KEEPALIVE
+float* get_track_r_ptr(int instance_id) {
+    if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return g_master_r;
+    return g_track_r[instance_id];
+}
 
 // 0 = silence this instance (still updated to rms=0). 1 = render it.
 EMSCRIPTEN_KEEPALIVE

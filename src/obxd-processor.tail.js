@@ -109,6 +109,21 @@ let octReady = false;        // engine_init done, pointers valid
 let audioDriven = false;     // true after first process() call; oct_pump ignored then
 let octInitPromise = null;   // memoized ensureOctopus promise (mirrors initPromise)
 
+// --- CakeMix mixer engine state (third WASM module in this worklet) ---
+// The mixer (Rust oximedia port from the sibling CakeMix repo; glue at
+// wasm/mixer/mixer_wasm_glue.js, concatenated between the obxd emcc glue
+// and restore-layout) replaces the C-side master sum when initialized:
+// per-instance stereo taps (g_track_l/r) feed 16 stereo mixer tracks
+// (instances 0..9 → tracks 0..9), the mixer's master (gain + oversampled
+// limiter) drives the node output. All WebSRT/PCM-publish machinery from
+// the CakeMix worklet is intentionally NOT ported — this build feeds the
+// mixer from the synth only.
+let mixer = null;                 // MixerWasm instance (from __cmxMixerWasm)
+let mixerReady = false;           // initSync + constructor succeeded
+let mixerTrackL = [];             // Float32Array views over g_track_l[e] (e=0..9)
+let mixerTrackR = [];             // Float32Array views over g_track_r[e]
+let mixerMeterInterval = 0;       // ~10-block meter post cadence (like CakeMix)
+
 // The pristine WebAssembly.instantiate, captured the first time any of our
 // loader patches runs (see ensureModule / ensureOctopus). Patched variants
 // must ALWAYS bottom out here — never in another patch — so the two
@@ -328,6 +343,63 @@ function ensureOctopus(opts) {
     return octInitPromise;
 }
 
+// ---------------------------------------------------------------------------
+// CakeMix mixer engine (third WASM module, same worklet)
+// ---------------------------------------------------------------------------
+
+// Synchronous init — wasm-bindgen glue needs no async loading when the
+// bytes arrive via processorOptions (initSync with a pre-compiled
+// WebAssembly.Module; no fetch, matching the emcc modules' strategy).
+// Waits for the obxd module first: the track-tap views wrap the OB-XD
+// module's heap, so its WASM must be up before we can build them.
+// The mixer ALWAYS renders when ready (no start/stop like CakeMix — here
+// it is the app's only output path). A failure is non-fatal: process()
+// falls back to the legacy C-side master sum and audio keeps flowing.
+function initMixer(bytes, port) {
+    return new Promise((resolve, reject) => {
+        let p;
+        try {
+            if (typeof __cmxInitSync !== 'function' || typeof __cmxMixerWasm !== 'function') {
+                throw new Error('mixer glue not present in combined script (build.sh concat missing wasm/mixer/mixer_wasm_glue.js?)');
+            }
+            p = initPromise ? initPromise : Promise.reject(new Error('obxd module not initializing'));
+        } catch (e) {
+            reject(e);
+            return;
+        }
+        p.then(() => {
+            try {
+                __cmxInitSync({ module: new WebAssembly.Module(bytes) });
+                mixer = new __cmxMixerWasm(sampleRate || 48000, RENDER_QUANTUM, 32);
+                // Zero-copy track taps: Float32Array views directly over the
+                // obxd heap's g_track_l/r rows, passed as-is to
+                // set_channel_input (the glue copies from any Float32Array,
+                // including one backed by another module's memory).
+                mixerTrackL = [];
+                mixerTrackR = [];
+                for (let i = 0; i < OBXD_INSTANCE_COUNT; i++) {
+                    mixerTrackL.push(new Float32Array(wasmModule.HEAPF32.buffer, wasmModule._get_track_l_ptr(i), RENDER_QUANTUM));
+                    mixerTrackR.push(new Float32Array(wasmModule.HEAPF32.buffer, wasmModule._get_track_r_ptr(i), RENDER_QUANTUM));
+                }
+                // Pan-law default: every track is a CENTER-PANNED L/R pair
+                // (both engine channels pan=0). With the engine's Linear
+                // default a correlated pair sums +6 dB on the master vs the
+                // per-channel meter; the -6 dB (constant-sum) law makes a
+                // lone center pair sum to unity, so track and master meters
+                // correspond. The UI LAW select defaults to the same value.
+                for (let ch = 0; ch < 32; ch++) {
+                    try { mixer.set_channel_pan_law(ch, 3); } catch (e) { /* per-channel, non-fatal */ }
+                }
+                mixerReady = true;
+                console.log('[obxd-processor] CakeMix mixer engine ready (16 stereo tracks, engine channels 0..' + (OBXD_INSTANCE_COUNT * 2 - 1) + ' fed)');
+                resolve();
+            } catch (e) {
+                reject(e);
+            }
+        }).catch(reject);
+    });
+}
+
 class ObxdProcessor extends AudioWorkletProcessor {
     constructor(options) {
         super(options);
@@ -380,6 +452,29 @@ class ObxdProcessor extends AudioWorkletProcessor {
                 port: this.port,
             }).catch((e) => {
                 reportError(e);   // posts {type:'error',...}; alive stays true
+            });
+        }
+
+        // CakeMix mixer engine (optional third module). Bytes come via
+        // processorOptions.mixerWasmBinary (main thread pre-fetches
+        // /mixer_wasm_bg.wasm). Failure is deliberately silent beyond a
+        // console warning — the legacy master-sum path keeps audio alive.
+        const mixBytesArg = octProcOpts ? octProcOpts.mixerWasmBinary : null;
+        if (mixBytesArg) {
+            initMixer(mixBytesArg, this.port).then(() => {
+                this.port.postMessage({ type: 'mixer_ready' });
+            }).catch((e) => {
+                console.warn('[obxd-processor] mixer engine unavailable — using legacy master sum:', e && e.message);
+                // Surface the failure to the main thread (the worklet's
+                // console is hard to reach from DevTools MCP targets).
+                // phase distinguishes this init-time failure from a
+                // mid-session process() throw (phase:'process').
+                this.port.postMessage({
+                    type: 'mixer_error',
+                    phase: 'init',
+                    message: String(e && e.message || e),
+                    stack: String(e && e.stack || ''),
+                });
             });
         }
 
@@ -769,6 +864,105 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     }, true);
                     break;
                 // ------------------------------------------------------------------
+                // CakeMix mixer engine messages. `ch` is a MONO engine
+                // channel (0..31); the TS store pairs stereo track t with
+                // channels 2t/2t+1 and sends both. All cheap setters —
+                // queued like set_param so they apply on the audio thread
+                // in order. Null-guarded: with the mixer unavailable every
+                // mix_* message is a silent no-op.
+                // ------------------------------------------------------------------
+                case 'mix_gain':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_channel_gain(msg.ch | 0, +msg.gain); } catch (e) {} });
+                    break;
+                case 'mix_pan':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_channel_pan(msg.ch | 0, +msg.pan); } catch (e) {} });
+                    break;
+                case 'mix_mute':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_channel_mute(msg.ch | 0, !!msg.muted); } catch (e) {} });
+                    break;
+                case 'mix_solo':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_channel_solo(msg.ch | 0, !!msg.soloed); } catch (e) {} });
+                    break;
+                case 'mix_input_gain':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_channel_input_gain(msg.ch | 0, +msg.gainDb); } catch (e) {} });
+                    break;
+                case 'mix_phase':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_channel_phase(msg.ch | 0, !!msg.inverted); } catch (e) {} });
+                    break;
+                case 'mix_pan_law':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_channel_pan_law(msg.ch | 0, +msg.law); } catch (e) {} });
+                    break;
+                case 'mix_name':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_channel_name(msg.ch | 0, String(msg.name)); } catch (e) {} });
+                    break;
+                case 'mix_main_assign':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_channel_main_assign(msg.ch | 0, !!msg.on); } catch (e) {} });
+                    break;
+                case 'mix_eq_gain':
+                    // band must be a real number — an object/NaN coerces to
+                    // 0 and silently writes the HPF band (the seed-shadowing
+                    // bug class), so drop malformed messages instead.
+                    taskQueue.push(() => { if (mixer && typeof msg.band === 'number') try { mixer.set_eq_band_gain(msg.ch | 0, msg.band | 0, +msg.gainDb); } catch (e) {} });
+                    break;
+                case 'mix_eq_freq':
+                    taskQueue.push(() => { if (mixer && typeof msg.band === 'number') try { mixer.set_eq_band_freq(msg.ch | 0, msg.band | 0, +msg.freqHz); } catch (e) {} });
+                    break;
+                case 'mix_eq_q':
+                    taskQueue.push(() => { if (mixer && typeof msg.band === 'number') try { mixer.set_eq_band_q(msg.ch | 0, msg.band | 0, +msg.q); } catch (e) {} });
+                    break;
+                case 'mix_eq_bypass':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_eq_bypass(msg.ch | 0, !!msg.bypassed); } catch (e) {} });
+                    break;
+                case 'mix_comp_enable':
+                    taskQueue.push(() => { if (mixer) try { mixer[msg.enabled ? 'enable_compressor' : 'disable_compressor'](msg.ch | 0); } catch (e) {} });
+                    break;
+                case 'mix_comp_param':
+                    // param must be a real number — an object/NaN coerces
+                    // to 0 and silently overwrites the threshold, the same
+                    // bug class the band guard above prevents. Applies to
+                    // the gate/exp param cases below too.
+                    taskQueue.push(() => { if (mixer && typeof msg.param === 'number') try { mixer.set_comp_param(msg.ch | 0, msg.param | 0, +msg.value); } catch (e) {} });
+                    break;
+                case 'mix_gate_enable':
+                    taskQueue.push(() => { if (mixer) try { mixer[msg.enabled ? 'enable_gate' : 'disable_gate'](msg.ch | 0); } catch (e) {} });
+                    break;
+                case 'mix_gate_param':
+                    taskQueue.push(() => { if (mixer && typeof msg.param === 'number') try { mixer.set_gate_param(msg.ch | 0, msg.param | 0, +msg.value); } catch (e) {} });
+                    break;
+                case 'mix_exp_enable':
+                    taskQueue.push(() => { if (mixer) try { mixer[msg.enabled ? 'enable_expander' : 'disable_expander'](msg.ch | 0); } catch (e) {} });
+                    break;
+                case 'mix_exp_param':
+                    taskQueue.push(() => { if (mixer && typeof msg.param === 'number') try { mixer.set_expander_param(msg.ch | 0, msg.param | 0, +msg.value); } catch (e) {} });
+                    break;
+                case 'mix_master_gain':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_master_gain(+msg.gain); } catch (e) {} });
+                    break;
+                case 'mix_limiter_enabled':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_limiter_enabled(!!msg.enabled); } catch (e) {} });
+                    break;
+                case 'mix_limiter_ceiling':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_limiter_ceiling(+msg.ceilingDb); } catch (e) {} });
+                    break;
+                case 'mix_limiter_release':
+                    taskQueue.push(() => { if (mixer) try { mixer.set_limiter_release(+msg.releaseMs); } catch (e) {} });
+                    break;
+                case 'mix_clear_clip':
+                    taskQueue.push(() => { if (mixer) try { mixer.master_clear_clip(); } catch (e) {} });
+                    break;
+                case 'mix_get_params':
+                    // Console-state pull (diagnostics): serializes every
+                    // strip's exists/gain/pan/mute/solo/mainAssign + master
+                    // state. The channel meters read the pre-mute staged
+                    // signal, so a stuck engine mute shows as "channel
+                    // metering but not summing" — this is how you see it.
+                    taskQueue.push(() => {
+                        if (mixer) try {
+                            this.port.postMessage({ type: 'mixer_params', json: mixer.console_params_json() });
+                        } catch (e) {}
+                    });
+                    break;
+                // ------------------------------------------------------------------
                 // Octopus sequencer engine messages (combined worklet).
                 //
                 // These are cheap and latency-sensitive, so they run INLINE
@@ -993,16 +1187,82 @@ class ObxdProcessor extends AudioWorkletProcessor {
         wasmModule._obxd_render(RENDER_QUANTUM);
 
         // Refresh cached views if WASM memory grew (HEAPF32 buffer swapped).
-        // This is rare but can happen under ALLOW_MEMORY_GROWTH=1.
+        // This is rare but can happen under ALLOW_MEMORY_GROWTH=1. The mixer
+        // track-tap views wrap the same heap and must be rebuilt too.
         const currentBuf = wasmModule.HEAPF32.buffer;
         if (currentBuf !== heapF32Ref) {
             heapF32Ref = currentBuf;
             bufLView = new Float32Array(currentBuf, bufLPtr, RENDER_QUANTUM);
             bufRView = new Float32Array(currentBuf, bufRPtr, RENDER_QUANTUM);
+            if (mixerReady) {
+                for (let i = 0; i < OBXD_INSTANCE_COUNT; i++) {
+                    mixerTrackL[i] = new Float32Array(currentBuf, wasmModule._get_track_l_ptr(i), RENDER_QUANTUM);
+                    mixerTrackR[i] = new Float32Array(currentBuf, wasmModule._get_track_r_ptr(i), RENDER_QUANTUM);
+                }
+            }
         }
 
-        if (out[0]) out[0].set(bufLView);
-        if (out[1]) out[1].set(bufRView);
+        // Mixer path: feed each instance's stereo tap into mixer track i
+        // (mono engine channels 2i/2i+1 — the plain-FIFO set_channel_input
+        // path, so no elastic-drift machinery runs on a same-quantum feed),
+        // then the mixer's master (gain + oversampled limiter) becomes the
+        // node output. Tracks 10..15 stay silent (no feed) but exist as
+        // full strips for the UI. A throw mid-block (shouldn't happen —
+        // every strip is engine-defaulted) falls through to the legacy
+        // master sum below, so audio never stops.
+        let mixed = false;
+        if (mixerReady && mixer) {
+            try {
+                for (let t = 0; t < OBXD_INSTANCE_COUNT; t++) {
+                    mixer.set_channel_input(t * 2, mixerTrackL[t]);
+                    mixer.set_channel_input(t * 2 + 1, mixerTrackR[t]);
+                }
+                const mout = mixer.process(RENDER_QUANTUM);
+                for (let i = 0; i < RENDER_QUANTUM; i++) {
+                    out[0][i] = mout[i * 2];
+                    out[1][i] = mout[i * 2 + 1];
+                }
+                mixed = true;
+
+                // Mixer meters every ~10 blocks (~27ms at 48kHz) — same
+                // cadence as CakeMix. channel_meters_json covers every
+                // engine channel that exists (created lazily on first
+                // feed/control).
+                mixerMeterInterval++;
+                if (mixerMeterInterval >= 10) {
+                    mixerMeterInterval = 0;
+                    try {
+                        this.port.postMessage({
+                            type: 'mixer_meter',
+                            peakL: mixer.master_peak_db_l(),
+                            peakR: mixer.master_peak_db_r(),
+                            rmsL: mixer.master_rms_db_l(),
+                            rmsR: mixer.master_rms_db_r(),
+                            clip: mixer.master_clipping(),
+                            limiterGr: mixer.limiter_gain_reduction_db(),
+                            channels: JSON.parse(mixer.channel_meters_json()),
+                        });
+                    } catch (e) { /* meter failure never kills audio */ }
+                }
+            } catch (e) {
+                console.error('[obxd-processor] mixer process failed, falling back to master sum:', e && e.message);
+                mixerReady = false;   // latch to legacy path for this session
+                // Tell the main thread the latch flipped — otherwise its
+                // mixerReady stays true and the console UI keeps claiming
+                // "ONLINE" while the meters freeze (the worklet's console
+                // output is invisible from DevTools MCP targets).
+                this.port.postMessage({
+                    type: 'mixer_error',
+                    phase: 'process',
+                    message: String(e && e.message || e),
+                });
+            }
+        }
+
+        if (!mixed) {
+            if (out[0]) out[0].set(bufLView);
+            if (out[1]) out[1].set(bufRView);
+        }
 
         return true;
     }

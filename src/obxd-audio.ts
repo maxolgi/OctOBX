@@ -30,11 +30,20 @@ let workletNode: AudioWorkletNode | null = null;
 let moduleAdded = false;
 
 // Master bus nodes — inserted between the worklet output and the destination
-// so a master fader (GainNode) and a master VU meter (AnalyserNode) can ride
-// the whole mix. workletNode → masterGain → masterAnalyser → destination.
+// so a master VU meter (AnalyserNode) can ride the whole mix. workletNode →
+// masterGain → masterAnalyser → destination. NOTE: since the CakeMix mixer
+// engine took over the output path (its own master fader + oversampled
+// limiter live in the worklet), this GainNode stays at unity — it is kept
+// only as a tap point for the analyser.
 let masterGain: GainNode | null = null;
 let masterAnalyser: AnalyserNode | null = null;
-const DEFAULT_MASTER_GAIN = 0.85;
+const DEFAULT_MASTER_GAIN = 1.0;
+
+// CakeMix mixer engine readiness — flipped by the worklet's {type:
+// 'mixer_ready'} message (posted after initSync + MixerWasm construction
+// succeeded). False also covers "binary missing / engine failed", in which
+// case the worklet keeps summing via the legacy C master path.
+let mixerReady = false;
 
 // UI-edited instance (0..9). Defaults to 0. Per-instance param APIs do
 // NOT consult this — callers pass the id explicitly. Only the rack /
@@ -79,6 +88,15 @@ let hwMidiHandler: ((packed: number[]) => void) | null = null;
 export function setHwMidiHandler(cb: ((packed: number[]) => void) | null): void {
     hwMidiHandler = cb;
 }
+
+/*
+ * Mixer-engine message log — every mixer_* worklet message from the moment
+ * this module loads (the ready-handshake forwards boot-window messages to
+ * permanent listeners, so mixer_debug/mixer_ready/mixer_error posts are
+ * captured even before the router installs). Diagnostic surface for the
+ * console integration; read via window.__mixerLog.
+ */
+const mixerLog: unknown[] = [];
 
 /*
  * Permanent message-listener registry. Every callback registered here is
@@ -128,6 +146,20 @@ function ensureRouter(): void {
                     lastVoiceActivity[i] = (Number(voices[i]) || 0) >>> 0;
                 }
             }
+        }
+
+        // Mixer engine readiness (one-shot latch; the worklet posts
+        // mixer_ready exactly once after a successful init). mixer_error
+        // latches it back OFF: the worklet posts it on init failure AND on
+        // a mid-session process() throw (phase:'init' / phase:'process')
+        // — the latter only after it already flipped itself to the legacy
+        // master sum, so without this the console UI would keep claiming
+        // "ONLINE" while the meters freeze.
+        if ((msg as { type?: string }).type === "mixer_ready") {
+            mixerReady = true;
+        }
+        if ((msg as { type?: string }).type === "mixer_error") {
+            mixerReady = false;
         }
 
         // Hardware MIDI forward: AudioWorklet sends packed events from
@@ -221,12 +253,23 @@ export async function setupObxdAudio(octopusAssets?: OctopusWorkletAssets): Prom
     }
     const wasmBinary = await wasmResponse.arrayBuffer();
 
+    // CakeMix mixer engine binary — best-effort: a 404/missing file just
+    // means the worklet boots without the mixer (legacy C-side master sum
+    // stays the output path; the mixer UI shows its disconnected state).
+    let mixerWasmBinary: ArrayBuffer | undefined;
+    try {
+        const mixResponse = await fetch("/mixer_wasm_bg.wasm?v=" + Date.now());
+        if (mixResponse.ok) mixerWasmBinary = await mixResponse.arrayBuffer();
+    } catch { /* absent — legacy path */ }
+
     const processorOptions: {
         wasmBinary: ArrayBuffer;
+        mixerWasmBinary?: ArrayBuffer;
         octopusWasmBinary?: ArrayBuffer;
         octopusMemory?: WebAssembly.Memory;
         octopusInitialState?: Uint8Array | null;
     } = { wasmBinary };
+    if (mixerWasmBinary) processorOptions.mixerWasmBinary = mixerWasmBinary;
     if (octopusAssets) {
         processorOptions.octopusWasmBinary = octopusAssets.octopusWasmBinary;
         processorOptions.octopusMemory = octopusAssets.octopusMemory;
@@ -444,6 +487,25 @@ export function sendObxdInstanceMidi(id: number, status: number, d1: number, d2:
  */
 export function sendObxdMidiRouting(routing: number[]): void {
     workletNode?.port.postMessage({ type: "set_routing", routing });
+}
+
+/*
+ * Generic worklet command post — the mixer console (src/mixer/) uses this
+ * for every mix_* message. No-ops before the worklet node exists, matching
+ * every other setter here.
+ */
+export function postWorkletMessage(msg: unknown): void {
+    workletNode?.port.postMessage(msg);
+}
+
+/*
+ * True once the worklet confirmed the CakeMix mixer engine initialized
+ * ({type:'mixer_ready'}). False covers not-yet-initialized AND failed /
+ * absent — the mixer UI treats it as "console not connected" and the audio
+ * path runs the legacy C-side master sum.
+ */
+export function isMixerReady(): boolean {
+    return mixerReady;
 }
 
 /* Hard silence — allSoundOff on one instance (resets envelopes too). */
@@ -692,3 +754,17 @@ export function getObxdNode(): AudioWorkletNode | null {
 export function getObxdAudioContext(): AudioContext | null {
     return audioContext;
 }
+
+// Mixer-engine message log (declared near the top; registered here so the
+// listener registry it pushes into is fully initialized — see its comment).
+// Guarded for non-browser test environments (vitest runs this module under Node).
+if (typeof window !== "undefined") {
+    (window as unknown as { __mixerLog: unknown[] }).__mixerLog = mixerLog;
+}
+addWorkletMessageListener((msg: unknown) => {
+    const t = (msg as { type?: string }).type;
+    if (typeof t === "string" && t.indexOf("mixer") === 0) {
+        mixerLog.push(msg);
+        if (mixerLog.length > 50) mixerLog.shift();
+    }
+});
