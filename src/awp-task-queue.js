@@ -43,6 +43,10 @@ class AwpTaskQueue {
     constructor() {
         /** @type {Array<{fn: Function, heavy: boolean}>} */
         this.tasks = [];
+        /** @type {number} Index of the next task to run — tasks below it
+         *  have been drained. Advancing this index dequeues in O(1)
+         *  (shift() would move the whole remaining array per task). */
+        this.head = 0;
     }
 
     /**
@@ -79,14 +83,17 @@ class AwpTaskQueue {
     drain(heavyBudget) {
         if (heavyBudget === undefined) heavyBudget = 1;
         let executed = 0;
-        // Always operate on the head (index 0): we remove each task before
-        // running it, so `i` never advances past 0 within a single step.
-        // shift() is fine here — the queue holds at most a few dozen tasks.
-        let i = 0;
-        while (i < this.tasks.length) {
-            const t = this.tasks[i];
+        // Walk a head index instead of shift()ing each task out: shift()
+        // costs an O(n) array move per task, and the queue can hold
+        // hundreds of light tasks (mixer-console seed, knob storms),
+        // making one drain O(n²). Advancing this.head removes the task
+        // logically; the loop condition re-reads this.tasks.length every
+        // iteration, so tasks pushed mid-drain (from inside a running
+        // task) still execute within this same call when budget allows.
+        while (this.head < this.tasks.length) {
+            const t = this.tasks[this.head];
             if (t.heavy && heavyBudget <= 0) break;
-            this.tasks.shift();   // remove BEFORE running (see JSDoc above)
+            this.head++;          // remove BEFORE running (see JSDoc above)
             if (t.heavy) heavyBudget--;
             try {
                 t.fn();
@@ -94,7 +101,12 @@ class AwpTaskQueue {
                 console.error('[awp-task-queue] task threw:', e && e.message, e && e.stack);
             }
             executed++;
-            // i stays 0 — we removed the head.
+        }
+        // Compaction: once every queued task has run, release the array so
+        // it does not grow unboundedly across the process() lifetime.
+        if (this.head === this.tasks.length) {
+            this.tasks.length = 0;
+            this.head = 0;
         }
         return executed;
     }
@@ -105,7 +117,7 @@ class AwpTaskQueue {
      * @returns {number}
      */
     get size() {
-        return this.tasks.length;
+        return this.tasks.length - this.head;
     }
 
     /**
@@ -115,6 +127,7 @@ class AwpTaskQueue {
      */
     clear() {
         this.tasks.length = 0;
+        this.head = 0;
     }
 }
 
