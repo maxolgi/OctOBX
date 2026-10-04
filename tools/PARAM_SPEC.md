@@ -10,7 +10,7 @@ duplicates the mapping:
 3. the hand table `wasm/obxd/obxf_param_mappings.h` (81 rows)
 4. the auto-documented mirror `src/obxf-param-mappings.ts`
 
-**Authority chain:** `obxf_imported/state/ObxdImporter.cpp`
+**Authority chain:** `third_party/OB-Xf/src/state/ObxdImporter.cpp`
 (`translateProgramFromXml`) is canonical for the legacy→native math;
 `main_obxd.cpp` is the current runtime implementation the math was transcribed
 from; **this spec becomes the source of truth going forward**.
@@ -152,7 +152,7 @@ The exact legacy-index sets:
 - **voice**: the remaining 42 rows
 
 **NEW params (sentinels ≥ 200) also carry `drumClass`** — verified against each
-processX() body in `obxf_imported/engine/SynthEngine.h`:
+processX() body in `third_party/OB-Xf/src/engine/SynthEngine.h`:
 
 - **global** (canonical ordinals, frozen in `DRUM_NEW_GLOBAL_ORDINALS`):
   `0 (UnisonVoices → synth.setUnisonVoices → Motherboard::unisonVoiceCount)`,
@@ -185,7 +185,7 @@ skip; 52/53 are `smoother` but NOT skip. The two flags are independent axes.
 ## Canonical-ordinal rule (NEW params)
 
 `newOrdinal` 0..27 = the **declaration order of streaming IDs** in
-`wasm/obxd/obxf_imported/parameter/SynthParam.h` (grouped MASTER → GLOBAL →
+`third_party/OB-Xf/src/parameter/SynthParam.h` (grouped MASTER → GLOBAL →
 OSCILLATORS → MIXER → CONTROL → FILTER → LFO1 → LFO2 → envelopes →
 slop/pan), filtered to the 28 NEW params. Cross-checked against
 `ALL_SYNTH_PARAM_IDS` in `test/obxf-dispatch-coverage.test.ts`. `"OscPitch"`
@@ -223,6 +223,6 @@ string.
    descriptor's structural fields are present (factors, ranges, curves,
    bucket table, voiceIndex, …).
 7. Every non-removed row's `method` (and `secondaryMethod`) exists in a
-   frozen snapshot of `obxf_imported/engine/SynthEngine.h` (regenerate the
+   frozen snapshot of `third_party/OB-Xf/src/engine/SynthEngine.h` (regenerate the
    snapshot with
-   `rg -o '\bprocess[A-Za-z0-9_]+' wasm/obxd/obxf_imported/engine/SynthEngine.h | sort -u`).
+   `rg -o '\bprocess[A-Za-z0-9_]+' third_party/OB-Xf/src/engine/SynthEngine.h | sort -u`).

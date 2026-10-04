@@ -23,24 +23,23 @@ This repo uses **three** git submodules:
   (a fork of `genoqs-community/source`). Contains `OCT_OS/` (Octopus firmware)
   and `NEMO_OS/` (Nemo firmware) at its root — exactly the layout the Octopus
   WASM `Makefile` expects (`firmware/OCT_OS/...`, `firmware/NEMO_OS/...`).
-- `third_party/OB-Xf/` → <https://github.com/surge-synthesizer/OB-Xf> — the
-  Surge-maintained successor to OB-XD, the engine of the in-browser synth.
-  GPL-3.0-or-later. Carries **nested sub-submodules** under `libs/` — only the
+- `third_party/OB-Xf/` → <https://github.com/maxolgi/OB-Xf.git> (fork of
+  `surge-synthesizer/OB-Xf`, branch `main`) — the Surge-maintained successor to
+  OB-XD, the engine of the in-browser synth. GPL-3.0-or-later. Pinned at
+  `7fe23a8` = upstream `b08ffb6` + 3 OctOBX commits (PCM sampler additions
+  `93d631c`, wasm fast-math perf `cc3bdbd`, `recalculateMatrix` signature
+  fixup `7fe23a8`). Carries **nested sub-submodules** under `libs/` — only the
   five required for a WASM/AudioWorklet build (see command below) need to be
   initialized; the rest (`libs/MTS-ESP`, `libs/clap-juce-extensions`,
   `libs/melatonin_inspector`, `libs/pybind11`, `libs/sst/sst-cmake`,
   `libs/sst/sst-plugininfra`) are for the desktop CLAP/VST build and are
   intentionally **not** initialized to save disk and clone time.
-- `third_party/JUCE/` → <https://github.com/juce-framework/JUCE> — `juce_core`
-  + `juce_audio_basics`, amalgamated into a single TU in
-  `wasm/obxd/juce_amalgam.cpp`. Pinned at **upstream** JUCE 8.0.14
-  (`2cdfca8`); the required Emscripten fix (WASM branch in
-  `juce_ThreadPriorities_native.h`) lives in-repo as
-  `patches/0001-juce-emscripten-threadpriorities.patch` and is applied
-  idempotently by `build.sh` (`ensure_juce_patch`) before every emcc
-  synth build. Do NOT pin the submodule to local-only commits — CI
-  checkout fetches from juce-framework/JUCE and fails on unreachable
-  SHAs.
+- `third_party/JUCE/` → <https://github.com/maxolgi/JUCE.git> (fork of
+  `juce-framework/JUCE`, branch `master`) — `juce_core` +
+  `juce_audio_basics`, amalgamated into a single TU in
+  `wasm/obxd/juce_amalgam.cpp`. Pinned at `251768d` = **JUCE 9.0.3** plus our
+  WASM branch in `juce_ThreadPriorities_native.h`, committed directly on the
+  fork — there is no build-time patch machinery any more.
 
 (The legacy `third_party/Obxd` OB-XD submodule was removed after the OB-Xf
 migration was verified — the parameter-dispatch refactor moved the last
@@ -79,6 +78,27 @@ without `--depth 1` for just that path.
 The firmware submodule is required for the Octopus WASM build. The OB-Xf and
 JUCE submodules (plus OB-Xf's five initialized sub-submodules above) are
 required for the synth WASM build (`make -C wasm/obxd`).
+
+### Syncing the forks with upstream
+
+Both `third_party/` submodules ride user forks that track upstream. To pick
+up new upstream work:
+
+1. GitHub **"Sync fork"** on the fork's default branch
+   (`maxolgi/OB-Xf` `main`, `maxolgi/JUCE` `master`).
+2. `git submodule update --remote third_party/OB-Xf` (or `third_party/JUCE`)
+   in this repo.
+3. Resolve any conflicts with the OctOBX commits on the fork. Syncing OB-Xf
+   past upstream #705 required adapting our PCM `recalculateMatrix` calls —
+   future upstream changes to the 5 engine files we patch
+   (`SynthEngine.h`, `Motherboard.h`, `Voice.h`, `Filter.h`,
+   `AdsrEnvelope.h`) may need the same. The OctOBX commits are marked with
+   `// OctOBX PCM` / `// OctOBX perf` comments for easy conflict spotting.
+   Note: #705 also rescales MPE matrix mod depths — an audible change
+   (documented upstream as "changes how existing MPE patches sound").
+4. Rebuild (`./build.sh synth`) and run `npm test` / `npm run test:wasm`.
+5. Commit the submodule pointer bump. CI tests the committed pointer, not
+   the remote tip.
 
 ## Build
 
@@ -209,23 +229,27 @@ does not share the Octopus single-TU build):
   `juce_events` + `juce_audio_basics` + `juce_audio_processors_headless`. The
   OB-Xf engine's `SynthEngine.h` → `Program.h` → `ParameterList.h` →
   `SynthParam.h` chain reaches `juce::AudioParameterFloat` /
-  `juce::AudioProcessorParameter`, which live in JUCE 8's GUI-free
+  `juce::AudioProcessorParameter`, which live in JUCE 9's GUI-free
   `juce_audio_processors_headless` split. MUST be its own TU (JUCE refuses to
   compile when its `.h` was already included in the same TU). `#undef __linux__`
   before including JUCE so `TargetPlatform.h`'s `#elif defined(__wasm__)` branch
-  fires.
-- `obxf_imported/state/ObxdImporter.cpp` — the OB-Xf parameter/importer
-  subsystem (compiled as a third TU). Lives under the curated OB-Xf header
-  subtree (see below).
-- **Curated OB-Xf header subtree** at `wasm/obxd/obxf_imported/` (28 files,
-  byte-identical copies from `third_party/OB-Xf/src/...` — see
-  `obxf_imported/MANIFEST.md`). Holds `engine/SynthEngine.h`, `engine/Program.h`,
-  `parameter/SynthParam.h`, `parameter/ParameterList.h`, `state/ObxdImporter.{h,cpp}`,
-  plus the supporting `Motherboard.h`, `Voice.h`, `VoiceMatrix.h`, `Lfo.h`, etc.
-  Two deliberate stubs substitute for deps not pulled into the browser build:
-  `Utils.h` (empty) and `libMTSClient.h` (MTS-ESP stub). This curated subtree is
-  the ONLY OB-Xf source root on the include path — `third_party/OB-Xf/src`
-  itself is intentionally NOT added (it would pull in GUI/host deps).
+  fires. Also carries a small shim defining `juce::Colour::Colour(uint32)`
+  (verbatim from JUCE 9 `juce_Colour.cpp`) — JUCE 9's
+  `juce_audio_processors` header chain includes `juce_graphics` headers
+  unconditionally and `ObxdImporter.o` odr-uses that one symbol.
+- `third_party/OB-Xf/src/...` — the OB-Xf parameter/importer subsystem
+  (`state/ObxdImporter.cpp` compiled as a third TU). The engine sources are
+  consumed **straight from the fork's `src/`** tree, which carries our
+  divergences (PCM sampler, wasm perf) as commits — there is no curated copy
+  any more.
+- **Stub dir** `wasm/obxd/obxf_stubs/` — exactly two headers that substitute
+  for deps not pulled into the browser build: `Utils.h` (provides ONLY the
+  fast-exp `getPitch`; `linsc`/`logsc` now come natively from upstream
+  `engine/ParamScales.h` since #705) and `libMTSClient.h` (MTS-ESP no-op).
+  Both shadow/stand in for the fork's real headers purely by `-I` order —
+  the Makefile puts `obxf_stubs` BEFORE the fork's `src/` on the include
+  path, and that order is load-bearing (swapping it breaks the build: the
+  fork's real `src/Utils.h` does not compile headless).
 - `Makefile` — `-sENVIRONMENT=worker` (AWP), no `-pthread` (pthreads are illegal
   inside AudioWorkletGlobalScope), `-sFORCE_FILESYSTEM=0` (bytes go via
   `_malloc` + `HEAPU8.set`).
@@ -254,16 +278,21 @@ When you must touch a firmware file, use `#ifdef __linux__` /
 ## How the OB-Xf synth engine is integrated
 
 The OB-Xf synth (from the Surge-maintained `third_party/OB-Xf/` submodule)
-replaces the legacy 2DaT/Obxd OB-XD engine. Unlike the Octopus firmware, the
-engine is NOT compiled unchanged — it is **curated** into the browser build:
+replaces the legacy 2DaT/Obxd OB-XD engine. The engine is compiled **straight
+from the fork's `src/` tree** — our divergences (PCM sampler, wasm perf) ride
+as commits on the fork, not as a curated copy:
 
-- **Curated header subtree** — `wasm/obxd/obxf_imported/` holds 28
-  byte-identical copies of the OB-Xf `SynthEngine`/`Program`/`ObxdImporter`/
-  `ParameterList`/`SynthParam` subsystem (see `obxf_imported/MANIFEST.md`).
-  This is the ONLY OB-Xf source root on the include path; the submodule's own
-  `src/` is intentionally excluded (it pulls in GUI/host deps). Two stubs
-  substitute for deps not in the browser build: `Utils.h` (empty) and
-  `libMTSClient.h` (MTS-ESP stub).
+- **Engine from fork `src/`** — `wasm/obxd/Makefile` puts
+  `third_party/OB-Xf/src` (plus its `core/`, `engine/`, `parameter/`,
+  `state/` subdirs) directly on the include path; `state/ObxdImporter.cpp`
+  is compiled as a third TU. There is no `obxf_imported/` curated subtree
+  any more.
+- **Stub dir** `wasm/obxd/obxf_stubs/` — exactly two headers that substitute
+  for deps not pulled into the browser build: `Utils.h` (provides ONLY the
+  fast-exp `getPitch`; `linsc`/`logsc` now come natively from upstream
+  `engine/ParamScales.h` since #705) and `libMTSClient.h` (MTS-ESP no-op).
+  The Makefile include order (`obxf_stubs` BEFORE the fork's `src/`) is
+  load-bearing — the fork's real `src/Utils.h` does not compile headless.
 - **SST basic-blocks + SIMDe** — `libs/sst/sst-basic-blocks` provides the
   `ParamMetaData` consumed by `SynthParam.h`/`ParameterList.h`, and
   `simd/setup.h` shims SSE intrinsics to wasm SIMD via `libs/simde`.

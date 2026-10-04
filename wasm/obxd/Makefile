@@ -23,23 +23,29 @@ TARGET = ../build/obxd_wasm
 # compiles juce_core + juce_audio_basics into the same final WASM module.
 # juce_amalgam.cpp MUST be a separate TU because JUCE's .cpp files refuse
 # to compile in any TU where the matching .h has already been included.
-# obxf_imported/state/ObxdImporter.cpp: OB-Xf parameter/importer subsystem
-# (copied verbatim from third_party/OB-Xf — see obxf_imported/MANIFEST.md).
+# ObxdImporter.cpp is compiled straight out of the OB-Xf fork tree
+# (../../third_party/OB-Xf/src — the maxolgi/OB-Xf fork main carries our
+# PCM-sampler + wasm perf commits).
 # Only .cpp files belong in SRCS; the OB-Xf .h files are pulled in via the
 # include chain; the generated param_table.h is #include'd by main_obxd.cpp.
-SRCS = main_obxd.cpp juce_amalgam.cpp obxf_imported/state/ObxdImporter.cpp
+SRCS = main_obxd.cpp juce_amalgam.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
 
 # Header dependencies — most of the engine lives in headers (Voice.h,
 # Motherboard.h, OscillatorBlock.h, Filter.h, Utils.h, ...) #include'd by the
 # three TUs above. Without them as prerequisites, a header-only change (e.g.
-# the fast-exp getPitch in Utils.h) makes `make` report "up to date" and serve
-# a stale wasm. The wildcard covers the whole curated subtree. (The generated
+# the fast-exp getPitch in the obxf_stubs Utils.h, or anything under the
+# fork's src/ tree) makes `make` report "up to date" and serve a stale wasm.
+# The wildcards cover the stub dir plus the fork tree (src/*.h and one
+# subdir level: core/, engine/, parameter/, state/, ...). (The generated
 # param_table.h is NOT listed — it doesn't exist on a fresh clone before
 # build.sh synth generates it; its staleness is gated separately by
 # gen-param-table.mjs --check in build.sh.)
-HDRS = $(wildcard obxf_imported/*.h obxf_imported/*/*.h obxf_imported/*/*/*.h)
+HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h)
 
-# OB-Xf include paths — required by the obxf_imported/ subtree:
+# OB-Xf include paths. The engine sources are consumed STRAIGHT from the
+# fork tree at ../../third_party/OB-Xf/src (the maxolgi/OB-Xf fork main,
+# which carries our PCM-sampler + wasm perf commits) — no curated copy is
+# kept any more. Required paths:
 #   sst-basic-blocks: sst/basic-blocks/params/ParamMetadata.h (SynthParam.h)
 #   sst-cpputils:     SST support headers
 #   fmt:              <fmt/core.h> (pulled transitively by SST headers)
@@ -47,26 +53,28 @@ HDRS = $(wildcard obxf_imported/*.h obxf_imported/*/*.h obxf_imported/*/*/*.h)
 #                     simde/simde — headers #include <simde/...>
 #   JUCE/modules:     <juce_audio_basics/...> for SynthParam.h, and
 #                     <juce_dsp/...> for Lfo.h (header-only)
-#   obxf_imported/*:  cross-directory relative includes inside the copied
-#                     subtree (see obxf_imported/MANIFEST.md §4c). Paths
-#                     follow the existing ../../third_party convention.
-# IMPORTANT: we intentionally do NOT add `-I ../../third_party/OB-Xf/src`.
-# The curated obxf_imported/ subtree (with its Utils.h stub) is the ONLY
-# OB-Xf source root on the path. Adding the submodule src/ would shadow
-# the curated engine/ headers and pull in GUI/host deps (filesystem/import.h,
-# full juce_audio_processors → juce_gui_basics) that the curated copy
-# deliberately excludes.
+#   OB-Xf src dirs:   src/ plus its core/, engine/, parameter/, state/
+#                     subdirs, matching the fork's cross-directory
+#                     includes ("Program.h", <engine/ParamScales.h>, ...)
+# STUB SHADOWING: `-I obxf_stubs` MUST come BEFORE `-I .../src`. The fork's
+# real src/Utils.h does not compile headless (host-glue `Utils` class →
+# "filesystem/import.h" + juce_gui_basics + the full
+# juce_audio_processors), and libs/MTS-ESP is intentionally NOT
+# initialized (no libMTSClient.h there). The obxf_stubs/ headers shadow
+# Utils.h and stand in for libMTSClient.h purely by -I order — swapping
+# the order breaks the build.
 OBXF_INCLUDES = \
     -I ../../third_party/OB-Xf/libs/sst/sst-basic-blocks/include \
     -I ../../third_party/OB-Xf/libs/sst/sst-cpputils/include \
     -I ../../third_party/OB-Xf/libs/fmt/include \
     -I ../../third_party/OB-Xf/libs/simde \
     -I ../../third_party/OB-Xf/libs/JUCE/modules \
-    -I obxf_imported \
-    -I obxf_imported/state \
-    -I obxf_imported/parameter \
-    -I obxf_imported/engine \
-    -I obxf_imported/core
+    -I obxf_stubs \
+    -I ../../third_party/OB-Xf/src \
+    -I ../../third_party/OB-Xf/src/core \
+    -I ../../third_party/OB-Xf/src/engine \
+    -I ../../third_party/OB-Xf/src/parameter \
+    -I ../../third_party/OB-Xf/src/state
 
 # -sENVIRONMENT=worker sets up the runtime for a worker-like scope
 #   (no `window`, no `document`). Used because AudioWorkletGlobalScope is
@@ -88,15 +96,16 @@ OBXF_INCLUDES = \
 #   -I .                                       (this dir)
 #   -I ../../third_party/JUCE/modules          (for <juce_audio_basics/...> and
 #                                               <juce_dsp/...>; juce_dsp is used
-#                                               header-only by obxf_imported's
+#                                               header-only by the fork's
 #                                               Lfo.h for FastMathApproximations)
-#   $(OBXF_INCLUDES)                           (OB-Xf libs/ + copied subtree;
-#                                               obxf_imported/engine resolves
-#                                               the NEW SynthEngine.h)
+#   $(OBXF_INCLUDES)                           (OB-Xf libs/ + the fork's src/ tree
+#                                               and the obxf_stubs/ shadow dir;
+#                                               -I .../src resolves the NEW
+#                                               SynthEngine.h)
 # NOTE: the OLD `-I ../../third_party/Obxd/Source/Engine` path was REMOVED —
 # the OB-Xd→OB-Xf migration is one-way. main_obxd.cpp now includes the NEW
 # engine explicitly via `#include "engine/SynthEngine.h"` (resolved through
-# -I obxf_imported).
+# -I ../../third_party/OB-Xf/src).
 # JUCE module availability — required by ObxdImporter.cpp's TU.
 # In OB-Xf's native CMake build, juce_add_binary_data / target_link_libraries
 # auto-generates these via target_compile_definitions on every consumer TU.

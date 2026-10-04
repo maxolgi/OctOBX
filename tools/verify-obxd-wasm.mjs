@@ -238,7 +238,7 @@ async function main() {
   });
 
   // (f2) NEW-param (sentinel >= 200) drum classification + routing ---------
-  // Verified against the processX() bodies in obxf_imported/engine/
+  // Verified against the processX() bodies in third_party/OB-Xf/src/engine/
   // SynthEngine.h: only canonical ordinals 0 (UnisonVoices), 1
   // (VoiceReassign), 7 (VibratoWave), 10 (LFO1PW) write synth-global
   // Motherboard state with no ForEachVoice — they must behave exactly like

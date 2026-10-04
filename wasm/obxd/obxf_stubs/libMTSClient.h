@@ -1,9 +1,11 @@
-// wasm/obxd/obxf_imported/libMTSClient.h — minimal compile/link stub.
+// wasm/obxd/obxf_stubs/libMTSClient.h — minimal compile/link stub.
 //
-// OB-Xf's engine/Tuning.h #include "libMTSClient.h" from the ODDSound
-// MTS-ESP client library. The real header (and its single .c
-// implementation) live in the libs/MTS-ESP submodule, which AGENTS.md
-// explicitly says NOT to initialize for the WASM/AWP build.
+// The OB-Xf fork's engine/Tuning.h (from third_party/OB-Xf/src)
+// #include "libMTSClient.h" from the ODDSound MTS-ESP client library. The
+// real header lives in the libs/MTS-ESP submodule, which AGENTS.md
+// explicitly says NOT to initialize for the WASM/AWP build — so it is
+// absent from this checkout, and the stub dir stands in for it by -I
+// order (obxf_stubs precedes ../../third_party/OB-Xf/src).
 //
 // Tuning.h uses a tiny surface of MTS-ESP:
 //   - MTSClient            (opaque handle type)
@@ -18,8 +20,6 @@
 // use for MTS-ESP (there is no host to register with from an
 // AudioWorkletGlobalScope), so the no-op behaviour is also functionally
 // correct: the engine will fall back to its TWELVE_TET branch.
-//
-// See MANIFEST.md §4b.
 #ifndef OBXF_STUB_LIBMTSCLIENT_H
 #define OBXF_STUB_LIBMTSCLIENT_H
 

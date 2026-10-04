@@ -15,7 +15,7 @@
  * OB-Xf engine headers (engine/SynthEngine.h) — it references:
  *   - SynthEngine as a COMPLETE type (function pointers take SynthEngine&),
  *   - the constants MAX_VOICES and MAX_BEND_RANGE (32 / 48, already in
- *     scope from obxf_imported/configuration.h via the engine headers),
+ *     scope from third_party/OB-Xf/src/configuration.h via the engine headers),
  *   - <cmath> for std::round / std::exp / std::log (already in scope in
  *     main_obxd.cpp; JUCE headers pull it in transitively).
  *
@@ -1041,7 +1041,7 @@ static_assert(sizeof(obxf_legacy_params) / sizeof(obxf_legacy_params[0]) == OBXF
 
 // =========================================================================
 // NEW-param table — exactly 28 rows, indexed by canonical ordinal
-// (declaration order of streaming IDs in obxf_imported/parameter/SynthParam.h,
+// (declaration order of streaming IDs in third_party/OB-Xf/src/parameter/SynthParam.h,
 // filtered to the params with no legacy ancestor). NOTE: this intentionally
 // differs from the legacy runtime sentinel order frozen in
 // tools/new-param-order-v1.json (see tools/PARAM_SPEC.md).

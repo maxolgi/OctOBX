@@ -9,7 +9,7 @@
 // A later generator task consumes THIS module to emit those outputs.
 //
 // Authority chain:
-//   - obxf_imported/state/ObxdImporter.cpp (translateProgramFromXml) is
+//   - third_party/OB-Xf/src/state/ObxdImporter.cpp (translateProgramFromXml) is
 //     canonical for the LEGACY→NATIVE math (rescales, splits, /3 attack
 //     compensation, logsc bakes).
 //   - wasm/obxd/main_obxd.cpp is the current runtime implementation the math
@@ -87,8 +87,8 @@ export const TRANSFORM_KINDS = Object.freeze([
 const XF_CURVES = Object.freeze(['log', 'lin', 'identity']);
 
 // Frozen snapshot of every processX-style method declared in
-// wasm/obxd/obxf_imported/engine/SynthEngine.h (regenerate with:
-//   rg -o '\bprocess[A-Za-z0-9_]+' wasm/obxd/obxf_imported/engine/SynthEngine.h | sort -u
+// third_party/OB-Xf/src/engine/SynthEngine.h (regenerate with:
+//   rg -o '\bprocess[A-Za-z0-9_]+' third_party/OB-Xf/src/engine/SynthEngine.h | sort -u
 // ). Used by validateSpec() to assert method names are real.
 // Note: processPan takes an extra voice argument — processPan(v, idx).
 const SYNTH_ENGINE_METHODS = Object.freeze(new Set([
@@ -872,7 +872,7 @@ export const paramSpec = [
     // -----------------------------------------------------------------------
     // The 28 NEW params — OB-Xf streaming IDs with NO legacy ancestor.
     // newOrdinal = canonical index: the DECLARATION ORDER of streaming IDs in
-    // obxf_imported/parameter/SynthParam.h (MASTER → GLOBAL → OSCILLATORS →
+    // third_party/OB-Xf/src/parameter/SynthParam.h (MASTER → GLOBAL → OSCILLATORS →
     // MIXER → CONTROL → FILTER → LFO1 → LFO2 → envelopes → slop/pan), filtered
     // to these 28. Cross-checked against ALL_SYNTH_PARAM_IDS in
     // test/obxf-dispatch-coverage.test.ts. This intentionally DIFFERS from the
@@ -882,7 +882,7 @@ export const paramSpec = [
     // here vs Rate, ModAmount1-2, Wave1-3, PW at runtime.
     //
     // drumClass: verified against the processX() bodies in
-    // obxf_imported/engine/SynthEngine.h (→ Motherboard.h / Voice.h).
+    // third_party/OB-Xf/src/engine/SynthEngine.h (→ Motherboard.h / Voice.h).
     // 'global' = the setter writes synth-global Motherboard state with NO
     // ForEachVoice (shared by every voice): UnisonVoices →
     // synth.setUnisonVoices → Motherboard::unisonVoiceCount, VoiceReassign →
@@ -957,7 +957,7 @@ export const DRUM_SMOOTHER_SET = Object.freeze([44, 45, 46, 51, 52, 53, 54]);
 export const DRUM_RESTORE_SKIP_SET = Object.freeze([3, 40, 41, 42, 51, 54]);
 
 // Verified NEW-param drum globals (CANONICAL ordinals, idx = 200 + ordinal).
-// Ground truth: the processX() bodies in obxf_imported/engine/SynthEngine.h —
+// Ground truth: the processX() bodies in third_party/OB-Xf/src/engine/SynthEngine.h —
 // these four are the ONLY NEW setters that write synth-global Motherboard
 // state with NO ForEachVoice (everything else is per-voice, applied per
 // triggered drum layer via pcmVoiceOverride):
@@ -1157,12 +1157,12 @@ export function validateSpec() {
         }
     }
 
-    // --- method names exist in obxf_imported/engine/SynthEngine.h ----------
+    // --- method names exist in third_party/OB-Xf/src/engine/SynthEngine.h --
     for (const e of [...legacy, ...fresh]) {
         const label = e.legacyName ?? e.newId;
         if (!e.method) continue;
         if (!SYNTH_ENGINE_METHODS.has(e.method))
-            problems.push(`${label}: method '${e.method}' not found in obxf_imported/engine/SynthEngine.h snapshot`);
+            problems.push(`${label}: method '${e.method}' not found in third_party/OB-Xf/src/engine/SynthEngine.h snapshot`);
         if (typeof e.transform?.secondaryMethod === 'string' &&
             !SYNTH_ENGINE_METHODS.has(e.transform.secondaryMethod))
             problems.push(`${label}: secondaryMethod '${e.transform.secondaryMethod}' not in SynthEngine.h snapshot`);

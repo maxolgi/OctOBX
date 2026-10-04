@@ -1,29 +1,30 @@
-// wasm/obxd/obxf_imported/Utils.h — minimal compile-time stub.
+// wasm/obxd/obxf_stubs/Utils.h — minimal compile-time stub.
 //
-// The OB-Xf engine/headers transitively include <Utils.h> (see
-// engine/AudioUtils.h). The real OB-Xf src/Utils.h is dominated by a host-glue
-// `Utils` class (patch-folder scanning, theme folders, clipboard, GUI scale)
-// that depends on the unresolvable "filesystem/import.h" and pulls in
-// juce_gui_basics + the full juce_audio_processors — none of which we want in
-// a WASM build.
+// The OB-Xf engine headers (engine/AudioUtils.h etc., now compiled straight
+// from third_party/OB-Xf/src) transitively include <Utils.h>. The fork's real
+// src/Utils.h is dominated by a host-glue `Utils` class (patch-folder
+// scanning, theme folders, clipboard, GUI scale) that depends on the
+// unresolvable "filesystem/import.h" and pulls in juce_gui_basics + the
+// full juce_audio_processors — none of which we want in a WASM build.
 //
-// AudioUtils.h / SynthEngine.h / OscillatorBlock.h / Voice.h only need the
-// three engine math free-functions defined at the TOP of the real Utils.h
-// (getPitch, linsc, logsc). This stub provides exactly those, verbatim from
-// third_party/OB-Xf/src/Utils.h lines 30-40, plus the <Constants.h> include
-// that supplies `mult` (used by getPitch). The host-glue `Utils` class is
-// intentionally NOT declared.
-//
-// See MANIFEST.md §4a.
+// Since OB-Xf #705, `linsc`/`logsc` live in
+// third_party/OB-Xf/src/engine/ParamScales.h, which VoiceMatrix.h pulls in
+// via a same-directory include the stub cannot shadow — so the stub must NOT
+// define them (they now arrive natively from ParamScales.h). The stub
+// provides only `getPitch` (our fast-exp OctOBX perf variant of the
+// upstream src/Utils.h one) plus the <Constants.h> include that supplies
+// `mult`. The host-glue `Utils` class is intentionally NOT declared, and
+// upstream src/Utils.h stays shadowed by -I order — the Makefile puts
+// obxf_stubs BEFORE ../../third_party/OB-Xf/src in OBXF_INCLUDES — because
+// it does not compile headless.
 #ifndef OBXF_STUB_UTILS_H
 #define OBXF_STUB_UTILS_H
 
 #include <cmath>
 #include <cstdint>
-// Constants.h defines `mult` (ln2 / 12), used by getPitch below. Both the
-// root obxf_imported/Constants.h and obxf_imported/core/Constants.h share the
-// same include guard, so the later `<core/Constants.h>` pulled in by
-// SynthEngine.h is a no-op.
+// Constants.h defines `mult` (ln2 / 12), used by getPitch below. Resolves to
+// the fork's core/Constants.h via the -I ../../third_party/OB-Xf/src/core
+// include path (the stub dir intentionally carries no copy).
 #include <Constants.h>
 
 /*
@@ -65,15 +66,5 @@ inline static float fastExpf(float x)
 }
 
 inline static float getPitch(float index) { return 440.f * fastExpf(mult * index); };
-
-inline static float linsc(float param, const float min, const float max)
-{
-    return (param) * (max - min) + min;
-}
-
-inline static float logsc(float param, const float min, const float max, const float rolloff = 19.f)
-{
-    return ((std::exp(param * std::log(rolloff + 1.f)) - 1.f) / (rolloff)) * (max - min) + min;
-}
 
 #endif // OBXF_STUB_UTILS_H

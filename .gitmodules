@@ -3,7 +3,9 @@
 	url = https://github.com/maxolgi/OCT_CE_OS.git
 [submodule "third_party/JUCE"]
 	path = third_party/JUCE
-	url = https://github.com/juce-framework/JUCE.git
+	url = https://github.com/maxolgi/JUCE.git
+	branch = master
 [submodule "third_party/OB-Xf"]
 	path = third_party/OB-Xf
-	url = https://github.com/surge-synthesizer/OB-Xf.git
+	url = https://github.com/maxolgi/OB-Xf.git
+	branch = main

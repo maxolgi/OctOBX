@@ -112,3 +112,26 @@
 #include <juce_events/juce_events.cpp>
 #include <juce_audio_basics/juce_audio_basics.cpp>
 #include <juce_audio_processors_headless/juce_audio_processors_headless.cpp>
+
+// ---- juce::Colour(uint32) shim (JUCE 9) ----------------------------------
+// JUCE 9's juce_audio_processors header chain includes juce_graphics
+// headers unconditionally (JUCE 8 compiled those regions out when
+// JUCE_MODULE_AVAILABLE_juce_graphics was undefined), so headless
+// consumers can now odr-use juce::Colour's raw-uint32 constructor from
+// inline code — e.g. ObxdImporter.o references it at link time. The real
+// definition lives in juce_graphics' juce_Colour.cpp, which we do not
+// compile (headless build). This is that definition, verbatim from
+// JUCE 9.0.3 juce_Colour.cpp:224 — the ONLY graphics symbol the headless
+// link set actually needs (verified via llvm-nm over the TUs).
+#include <juce_graphics/colour/juce_PixelFormats.h>
+#include <juce_graphics/colour/juce_Colour.h>
+namespace juce
+{
+Colour::Colour (uint32 col) noexcept
+    : argb (static_cast<uint8> ((col >> 24) & 0xff),
+            static_cast<uint8> ((col >> 16) & 0xff),
+            static_cast<uint8> ((col >> 8) & 0xff),
+            static_cast<uint8> (col & 0xff))
+{
+}
+} // namespace juce

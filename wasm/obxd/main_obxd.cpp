@@ -2,7 +2,7 @@
  * wasm/obxd/main_obxd.cpp — multi-instance OB-Xf synth engine wrapper.
  *
  * This is the OB-Xd → OB-Xf migration target. It drives the Surge-maintained
- * OB-Xf SynthEngine (obxf_imported/engine/SynthEngine.h) instead of the
+ * OB-Xf SynthEngine (third_party/OB-Xf/src/engine/SynthEngine.h) instead of the
  * legacy 2DaT/Obxd engine. The engine API is richer (MPE channel-aware note
  * handlers, ~30 more processX() params, 32-voice polyphony, second LFO) but
  * the wrapper preserves the existing 10-instance rig contract: up to 10
@@ -18,7 +18,7 @@
  *   one row per legacy index with the forward transform as a fn ptr), produced
  *   by tools/gen-param-table.mjs from tools/param-spec.mjs (the single source
  *   of truth — see tools/PARAM_SPEC.md) and verified against
- *   obxf_imported/state/ObxdImporter.cpp (the canonical OB-Xd→OB-Xf
+ *   third_party/OB-Xf/src/state/ObxdImporter.cpp (the canonical OB-Xd→OB-Xf
  *   translator). Rescale rules implemented:
  *     - VOICE_COUNT:   old 1..8 voices → new polyphony midpoint
  *     - OCTAVE:        → Transpose, semantic shift (round(v*4)+1 clamped 0..4)*0.25
@@ -37,7 +37,7 @@
  *     - ASPLAYEDALLOCATION: bool→tri NotePriority
  *   REMOVED (no-op): MIDILEARN(1), OSCQuantize(32), UNLEARN(70), ECONOMY_MODE(71)
  *
- * Engine API (per obxf_imported/engine/SynthEngine.h):
+ * Engine API (per third_party/OB-Xf/src/engine/SynthEngine.h):
  *   - SynthEngine()                          // default ctor, no args
  *   - void setSampleRate(float sr)
  *   - void processSample(float* L, float* R)  // ONE stereo sample
@@ -95,9 +95,9 @@
 #include <juce_audio_processors_headless/juce_audio_processors_headless.h>
 
 // =========================================================================
-// OB-Xf engine headers (resolved via -I obxf_imported).
+// OB-Xf engine headers (resolved via -I third_party/OB-Xf/src).
 //
-// obxf_imported/engine/SynthEngine.h transitively pulls in Motherboard,
+// third_party/OB-Xf/src/engine/SynthEngine.h transitively pulls in Motherboard,
 // Voice, VoiceMatrix, Lfo, Program, ParameterList, SynthParam, Constants,
 // configuration — the full OB-Xf parameter/engine subsystem. Lfo.h includes
 // <juce_dsp/juce_dsp.h> for FastMathApproximations::sin (a header-only
@@ -183,7 +183,7 @@ using namespace LegacyParam;
 // 128. obxd_render() sums every active instance into this pair.
 #define BUF_FRAMES 1024
 
-// VST2 preset header layout (fxProgramSet — see obxf_imported/core/Constants.h).
+// VST2 preset header layout (fxProgramSet — see third_party/OB-Xf/src/core/Constants.h).
 // All multi-byte integer/float fields are big-endian (network byte order),
 // per the Steinberg VST2 fxp/fxb spec. Both fxProgram (regular) and
 // fxProgramSet (chunk) share the same 56-byte fixed prefix; the chunk
@@ -234,7 +234,7 @@ static float g_param_mirror[INSTANCE_COUNT][PARAM_COUNT] = {};
 //
 // CANONICAL ORDINALS END-TO-END: new_idx is the CANONICAL ordinal of
 // obxf_new_params[] (declaration order of streaming IDs in
-// obxf_imported/parameter/SynthParam.h, filtered to params with no legacy
+// third_party/OB-Xf/src/parameter/SynthParam.h, filtered to params with no legacy
 // ancestor) — the apply path dispatches obxf_new_params[new_idx].apply_native.
 // The TS UI (obxd-synth-ui.ts) and the drum layer editor (drum-rack.ts) assign
 // their sentinels NAME-KEYED from that same generated canonical order
@@ -341,7 +341,7 @@ static void recreate_engine(int instance_id) {
 // The UI (obxd-synth-ui.ts) assigns these a sentinel legacy index
 // NEW_PARAM_BASE (200) + ordinal. The ordinal is the CANONICAL one — the
 // row index of obxf_new_params[] (declaration order of streaming IDs in
-// obxf_imported/parameter/SynthParam.h, filtered to params with no legacy
+// third_party/OB-Xf/src/parameter/SynthParam.h, filtered to params with no legacy
 // ancestor). Values are passed 1:1 to the matching processX() method with
 // NO rescale (these are native OB-Xf params), via the generated table's
 // apply_native fn ptr. Also used per triggered drum voice by
@@ -445,7 +445,7 @@ static bool is_global_drum_param(int idx) {
 // Motherboard state with no ForEachVoice, so it must NOT be stamped per
 // triggered voice (last-layer-applied would win on the shared field). The
 // verified set (see tools/param-spec.mjs DRUM_NEW_GLOBAL_ORDINALS and the row
-// evidence in obxf_imported/engine/SynthEngine.h):
+// evidence in third_party/OB-Xf/src/engine/SynthEngine.h):
 //    0 UnisonVoices → synth.setUnisonVoices → Motherboard::unisonVoiceCount
 //    1 VoiceReassign → synth.reallocate (Motherboard bool)
 //    7 VibratoWave   → synth.vibratoLFO.par.{wave1blend,wave2blend}
@@ -773,7 +773,7 @@ static void apply_drum_layer_params_for_instance(int instance_id) {
 // Named-attribute dispatch (native OB-Xf XML schema → processX())
 //
 // Native OB-Xf .fxp files serialize parameters by their SynthParam::ID
-// STREAMING name (see obxf_imported/parameter/SynthParam.h): e.g.
+// STREAMING name (see third_party/OB-Xf/src/parameter/SynthParam.h): e.g.
 // `Volume="0.5"`, `FilterCutoff="0.26"`, `PitchBendUp="0.0417"`. These are
 // already native engine normalized 0..1 values, so they map 1:1 onto the
 // matching processX() method with NO rescale — unlike the legacy integer

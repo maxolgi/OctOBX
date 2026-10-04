@@ -196,7 +196,7 @@ describe("canonical-order consistency", () => {
     });
 
     it("NEW-param drumClass matches the verified synth-global set (4 globals, 24 voice)", () => {
-        // Verified against the processX() bodies in obxf_imported/engine/
+        // Verified against the processX() bodies in third_party/OB-Xf/src/engine/
         // SynthEngine.h (see tools/PARAM_SPEC.md §drumClass taxonomy and
         // DRUM_NEW_GLOBAL_ORDINALS in tools/param-spec.mjs): only these four
         // setters write Motherboard-level state with no ForEachVoice, so they

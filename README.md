@@ -36,10 +36,12 @@ Emscripten pthreads), not ALSA/winmm.
 .
 ├── firmware/              git submodule → OCT_CE_OS (Octopus + Nemo firmware)
 ├── third_party/
-│   ├── OB-Xf/             git submodule → surge-synthesizer/OB-Xf (current synth engine)
+│   ├── OB-Xf/             git submodule → maxolgi/OB-Xf (fork of surge-synthesizer/OB-Xf,
+│   │                      current synth engine; carries our PCM/wasm-perf commits)
 │   │                      + 5 sub-submodules under libs/ (sst-basic-blocks, sst-cpputils,
 │   │                        simde, fmt, JUCE) — see "First-time clone"
-│   └── JUCE/              git submodule → juce-framework/JUCE (juce_amalgam.cpp)
+│   └── JUCE/              git submodule → maxolgi/JUCE (fork of juce-framework/JUCE;
+│                            JUCE 9.0.3 + our ThreadPriorities commit — feeds juce_amalgam.cpp)
 ├── wasm/
 │   ├── main_wasm.c        Octopus engine entry point + exported API + sample-driven pump
 │   ├── hal_wasm.c         eCos HAL shim (OCT_AWP cooperative: virtual clock, polled alarms)
@@ -50,7 +52,7 @@ Emscripten pthreads), not ALSA/winmm.
 │   └── obxd/
 │       ├── main_obxd.cpp       multi-instance OB-Xf SynthEngine wrapper (10 instances)
 │       ├── juce_amalgam.cpp    single-TU JUCE core + events + audio_basics + processors_headless
-│       ├── obxf_imported/      curated OB-Xf header subtree (28 verbatim copies + 2 stubs)
+│       ├── obxf_stubs/        2 header stubs (fast-exp Utils.h, MTS-ESP no-op) shadowing fork deps
 │       ├── param_table.h   GENERATED OB-Xd→OB-Xf dispatch tables (from tools/param-spec.mjs)
 │       ├── patches/        10 CC0 .fxp factory patches (embedded via xxd → patches.h)
 │       └── Makefile        builds obxd_wasm.{js,wasm} (c++20, simd128, 256MB, 1MB stack)
@@ -64,7 +66,7 @@ Emscripten pthreads), not ALSA/winmm.
 
 ## First-time clone
 
-This repo uses four submodules:
+This repo uses three submodules:
 
 ```bash
 git clone --recurse-submodules <repo-url>
@@ -79,11 +81,13 @@ git submodule update --init --recursive
 
 The firmware submodule (`firmware/`) is required for the Octopus WASM build.
 The OB-Xf and JUCE submodules (`third_party/OB-Xf`, `third_party/JUCE`) are
-required for the synth WASM build (`make -C wasm/obxd`). The JUCE submodule
-is pinned at upstream 8.0.14; the Emscripten fix it needs lives in-repo as
-`patches/0001-juce-emscripten-threadpriorities.patch` and is applied
-automatically by `build.sh` before every synth build. **OB-Xf carries nested
-sub-submodules under `libs/`** — only the five required for a
+required for the synth WASM build (`make -C wasm/obxd`). Both ride user
+forks that track upstream: `third_party/JUCE` is pinned at `251768d`
+(JUCE 9.0.3 plus our WASM branch in `juce_ThreadPriorities_native.h`,
+committed directly on the fork), and `third_party/OB-Xf` is pinned at
+`7fe23a8` (upstream `b08ffb6` plus 3 OctOBX commits: PCM sampler additions,
+wasm fast-math perf, and a `recalculateMatrix` signature fixup). **OB-Xf
+carries nested sub-submodules under `libs/`** — only the five required for a
 WASM/AudioWorklet build need to be initialized:
 
 ```bash
@@ -100,6 +104,29 @@ These five satisfy the headers referenced by the OB-Xf compile path
 (`ParamMetadata.h` → `<fmt/core.h>`, `simd/setup.h` → `simde/...`,
 `SynthParam.h` → `<juce_audio_basics/...>`, plus the SST support headers).
 The legacy `third_party/Obxd/` submodule has been removed.
+
+### Syncing the forks with upstream
+
+Both `third_party/` submodules ride user forks that track upstream. To pick
+up new upstream work:
+
+1. GitHub **"Sync fork"** on the fork's default branch
+   (`maxolgi/OB-Xf` `main`, `maxolgi/JUCE` `master`).
+2. `git submodule update --remote third_party/OB-Xf` (or `third_party/JUCE`)
+   in this repo.
+3. Resolve any conflicts with the OctOBX commits on the fork (marked with
+   `// OctOBX PCM` / `// OctOBX perf` comments for easy spotting). Syncing
+   OB-Xf past upstream #705 required adapting our PCM `recalculateMatrix`
+   calls; future upstream changes to the 5 engine files we patch
+   (`SynthEngine.h`, `Motherboard.h`, `Voice.h`, `Filter.h`,
+   `AdsrEnvelope.h`) may need the same.
+4. Rebuild (`./build.sh synth`) and run `npm test` / `npm run test:wasm`.
+5. Commit the submodule pointer bump — CI tests the committed pointer, not
+   the remote tip.
+
+> **Audible change with #705:** upstream commit #705 rescales the MPE matrix
+> mod depths (documented upstream as "changes how existing MPE patches
+> sound"). Patches saved before the sync may sound subtly different.
 
 ## Build
 
@@ -515,9 +542,11 @@ instantiates it with pre-fetched bytes + the main thread's memory.
 ## OB-Xf synth — WASM source (`wasm/obxd/`)
 
 The synth was migrated from the legacy 2DaT/Obxd OB-XD engine to the
-Surge-maintained OB-Xf engine. The OB-Xf source is **curated** into the
-browser build (see `wasm/obxd/obxf_imported/MANIFEST.md`) — it is not compiled
-straight from the submodule.
+Surge-maintained OB-Xf engine. The engine is compiled **straight from the
+fork's `src/` tree** (`third_party/OB-Xf/src`, the `maxolgi/OB-Xf` fork,
+which carries our PCM-sampler + wasm-perf commits) — there is no curated
+copy; the only OB-Xf-local additions are the two headers in
+`wasm/obxd/obxf_stubs/` (see below).
 
 ### `main_obxd.cpp`
 
@@ -533,7 +562,7 @@ always-on `x/(1+|x|)` soft-clip. State per instance:
 - `g_patch_name[10][64]` — last-loaded program name per instance.
 - `g_engine_rms[10]` — per-instance RMS metering, updated during render.
 
-**Engine API** (per `obxf_imported/engine/SynthEngine.h`):
+**Engine API** (per the fork's `src/engine/SynthEngine.h`):
 `setSampleRate(float)`, `processSample(float* L, float* R)` (one stereo
 sample), `processNoteOn(note, vel, channel)` / `processNoteOff(note, vel, channel)`
 (MPE-aware — channel is `int8_t`), `allNotesOff()`, `allSoundOff()`,
@@ -619,19 +648,34 @@ breakdown and return codes.
 > from the MIDI-learn integration layer. CC 1 → `processModWheel`, CC 64 →
 > `sustainOn()`/`sustainOff()`, CC 120 → `allSoundOff()`, CC 123 → `allNotesOff()`.
 
-### `obxf_imported/` (curated OB-Xf header subtree)
+### Engine sources (from the fork's `src/`)
 
-28 byte-identical copies of the OB-Xf `SynthEngine` / `Program` /
-`ObxdImporter` / `ParameterList` / `SynthParam` subsystem (plus supporting
-headers — `Motherboard.h`, `Voice.h`, `VoiceMatrix.h`, `Lfo.h`, etc.) from
-`third_party/OB-Xf/src/...`. This is the ONLY OB-Xf source root on the
-include path; `third_party/OB-Xf/src` itself is intentionally excluded (it
-would pull in GUI/host deps). Two deliberate stubs substitute for deps not in
-the browser build: `Utils.h` (empty) and `libMTSClient.h` (MTS-ESP stub).
-See `obxf_imported/MANIFEST.md` for the provenance and the per-file copy list.
+The OB-Xf `SynthEngine` / `Program` / `ObxdImporter` / `ParameterList` /
+`SynthParam` subsystem (plus supporting headers — `Motherboard.h`,
+`Voice.h`, `VoiceMatrix.h`, `Lfo.h`, etc.) is compiled directly from
+`third_party/OB-Xf/src/...` — the Makefile puts `src/` and its `core/`,
+`engine/`, `parameter/`, `state/` subdirs on the include path. Our
+divergences (PCM sampler for the drum engine, wasm fast-math perf) ride as
+commits on the `maxolgi/OB-Xf` fork, marked with `// OctOBX PCM` /
+`// OctOBX perf` comments.
 
-`obxf_imported/state/ObxdImporter.cpp` is compiled as a separate third TU
-(alongside `main_obxd.cpp` and `juce_amalgam.cpp`).
+`third_party/OB-Xf/src/state/ObxdImporter.cpp` is compiled as a separate
+third TU (alongside `main_obxd.cpp` and `juce_amalgam.cpp`).
+
+### `obxf_stubs/` (stub headers)
+
+Exactly two headers substitute for deps not pulled into the browser build:
+
+- `Utils.h` — provides ONLY the fast-exp `getPitch` (the per-sample pitch
+  path). `linsc`/`logsc` now come natively from upstream
+  `engine/ParamScales.h` (since #705), so the stub must not define them.
+  It shadows the fork's real `src/Utils.h` (a host-glue `Utils` class that
+  does not compile headless) purely by `-I` order.
+- `libMTSClient.h` — MTS-ESP no-op (the `libs/MTS-ESP` submodule is not
+  initialized; `engine/Tuning.h` includes this header).
+
+The Makefile include order — `obxf_stubs` BEFORE
+`third_party/OB-Xf/src` — is load-bearing: swapping it breaks the build.
 
 ### `juce_amalgam.cpp`
 
@@ -639,7 +683,11 @@ Single TU amalgamating `juce_core` + `juce_events` + `juce_audio_basics` +
 `juce_audio_processors_headless`. The OB-Xf `SynthEngine.h` → `Program.h` →
 `ParameterList.h` → `SynthParam.h` chain reaches
 `juce::AudioParameterFloat` / `juce::AudioProcessorParameter`, which live in
-JUCE 8's GUI-free `juce_audio_processors_headless` split. MUST be a separate
+JUCE 9's GUI-free `juce_audio_processors_headless` split. (JUCE 9's
+`juce_audio_processors` header chain includes `juce_graphics` headers
+unconditionally, and `ObxdImporter.o` odr-uses
+`juce::Colour::Colour(uint32)` — the amalgam carries a small shim defining
+it, verbatim from JUCE 9's `juce_Colour.cpp`.) MUST be a separate
 TU from `main_obxd.cpp` because JUCE's `.cpp` files refuse to compile in any
 TU where the matching `.h` has already been included. Critically `#undef
 __linux__` before including JUCE so `TargetPlatform.h`'s `#elif defined(__wasm__)`
@@ -1060,8 +1108,8 @@ choice keeps the combined work license-compatible.
 | Component | Location | License |
 |---|---|---|
 | Octopus/Nemo firmware | `firmware/` (submodule → `maxolgi/OCT_CE_OS`) | see `firmware/OCT_OS/COPYING.txt` |
-| OB-Xf `SynthEngine` | `third_party/OB-Xf/` (submodule → `surge-synthesizer/OB-Xf`) | GPL-3.0-or-later |
-| JUCE core + events + audio_basics + processors_headless | `third_party/JUCE/` (submodule → `juce-framework/JUCE`) | ISC (core modules) — see `third_party/JUCE/LICENSE.md` |
+| OB-Xf `SynthEngine` | `third_party/OB-Xf/` (submodule → `maxolgi/OB-Xf`, fork of `surge-synthesizer/OB-Xf`) | GPL-3.0-or-later |
+| JUCE core + events + audio_basics + processors_headless | `third_party/JUCE/` (submodule → `maxolgi/JUCE`, fork of `juce-framework/JUCE`) | ISC (core modules) — see `third_party/JUCE/LICENSE.md` |
 | SST basic-blocks / cpputils, simde, fmt | `third_party/OB-Xf/libs/...` (sub-submodules) | see each submodule's LICENSE |
 
 (The legacy OB-XD engine submodule `third_party/Obxd/` was removed after the
