@@ -29,3 +29,6 @@ logs/
 # Emscripten / temp
 *.tmp
 tmp/
+
+# Launcher runtime state (persisted self-signed TLS cert/key, --cert-mode self)
+.config/
