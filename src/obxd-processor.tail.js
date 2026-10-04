@@ -391,6 +391,10 @@ function initMixer(bytes, port) {
                     try { mixer.set_channel_pan_law(ch, 3); } catch (e) { /* per-channel, non-fatal */ }
                 }
                 mixerReady = true;
+                // The mixer owns the node output now — skip the C-side
+                // master-bus sum + soft-clip in obxd_render (g_master_l/r
+                // is only the legacy fallback path).
+                if (wasmModule && wasmModule._obxd_set_master_render) wasmModule._obxd_set_master_render(0);
                 console.log('[obxd-processor] CakeMix mixer engine ready (16 stereo tracks, engine channels 0..' + (OBXD_INSTANCE_COUNT * 2 - 1) + ' fed)');
                 resolve();
             } catch (e) {
@@ -1136,7 +1140,7 @@ class ObxdProcessor extends AudioWorkletProcessor {
         if (midiSabRing && midiSabHead && midiSabTail && wasmModule) {
             const tail = Atomics.load(midiSabTail, 0);
             let head = Atomics.load(midiSabHead, 0);
-            const hwBatch = [];
+            let hwBatch = null;   // allocated on first ring event (empty ring = no alloc)
             while (head !== tail) {
                 const packed = Atomics.load(midiSabRing, head);
                 const status = packed & 0xff;
@@ -1154,11 +1158,12 @@ class ObxdProcessor extends AudioWorkletProcessor {
                         }
                     }
                 }
+                if (hwBatch === null) hwBatch = [];
                 hwBatch.push(packed);
                 head = (head + 1) & MIDI_SYNTH_RING_MASK;
             }
             Atomics.store(midiSabHead, 0, head);
-            if (hwBatch.length > 0) {
+            if (hwBatch !== null) {
                 this.port.postMessage({ type: 'hw_midi', packed: hwBatch });
             }
         }
@@ -1247,6 +1252,13 @@ class ObxdProcessor extends AudioWorkletProcessor {
             } catch (e) {
                 console.error('[obxd-processor] mixer process failed, falling back to master sum:', e && e.message);
                 mixerReady = false;   // latch to legacy path for this session
+                // Restore the C-side master sum for the fallback...
+                if (wasmModule && wasmModule._obxd_set_master_render) wasmModule._obxd_set_master_render(1);
+                // One silent transition quantum: the skipped master sum is stale this
+                // block; it recomputes from the next quantum onward.
+                if (out[0]) out[0].fill(0);
+                if (out[1]) out[1].fill(0);
+                mixed = true;
                 // Tell the main thread the latch flipped — otherwise its
                 // mixerReady stays true and the console UI keeps claiming
                 // "ONLINE" while the meters freeze (the worklet's console

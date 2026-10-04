@@ -220,6 +220,10 @@ static int   g_engine_polyphony[INSTANCE_COUNT] = {};
 static float g_engine_rms[INSTANCE_COUNT] = {};
 static bool  g_mpe_enabled[INSTANCE_COUNT] = {};   // per-instance MPE flag (T9)
 static float g_sample_rate = 44100.0f;              // saved for engine recreation
+// When false, obxd_render skips the master-bus accumulation + soft-clip
+// (the CakeMix mixer owns the node output; g_master_l/r is only the
+// legacy fallback). Track taps and per-instance RMS are always computed.
+static bool g_render_master = true;
 
 // Per-instance param mirror — SynthEngine has no getter API, so we maintain
 // our own copy alongside the engine state. obxd_get_param() reads from here;
@@ -1282,8 +1286,14 @@ void obxd_render(int n) {
     if (n < 0) n = 0;
     if (n > BUF_FRAMES) n = BUF_FRAMES;
 
-    memset(g_master_l, 0, (size_t)n * sizeof(float));
-    memset(g_master_r, 0, (size_t)n * sizeof(float));
+    // Read the flag once — processSample is an opaque call, so the global
+    // would otherwise be reloaded every sample.
+    const bool render_master = g_render_master;
+
+    if (render_master) {
+        memset(g_master_l, 0, (size_t)n * sizeof(float));
+        memset(g_master_r, 0, (size_t)n * sizeof(float));
+    }
 
     float tmp_l, tmp_r;
     for (int e = 0; e < INSTANCE_COUNT; ++e) {
@@ -1293,11 +1303,24 @@ void obxd_render(int n) {
             memset(g_track_r[e], 0, (size_t)n * sizeof(float));
             continue;
         }
+        Motherboard* mb = g_engines[e]->getMotherboard();
+        if (mb && !mb->anySounding) {
+            // Block-level idle skip: note events only arrive between renders
+            // (setNoteOn flips anySounding synchronously), so an engine that was
+            // silent at the end of the last quantum stays silent for this one —
+            // same result as the engine's per-sample fast path, without 128 calls.
+            g_engine_rms[e] = 0.0f;
+            memset(g_track_l[e], 0, (size_t)n * sizeof(float));
+            memset(g_track_r[e], 0, (size_t)n * sizeof(float));
+            continue;
+        }
         float sum_sq = 0.0f;
         for (int i = 0; i < n; ++i) {
             g_engines[e]->processSample(&tmp_l, &tmp_r);
-            g_master_l[i] += tmp_l;
-            g_master_r[i] += tmp_r;
+            if (render_master) {
+                g_master_l[i] += tmp_l;
+                g_master_r[i] += tmp_r;
+            }
             g_track_l[e][i] = tmp_l;
             g_track_r[e][i] = tmp_r;
             sum_sq += tmp_l * tmp_l + tmp_r * tmp_r;
@@ -1307,9 +1330,11 @@ void obxd_render(int n) {
 
     // Soft-clip master bus — x/(1+|x|). Asymptotes at ±1.0 so the summed
     // output never hard-clips even when all 10 instances peak together.
-    for (int i = 0; i < n; ++i) {
-        g_master_l[i] = g_master_l[i] / (1.0f + fabsf(g_master_l[i]));
-        g_master_r[i] = g_master_r[i] / (1.0f + fabsf(g_master_r[i]));
+    if (render_master) {
+        for (int i = 0; i < n; ++i) {
+            g_master_l[i] = g_master_l[i] / (1.0f + fabsf(g_master_l[i]));
+            g_master_r[i] = g_master_r[i] / (1.0f + fabsf(g_master_r[i]));
+        }
     }
 }
 
@@ -1340,6 +1365,11 @@ EMSCRIPTEN_KEEPALIVE
 void obxd_set_active(int instance_id, int active) {
     if (instance_id < 0 || instance_id >= INSTANCE_COUNT) return;
     g_engine_active[instance_id] = (active != 0);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void obxd_set_master_render(int enable) {
+    g_render_master = (enable != 0);
 }
 
 EMSCRIPTEN_KEEPALIVE

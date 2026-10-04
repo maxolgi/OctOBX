@@ -585,6 +585,8 @@ drains every quantum: `get_midi_synth_ring_ptr`,
 `wasm_get_midi_synth_dropped_count`.
 
 **OB-XD synth** (`wasm/obxd/main_obxd.cpp`): `obxd_init`, `obxd_render`,
+`obxd_set_master_render` (disable the C-side master-sum + soft-clip while the
+CakeMix mixer owns the node output; re-enabled on mixer-failure fallback),
 `get_buf_l_ptr` / `get_buf_r_ptr`, `obxd_set_active` / `obxd_get_active`,
 `obxd_set_polyphony` / `obxd_get_polyphony`, `obxd_midi_in`, `obxd_set_gain`,
 `obxd_set_param` / `obxd_get_param`, `obxd_load_fxp`, `obxd_all_notes_off`,
