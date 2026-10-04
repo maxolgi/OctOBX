@@ -418,6 +418,7 @@ interface ChannelMeterEntry {
 export function applyMixerMeter(msg: {
     peakL?: number; peakR?: number; rmsL?: number; rmsR?: number;
     clip?: boolean; limiterGr?: number; channels?: ChannelMeterEntry[];
+    channelsJson?: string;
 }): void {
     masterMeters.peakL = msg.peakL ?? -Infinity;
     masterMeters.peakR = msg.peakR ?? -Infinity;
@@ -426,8 +427,19 @@ export function applyMixerMeter(msg: {
     masterMeters.clip = !!msg.clip;
     masterMeters.limiterGr = msg.limiterGr ?? 0;
 
-    if (Array.isArray(msg.channels) && msg.channels.length) {
-        for (const cm of msg.channels) {
+    // The worklet posts the channel meters as a raw JSON string
+    // (channel_meters_json) — parsing happens HERE on the main thread,
+    // never on the audio thread. Legacy `channels` arrays are still
+    // accepted (preferred when both are present).
+    let channels = msg.channels;
+    if (!Array.isArray(channels) && typeof msg.channelsJson === "string") {
+        try {
+            const parsed: unknown = JSON.parse(msg.channelsJson);
+            if (Array.isArray(parsed)) channels = parsed as ChannelMeterEntry[];
+        } catch { /* malformed payload — treat as absent */ }
+    }
+    if (Array.isArray(channels) && channels.length) {
+        for (const cm of channels) {
             const t = cm.ch >> 1;
             if (t < 0 || t >= TRACK_COUNT) continue;
             const m = trackMeters[t];

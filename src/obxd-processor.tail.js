@@ -1245,7 +1245,7 @@ class ObxdProcessor extends AudioWorkletProcessor {
                             rmsR: mixer.master_rms_db_r(),
                             clip: mixer.master_clipping(),
                             limiterGr: mixer.limiter_gain_reduction_db(),
-                            channels: JSON.parse(mixer.channel_meters_json()),
+                            channelsJson: mixer.channel_meters_json(),
                         });
                     } catch (e) { /* meter failure never kills audio */ }
                 }

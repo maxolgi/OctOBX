@@ -179,6 +179,40 @@ describe("mixer/store — applyMixerMeter fold", () => {
             expect(m.grR).toBe(0);
         }
     });
+
+    it("channelsJson (raw string from the worklet) folds like channels", async () => {
+        const { store } = await freshStore();
+        store.applyMixerMeter({
+            channelsJson: JSON.stringify([
+                { ch: 0, peak: -8, rms: -18, gr: -1 },
+                { ch: 1, peak: -9, rms: -19 },
+            ]),
+        });
+        expect(store.trackMeters[0]).toEqual({
+            peakL: -8, rmsL: -18, peakR: -9, rmsR: -19, grL: -1, grR: 0,
+        });
+    });
+
+    it("empty channelsJson array resets; malformed channelsJson resets, never throws", async () => {
+        const { store } = await freshStore();
+        store.applyMixerMeter({ channelsJson: JSON.stringify([{ ch: 0, peak: -2, rms: -12 }]) });
+        expect(store.trackMeters[0].peakL).toBe(-2);
+        store.applyMixerMeter({ channelsJson: "[]" });
+        expect(store.trackMeters[0].peakL).toBe(-Infinity);
+        store.applyMixerMeter({ channelsJson: JSON.stringify([{ ch: 0, peak: -3, rms: -13 }]) });
+        expect(store.trackMeters[0].peakL).toBe(-3);
+        expect(() => store.applyMixerMeter({ channelsJson: "{not json" })).not.toThrow();
+        expect(store.trackMeters[0].peakL).toBe(-Infinity);
+    });
+
+    it("channels is preferred when both channels and channelsJson are present", async () => {
+        const { store } = await freshStore();
+        store.applyMixerMeter({
+            channels: [{ ch: 0, peak: -4, rms: -14 }],
+            channelsJson: JSON.stringify([{ ch: 0, peak: -40, rms: -44 }]),
+        });
+        expect(store.trackMeters[0].peakL).toBe(-4);
+    });
 });
 
 // ── seedEngineFromStore — THE REGRESSION TEST ────────────────────────────────
