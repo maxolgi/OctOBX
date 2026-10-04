@@ -92,6 +92,10 @@ const METER_INTERVAL_MS = 33;   // ~30Hz
 
 let uiBuilt = false;
 let audioInitializing = false;
+// Once-per-session latch: the ready-chain (app-state restore + drum preload)
+// must run exactly ONCE. Set in startAudioInit()'s .finally so even a failed
+// init isn't retried on every gesture.
+let audioInitDone = false;
 let meterInterval: ReturnType<typeof setInterval> | null = null;
 
 /*
@@ -518,14 +522,31 @@ function resumeAudioContext(): void {
  * incoming MIDI START, keyboard shortcuts, etc.) — anything that flips
  * the controller's runBit() from 0 to 1.
  *
- * setupObxdAudio() is now a fast no-op when the worklet node already
- * exists (it is created at startup by bootOctopusEngine) — its internal
- * resume only runs on the create path, so resumeAudioContext() above is
- * what guarantees the gesture resume in the already-booted case.
+ * setupObxdAudio() is a fast no-op when the worklet node already exists
+ * (it is created at startup by bootOctopusEngine) — its internal resume
+ * only runs on the create path, so resumeAudioContext() above is what
+ * guarantees the gesture resume in the already-booted case. The no-op
+ * call still MUST run, though: the .then chain below is what executes
+ * the ready-chain — awpReadyCallback() (the app-state restore registered
+ * by app-state.ts) plus, when no state was restored, the default
+ * drum-kit preload via preloadDrumKit(). That is why the guard below
+ * tests ONLY re-entrancy (audioInitializing): since the worklet node is
+ * up from page load, isObxdReady() is already true before the first run
+ * and would short-circuit the chain entirely, leaving the state restore
+ * and drum preload dead (instance 9 stuck on its factory synth patch).
+ *
+ * The chain runs ONCE PER SESSION (audioInitDone): audioInitializing
+ * resets in .finally, so a second trigger (PLAY click after STOP, a
+ * transport re-start, ...) would otherwise re-run
+ * restoreAppStateAfterAWP() and re-apply the boot-time localStorage
+ * snapshot over the user's live unsaved tweaks. The pre-regression
+ * isObxdReady() guard accidentally provided exactly this suppression
+ * (it tripped as soon as the node existed); audioInitDone restores
+ * those semantics deliberately.
  */
 function startAudioInit(): void {
     resumeAudioContext();
-    if (isObxdReady() || audioInitializing) return;
+    if (audioInitializing || audioInitDone) return;
     audioInitializing = true;
     setupObxdAudio().then(async () => {
         const restored = awpReadyCallback ? await awpReadyCallback() : false;
@@ -539,6 +560,12 @@ function startAudioInit(): void {
     }).catch((e) => {
         console.error("[obxd] audio init failed:", e);
     }).finally(() => {
+        // Latch in .finally (NOT only on success): the old isObxdReady()
+        // suppression tripped as soon as the node existed, regardless of
+        // whether the chain succeeded — so a failed init was never retried
+        // either. Matching that: even a failed init marks the session's
+        // one shot as spent; every later gesture just resumes the context.
+        audioInitDone = true;
         audioInitializing = false;
     });
 }

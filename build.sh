@@ -164,6 +164,61 @@ generate_ts_catalog() {
     echo "  Generated src/patch-catalog.ts ($(ls "$patch_dir"/*.fxp 2>/dev/null | wc -l) patches)"
 }
 
+# Combine the worklet: shim → octopus emcc JS → obxd emcc JS → (optional)
+# CakeMix mixer glue → restore layout → task queue → processor tail, one
+# classic script for audioWorklet.addModule(). Also stages the mixer
+# engine binary into wasm/build/ (vite's publicDir) so the main thread can
+# pre-fetch /mixer_wasm_bg.wasm. The committed artifacts in wasm/mixer/
+# are refreshed from the sibling CakeMix checkout via
+# tools/prep-mixer-wasm.mjs; when absent (and CakeMix unavailable) the
+# build degrades gracefully — no glue concat, no binary, and the worklet
+# falls back to the legacy C-side master sum.
+combine_worklet() {
+    # Required inputs — the two emcc glues are products of `make -C wasm` /
+    # `make -C wasm/obxd`; the rest are committed sources. If ANY is missing
+    # the concat would emit a truncated worklet, so warn and keep the
+    # previous wasm/build/obxd-processor.js instead (vite's publicDir copies
+    # it verbatim — a stale-but-intact worklet beats a broken one). The
+    # mixer glue below stays optional either way.
+    local missing=""
+    local input
+    local nl=$'\n'
+    for input in wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js \
+                 src/generated/restore-layout.js src/awp-task-queue.js \
+                 src/obxd-processor.tail.js src/obxd-awp-shim.js; do
+        [ -f "$input" ] || missing="${missing}${nl}  $input"
+    done
+    if [ -n "$missing" ]; then
+        echo "WARNING: combined worklet NOT regenerated — missing required input(s):" >&2
+        echo "$missing" >&2
+        echo "  (keeping previous wasm/build/obxd-processor.js; run ./build.sh wasm && ./build.sh synth first)" >&2
+        return 0
+    fi
+    local glue_arg=""
+    if [ -f wasm/mixer/mixer_wasm_glue.js ] && [ -f wasm/mixer/mixer_wasm_bg.wasm ]; then
+        cp wasm/mixer/mixer_wasm_glue.js wasm/build/mixer_wasm_glue.js
+        cp wasm/mixer/mixer_wasm_bg.wasm wasm/build/mixer_wasm_bg.wasm
+        glue_arg="wasm/build/mixer_wasm_glue.js"
+        echo "  Mixer engine: wasm/mixer artifacts staged (glue + binary)"
+    else
+        echo "  (mixer artifacts missing — attempting tools/prep-mixer-wasm.mjs)"
+        if node tools/prep-mixer-wasm.mjs; then
+            cp wasm/mixer/mixer_wasm_glue.js wasm/build/mixer_wasm_glue.js
+            cp wasm/mixer/mixer_wasm_bg.wasm wasm/build/mixer_wasm_bg.wasm
+            glue_arg="wasm/build/mixer_wasm_glue.js"
+            echo "  Mixer engine: artifacts refreshed from CakeMix + staged"
+        else
+            echo "  (mixer engine unavailable — worklet built without it; legacy master sum in effect)"
+        fi
+    fi
+    cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
+    cat wasm/build/_awp_shim.js wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js \
+        $glue_arg \
+        src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js \
+        > wasm/build/obxd-processor.js
+    rm wasm/build/_awp_shim.js
+}
+
 case "${1:-all}" in
     catalog)
         # Sync .fxp patches from the OB-Xf submodule and generate ONLY the
@@ -195,38 +250,24 @@ case "${1:-all}" in
         node tools/gen-param-table.mjs
         make -C wasm/obxd -f Makefile clean
         make -C wasm/obxd -f Makefile
-        # Concatenate emcc output + processor wrapper into a single classic
-        # script. AudioWorkletGlobalScope disallows importScripts() and dynamic
-        # import(), so the only way to give the worklet both the emcc JS and
-        # our AudioWorkletProcessor subclass is to feed them as one file to
-        # audioWorklet.addModule().
-        #
-        # Prepend an AWP shim: Chrome's AudioWorkletGlobalScope does NOT define
-        # `self` or `location` (it defines globalThis only), but emcc's
-        # worker-env output references both. Aliasing self to globalThis and
-        # synthesizing a minimal location lets the emcc output run unchanged.
-        #
-        # Splice the AWP task queue between the emcc output and the processor
-        # tail (shim -> octopus emcc JS -> obxd emcc JS -> restore layout ->
-        # task queue -> tail): the tail references the AwpTaskQueue binding
-        # AND the generated restore-layout consts, and everything ships as
-        # one classic script, so both must ride along in the same
-        # concatenation.
-        #
-        # The Octopus engine glue (wasm/build/octopus_wasm.js, MODULARIZE'd
-        # with EXPORT_NAME=OctopusModuleFactory) is concatenated in ahead of
-        # the obxd emcc output, so the combined worklet script defines
-        # OctopusModuleFactory alongside ObxdModuleFactory — the sequencer
-        # engine boots inside the SAME AudioWorklet as the synth (see
-        # ensureOctopus in src/obxd-processor.tail.js).
-        cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
-        cat wasm/build/_awp_shim.js wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
-        rm wasm/build/_awp_shim.js
+        # Combined worklet concatenation — same layout as the `all` case
+        # below: the octopus glue (OctopusModuleFactory) rides in ahead of
+        # the obxd glue so ensureOctopus can boot the sequencer in-worklet,
+        # and (when present) the CakeMix mixer glue rides between the obxd
+        # glue and the restore layout (see combine_worklet above).
+        combine_worklet
         echo "=== Synth build complete ==="
         echo "Output: wasm/build/obxd_wasm.{js,wasm} + wasm/build/obxd-processor.js (combined)"
         ;;
     app)
         echo "=== Building OctOBX TypeScript app ==="
+        # Refresh the combined worklet BEFORE the vite build — publicDir is
+        # wasm/build, so `npm run build` copies obxd-processor.js into dist/
+        # verbatim. Without this, editing src/obxd-processor.tail.js or
+        # src/obxd-awp-shim.js and running only `./build.sh app` would ship
+        # a stale worklet (combine_worklet warns + keeps the previous one
+        # when the emcc glues are missing).
+        combine_worklet
         npm install
         npm run build
         echo "=== App build complete ==="
@@ -235,6 +276,9 @@ case "${1:-all}" in
         echo "=== Building OctOBX desktop launcher (embedded dist) ==="
         # The egui launcher embeds dist/ at compile time (rust-embed), so
         # the app must be built first. Requires rustup (rust + cargo).
+        # Refresh the combined worklet first — same rationale as the `app`
+        # case above (vite copies wasm/build into dist verbatim).
+        combine_worklet
         npm install
         npm run build
         cargo build --release --manifest-path gui/Cargo.toml
@@ -252,12 +296,10 @@ case "${1:-all}" in
         # `synth` case above (same step, shared outputs + --check gate).
         node tools/gen-param-table.mjs
         make -C wasm/obxd -f Makefile
-        # Combined worklet concatenation — same layout as the `synth` case
-        # above: the octopus glue (OctopusModuleFactory) rides in ahead of
-        # the obxd glue so ensureOctopus can boot the sequencer in-worklet.
-        cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
-        cat wasm/build/_awp_shim.js wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js > wasm/build/obxd-processor.js
-        rm wasm/build/_awp_shim.js
+        # Combined worklet concatenation — see combine_worklet above for the
+        # layout rationale (shim → octopus → obxd → mixer glue → layout →
+        # task queue → tail).
+        combine_worklet
         echo ""
         echo "=== Building OctOBX TypeScript app ==="
         npm install

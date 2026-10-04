@@ -25,7 +25,7 @@ import {
     getObxdInstanceMpeVoiceCount,
     setObxdInstanceMpeVoiceCount,
 } from "./obxd-bridge";
-import { getDrumState, restoreDrumState } from "./drum-rack";
+import { getDrumState, restoreDrumState, preloadDrumKit } from "./drum-rack";
 import type { DrumKit } from "./drum-state";
 import { canonicalNewParamOrder } from "./obxf-param-mappings";
 
@@ -286,7 +286,17 @@ export async function reloadAndRestoreAppState(): Promise<void> {
 }
 
 async function restoreAppStateAfterAWP(): Promise<boolean> {
-    if (!cachedState) return false;
+    // Stateless boot: with no saved state, nothing below initializes
+    // instance 9 (the PCM drum instance) — it keeps its factory synth
+    // patch (oscillators live, synth amp env) until the Drums view is
+    // mounted. preloadDrumKit() runs initDrumMode() (osc mutes + drum
+    // amp env) + the default kit load; it is race-safe/idempotent
+    // (shares one promise with the mount path) and never rejects, so
+    // fire-and-forget is safe.
+    if (!cachedState) {
+        void preloadDrumKit();
+        return false;
+    }
     const s = cachedState;
 
     try {
@@ -308,6 +318,15 @@ async function restoreAppStateAfterAWP(): Promise<boolean> {
         if (s.drums) {
             await restoreDrumState(s.drums);
             console.log("[app-state] Drum kit restored");
+        } else {
+            // Synth-only save (drums:null): the staged restore still
+            // finalizes instance 9's drum structure, but no kit PCM /
+            // layer params ever load — same factory-synth symptom as the
+            // stateless boot. Fire the default-kit preload here too; NOT
+            // on the s.drums path above (restoreDrumState + the staged
+            // restore own it — a second kit load would race through the
+            // kit-load chain).
+            void preloadDrumKit();
         }
 
         if (s.synth.params) {
