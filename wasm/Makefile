@@ -37,7 +37,7 @@ FWROOT = ..
 CFLAGS = -Wall -Wno-unused-function -Wno-unused-variable \
          -Wno-unused-but-set-variable \
          -std=gnu89 -Wno-implicit-int -Wno-int-conversion \
-         -O2 -g \
+         -O3 -g \
          -D__linux__ \
          -D__EMSCRIPTEN__ \
          -DOCT_AWP \
