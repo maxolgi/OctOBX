@@ -248,6 +248,12 @@ case "${1:-all}" in
         # output — `node tools/gen-param-table.mjs --check` verifies the
         # committed files are fresh (CI gate).
         node tools/gen-param-table.mjs
+        # Regenerate the guitarix FX param tables from the same single-source
+        # pattern: tools/gxfx-param-spec.json carries the (ttl-verified) param
+        # data; the generator adds the v2 shape (category, out_ports) and
+        # emits src/gxfx-params.ts + wasm/obxd/gxfx_defaults.h.
+        # `node tools/gen-gxfx-params.mjs --check` gates staleness.
+        node tools/gen-gxfx-params.mjs
         make -C wasm/obxd -f Makefile clean
         make -C wasm/obxd -f Makefile
         # Combined worklet concatenation — same layout as the `all` case
@@ -293,8 +299,10 @@ case "${1:-all}" in
         sync_patches
         generate_patches_h
         # Param table generation must precede make — see the comment in the
-        # `synth` case above (same step, shared outputs + --check gate).
+        # `synth` case above (same step, shared outputs + --check gate; the
+        # gxfx generator rides along).
         node tools/gen-param-table.mjs
+        node tools/gen-gxfx-params.mjs
         make -C wasm/obxd -f Makefile
         # Combined worklet concatenation — see combine_worklet above for the
         # layout rationale (shim → octopus → obxd → mixer glue → layout →

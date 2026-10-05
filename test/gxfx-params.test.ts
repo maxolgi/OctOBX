@@ -1,8 +1,9 @@
 /*
- * gxfx-params.test.ts — cross-checks src/gxfx-params.ts (the hand-written
- * TS mirror of the Guitarix FX param tables) against the source of truth
- * tools/gxfx-param-spec.json (extracted from the guitarix ttl files), and
- * unit-tests the 0..1 ↔ engine-space transforms + flat-mirror indexing.
+ * gxfx-params.test.ts — cross-checks src/gxfx-params.ts (the GENERATED TS
+ * mirror of the Guitarix FX param tables, tools/gen-gxfx-params.mjs)
+ * against the source of truth tools/gxfx-param-spec.json (extracted from
+ * the guitarix ttl files), and unit-tests the 0..1 ↔ engine-space
+ * transforms + flat-mirror indexing.
  *
  * Pure logic — no browser, no WASM, no audio.
  */
@@ -34,6 +35,7 @@ describe("gxfx-params — spec transcription", () => {
             expect(fe.key).toBe(se.key);
             expect(fe.label).toBe(se.label);
             expect(fe.stereo).toBe(se.stereo);
+            expect(fe.category).toBe(se.category);
             expect(fe.params.length).toBe(se.params.length);
             for (let p = 0; p < se.params.length; p++) {
                 const sp = se.params[p];
@@ -71,6 +73,22 @@ describe("gxfx-params — layout invariants", () => {
         for (let i = 0; i < FX_EFFECTS.length; i++) {
             expect(FX_EFFECTS[i].id).toBe(i);
             expect(FX_EFFECTS[i].params.length).toBeGreaterThanOrEqual(1);
+        }
+    });
+
+    it("every effect carries its expected v2 category", () => {
+        const expected = [
+            "wah",                          // 0 wah
+            "drive", "drive",               // 1 overdrive, 2 distortion
+            "dynamics",                     // 3 compressor
+            "modulation", "modulation",     // 4 chorus, 5 flanger
+            "modulation", "modulation",     // 6 phaser, 7 tremolo
+            "delay", "delay",               // 8 delay, 9 echo
+            "reverb",                       // 10 reverb
+        ];
+        expect(expected.length).toBe(FX_EFFECTS.length);
+        for (let i = 0; i < FX_EFFECTS.length; i++) {
+            expect(FX_EFFECTS[i].category).toBe(expected[i]);
         }
     });
 

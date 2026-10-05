@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "effects": [
     {
       "id": 0,
@@ -7,6 +7,8 @@
       "label": "Wah",
       "dsp": "gcb_95",
       "stereo": false,
+      "category": "wah",
+      "out_ports": [],
       "params": [
         {
           "port": 2,
@@ -38,6 +40,8 @@
       "label": "Overdrive",
       "dsp": "scream",
       "stereo": false,
+      "category": "drive",
+      "out_ports": [],
       "params": [
         {
           "port": 2,
@@ -58,6 +62,8 @@
       "label": "Distortion",
       "dsp": "bossds1",
       "stereo": false,
+      "category": "drive",
+      "out_ports": [],
       "params": [
         {
           "port": 2,
@@ -100,6 +106,8 @@
       "label": "Compressor",
       "dsp": "compressor",
       "stereo": false,
+      "category": "dynamics",
+      "out_ports": [],
       "params": [
         {
           "port": 0,
@@ -164,6 +172,8 @@
       "label": "Chorus",
       "dsp": "chorus",
       "stereo": true,
+      "category": "modulation",
+      "out_ports": [],
       "params": [
         {
           "port": 0,
@@ -217,6 +227,8 @@
       "label": "Flanger",
       "dsp": "gx_flanger",
       "stereo": false,
+      "category": "modulation",
+      "out_ports": [],
       "params": [
         {
           "port": 0,
@@ -292,6 +304,8 @@
       "label": "Phaser",
       "dsp": "phaser_mono",
       "stereo": false,
+      "category": "modulation",
+      "out_ports": [],
       "params": [
         {
           "port": 0,
@@ -334,6 +348,8 @@
       "label": "Tremolo",
       "dsp": "tremolo",
       "stereo": false,
+      "category": "modulation",
+      "out_ports": [],
       "params": [
         {
           "port": 0,
@@ -387,6 +403,8 @@
       "label": "Delay",
       "dsp": "stereodelay",
       "stereo": true,
+      "category": "delay",
+      "out_ports": [],
       "params": [
         {
           "port": 0,
@@ -473,6 +491,8 @@
       "label": "Echo",
       "dsp": "stereoecho",
       "stereo": true,
+      "category": "delay",
+      "out_ports": [],
       "params": [
         {
           "port": 0,
@@ -559,6 +579,8 @@
       "label": "Reverb",
       "dsp": "stereoverb",
       "stereo": true,
+      "category": "reverb",
+      "out_ports": [],
       "params": [
         {
           "port": 0,
