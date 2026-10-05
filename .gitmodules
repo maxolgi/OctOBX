@@ -11,6 +11,6 @@
 	branch = main
 [submodule "third_party/guitarix"]
 	path = third_party/guitarix
-	url = git@github.com:maxolgi/guitarix.git
+	url = https://github.com/brummer10/guitarix.git
 	branch = master
 	shallow = true

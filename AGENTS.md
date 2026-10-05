@@ -43,13 +43,15 @@ This repo uses **four** git submodules:
   `wasm/obxd/juce_amalgam.cpp`. Pinned at `251768d` = **JUCE 9.0.3** plus our
   WASM branch in `juce_ThreadPriorities_native.h`, committed directly on the
   fork — there is no build-time patch machinery any more.
-- `third_party/guitarix/` → `git@github.com:maxolgi/guitarix.git` (fork of
-  `brummer10/guitarix`, branch `master`, shallow) — the guitar amp-sim FX
-  engine behind the per-instance insert chains. Pinned at `a4c561a` =
-  upstream, with **zero OctOBX commits**: the headless build needs no fork
-  patches (the `gxfx_prelude.h` stand-in and the namespace-wrapping of the
-  faust DSP classes live in our tree under `wasm/obxd/`). Also required for
-  the synth WASM build (`make -C wasm/obxd`).
+- `third_party/guitarix/` → `https://github.com/brummer10/guitarix.git`
+  (upstream, branch `master`, shallow) — the guitar amp-sim FX engine behind
+  the per-instance insert chains. Pinned at `a4c561a` = upstream, with
+  **zero OctOBX commits**: the headless build needs no fork patches (the
+  `gxfx_prelude.h` stand-in and the namespace-wrapping of the faust DSP
+  classes live in our tree under `wasm/obxd/`). If guitarix ever needs a
+  source patch, create `maxolgi/guitarix`, commit there, and flip this URL
+  to the fork (same pattern as OB-Xf/JUCE). Also required for the synth
+  WASM build (`make -C wasm/obxd`).
 
 (The legacy `third_party/Obxd` OB-XD submodule was removed after the OB-Xf
 migration was verified — the parameter-dispatch refactor moved the last
@@ -91,13 +93,16 @@ above) are required for the synth WASM build (`make -C wasm/obxd`).
 
 ### Syncing the forks with upstream
 
-All three `third_party/` submodules ride user forks that track upstream. To
+The OB-Xf and JUCE `third_party/` submodules ride user forks that track
+upstream (guitarix rides upstream directly — see its bullet above). To
 pick up new upstream work:
 
 1. GitHub **"Sync fork"** on the fork's default branch
-   (`maxolgi/OB-Xf` `main`, `maxolgi/JUCE` / `maxolgi/guitarix` `master`).
+   (`maxolgi/OB-Xf` `main`, `maxolgi/JUCE` `master`).
 2. `git submodule update --remote third_party/OB-Xf` (or
-   `third_party/JUCE`, `third_party/guitarix`) in this repo.
+   `third_party/JUCE`) in this repo. To pick up new guitarix work,
+   `git -C third_party/guitarix fetch origin && git -C third_party/guitarix checkout <sha>`
+   and commit the pointer bump.
 3. Resolve any conflicts with the OctOBX commits on the fork. Syncing OB-Xf
    past upstream #705 required adapting our PCM `recalculateMatrix` calls —
    future upstream changes to the 5 engine files we patch
@@ -106,7 +111,7 @@ pick up new upstream work:
    `// OctOBX PCM` / `// OctOBX perf` comments for easy conflict spotting.
    Note: #705 also rescales MPE matrix mod depths — an audible change
    (documented upstream as "changes how existing MPE patches sound").
-   The guitarix fork carries zero OctOBX commits (the headless shims live
+   The guitarix submodule carries zero OctOBX commits (the headless shims live
    in `wasm/obxd/`), so its syncs are conflict-free pointer bumps.
 4. Rebuild (`./build.sh synth`) and run `npm test` / `npm run test:wasm`.
 5. Commit the submodule pointer bump. CI tests the committed pointer, not

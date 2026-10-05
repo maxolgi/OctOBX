@@ -47,8 +47,8 @@ Emscripten pthreads), not ALSA/winmm.
 │   │                        simde, fmt, JUCE) — see "First-time clone"
 │   ├── JUCE/              git submodule → maxolgi/JUCE (fork of juce-framework/JUCE;
 │   │                        JUCE 9.0.3 + our ThreadPriorities commit — feeds juce_amalgam.cpp)
-│   └── guitarix/          git submodule → maxolgi/guitarix (shallow fork of
-│                            brummer10/guitarix, zero OctOBX commits — feeds gxfx_dsp.cpp/
+│   └── guitarix/          git submodule → brummer10/guitarix (upstream, shallow,
+│                            zero OctOBX commits — feeds gxfx_dsp.cpp/
 │                            gxfx_host.cpp + zita-resampler for the FX chains)
 ├── wasm/
 │   ├── main_wasm.c        Octopus engine entry point + exported API + sample-driven pump
@@ -95,7 +95,8 @@ git submodule update --init --recursive
 The firmware submodule (`firmware/`) is required for the Octopus WASM build.
 The OB-Xf, JUCE, and guitarix submodules (`third_party/OB-Xf`,
 `third_party/JUCE`, `third_party/guitarix`) are required for the synth WASM
-build (`make -C wasm/obxd`). All three ride user forks that track upstream:
+build (`make -C wasm/obxd`). OB-Xf and JUCE ride user forks; guitarix rides
+upstream directly:
 `third_party/JUCE` is pinned at `251768d` (JUCE 9.0.3 plus our WASM branch in
 `juce_ThreadPriorities_native.h`, committed directly on the fork),
 `third_party/OB-Xf` is pinned at `7fe23a8` (upstream `b08ffb6` plus 3 OctOBX
@@ -123,19 +124,20 @@ The legacy `third_party/Obxd/` submodule has been removed.
 
 ### Syncing the forks with upstream
 
-All three `third_party/` submodules ride user forks that track upstream. To
+The OB-Xf and JUCE `third_party/` submodules ride user forks that track
+upstream (guitarix rides upstream directly — zero OctOBX commits). To
 pick up new upstream work:
 
 1. GitHub **"Sync fork"** on the fork's default branch
-   (`maxolgi/OB-Xf` `main`, `maxolgi/JUCE` / `maxolgi/guitarix` `master`).
+   (`maxolgi/OB-Xf` `main`, `maxolgi/JUCE` `master`).
 2. `git submodule update --remote third_party/OB-Xf` (or
-   `third_party/JUCE`, `third_party/guitarix`) in this repo.
+   `third_party/JUCE`) in this repo.
 3. Resolve any conflicts with the OctOBX commits on the fork (marked with
    `// OctOBX PCM` / `// OctOBX perf` comments for easy spotting). Syncing
    OB-Xf past upstream #705 required adapting our PCM `recalculateMatrix`
    calls; future upstream changes to the 5 engine files we patch
    (`SynthEngine.h`, `Motherboard.h`, `Voice.h`, `Filter.h`,
-   `AdsrEnvelope.h`) may need the same. The guitarix fork carries zero
+   `AdsrEnvelope.h`) may need the same. The guitarix submodule carries zero
    OctOBX commits (the headless shims live in `wasm/obxd/`), so its syncs
    are conflict-free pointer bumps.
 4. Rebuild (`./build.sh synth`) and run `npm test` / `npm run test:wasm`.
@@ -1220,7 +1222,7 @@ choice keeps the combined work license-compatible.
 | Octopus/Nemo firmware | `firmware/` (submodule → `maxolgi/OCT_CE_OS`) | see `firmware/OCT_OS/COPYING.txt` |
 | OB-Xf `SynthEngine` | `third_party/OB-Xf/` (submodule → `maxolgi/OB-Xf`, fork of `surge-synthesizer/OB-Xf`) | GPL-3.0-or-later |
 | JUCE core + events + audio_basics + processors_headless | `third_party/JUCE/` (submodule → `maxolgi/JUCE`, fork of `juce-framework/JUCE`) | ISC (core modules) — see `third_party/JUCE/LICENSE.md` |
-| Guitarix faust FX DSP (gcb_95 … stereoverb) + zita-resampler | `third_party/guitarix/` (submodule → `maxolgi/guitarix`, shallow fork of `brummer10/guitarix`) | GPL-2.0-or-later — see `third_party/guitarix/trunk/COPYING` |
+| Guitarix faust FX DSP (gcb_95 … stereoverb) + zita-resampler | `third_party/guitarix/` (submodule → `brummer10/guitarix`, upstream) | GPL-2.0-or-later — see `third_party/guitarix/trunk/COPYING` |
 | SST basic-blocks / cpputils, simde, fmt | `third_party/OB-Xf/libs/...` (sub-submodules) | see each submodule's LICENSE |
 
 (The legacy OB-XD engine submodule `third_party/Obxd/` was removed after the
