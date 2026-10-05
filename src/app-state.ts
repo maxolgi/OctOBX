@@ -10,7 +10,7 @@
  * AudioWorklet initializes (on first PLAY).
  */
 
-import { dumpAllSynthParams, restoreAllSynthAndDrumState, dumpAllDrumParams, isObxdReady, syncInstanceVolumes } from "./obxd-audio";
+import { dumpAllSynthParams, restoreAllSynthAndDrumState, dumpAllDrumParams, isObxdReady, syncInstanceVolumes, getFxState, restoreFxState, type FxBulkState } from "./obxd-audio";
 import {
     getSynthInstanceState,
     restoreSynthAfterAWP,
@@ -50,6 +50,8 @@ interface SaveStateData {
         selectedLayer: number;
         params: number[] | null;
     } | null;
+    /** Guitarix FX chains — absent/null = engine defaults (schema stays v2). */
+    fx?: FxBulkState | null;
 }
 
 /** v1 on-disk shape — NEW-param slots stored in the frozen V1 encounter order. */
@@ -175,6 +177,13 @@ export async function saveAppState(): Promise<boolean> {
         console.warn("[app-state] Failed to dump drum params:", e);
     }
 
+    let fx: FxBulkState | null = null;
+    try {
+        fx = await getFxState();
+    } catch (e) {
+        console.warn("[app-state] Failed to dump FX state:", e);
+    }
+
     const drumState = getDrumStateSafely();
     if (drumState) drumState.params = drumParams;
 
@@ -186,6 +195,7 @@ export async function saveAppState(): Promise<boolean> {
             params,
         },
         drums: drumState,
+        fx,
     };
 
     try {
@@ -344,6 +354,14 @@ async function restoreAppStateAfterAWP(): Promise<boolean> {
                 setObxdInstanceChannel(i, r.channel);
                 setObxdInstanceMpe(i, r.mpe);
                 setObxdInstanceMpeVoiceCount(i, r.mpeVoiceCount);
+            }
+        }
+
+        if (s.fx) {
+            try {
+                await restoreFxState(s.fx);
+            } catch (e) {
+                console.warn("[app-state] Failed to restore FX state:", e);
             }
         }
 

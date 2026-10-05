@@ -14,6 +14,7 @@ import { applyMixerMeter, seedEngineFromStore, TRACK_COUNT } from "./store";
 import { buildTrackStrip, type TrackStripHandle } from "./track-strip";
 import { buildMasterStrip, type MasterStripHandle } from "./master-strip";
 import { injectMixerStyles } from "./styles";
+import { ensureFxStateLoaded } from "./fx-rack";
 
 export type Cleanup = () => void;
 
@@ -89,6 +90,9 @@ export function mountMixerConsole(container: HTMLElement): Cleanup {
         consoleRow.appendChild(strip.element);
     }
 
+    // FX chain state — strips refresh via their onFxStateChange listeners.
+    void ensureFxStateLoaded();
+
     const masterStrip: MasterStripHandle = buildMasterStrip();
     consoleRow.appendChild(masterStrip.element);
 
@@ -108,5 +112,6 @@ export function mountMixerConsole(container: HTMLElement): Cleanup {
         cancelAnimationFrame(rafId);
         clearInterval(statusTimer);
         window.removeEventListener("resize", fit);
+        for (const s of strips) s.disposeFx?.();
     };
 }

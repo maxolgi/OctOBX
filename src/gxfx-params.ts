@@ -1,0 +1,188 @@
+/** Guitarix FX param tables (OctOBX per-instance insert chains).
+ * Single source: tools/gxfx-param-spec.json (extracted from guitarix ttl).
+ * Cross-checked against the C engine by test/gxfx-params.test.ts + verify-obxd-wasm.mjs.
+ */
+
+export const FX_COUNT = 11;
+export const FX_SLOTS = 11;
+export const FX_INSTANCE_COUNT = 10;
+
+export interface FxParamDef {
+    port: number;      // PortIndex value passed to fx_set_param's `param`
+    symbol: string;
+    name: string;
+    default: number;   // ENGINE units (ttl range, not 0..1)
+    min: number;
+    max: number;
+    step: number;
+    integer?: boolean;
+}
+
+export interface FxEffectDef {
+    id: number;
+    key: string;       // 'wah' | 'overdrive' | ... (canonical order = chain default order)
+    label: string;
+    stereo: boolean;
+    offset: number;    // cumulative param offset into the flat 47-slot mirror
+    params: FxParamDef[];
+}
+
+/** Canonical chain order: wah → overdrive → distortion → compressor →
+ * chorus → flanger → phaser → tremolo → delay → echo → reverb.
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5 → offsets 0,2,3,6,11,15,21,24,28,35,42. */
+export const FX_EFFECTS: FxEffectDef[] = [
+    {
+        id: 0, key: "wah", label: "Wah", stereo: false, offset: 0,
+        params: [
+            { port: 2, symbol: "VOLUME", name: "Volume", default: 0, min: -20, max: 4, step: 0.1 },
+            { port: 3, symbol: "HOTPOTZ", name: "Wah", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 1, key: "overdrive", label: "Overdrive", stereo: false, offset: 2,
+        params: [
+            { port: 2, symbol: "SCREAM", name: "Scream", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 2, key: "distortion", label: "Distortion", stereo: false, offset: 3,
+        params: [
+            { port: 2, symbol: "LEVEL", name: "Level", default: -2, min: -20, max: 12, step: 0.1 },
+            { port: 3, symbol: "TONE", name: "Tone", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 4, symbol: "DRIVE", name: "Drive", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 3, key: "compressor", label: "Compressor", stereo: false, offset: 6,
+        params: [
+            { port: 0, symbol: "RATIO", name: "Ratio", default: 2, min: 1, max: 20, step: 0.1 },
+            { port: 1, symbol: "KNEE", name: "Knee", default: 3, min: 0, max: 20, step: 0.1 },
+            { port: 2, symbol: "THRESHOLD", name: "Threshold", default: -20, min: -96, max: 10, step: 0.1 },
+            { port: 3, symbol: "RELEASE", name: "Release", default: 0.5, min: 0, max: 10, step: 0.01 },
+            { port: 4, symbol: "ATTACK", name: "Attack", default: 0.002, min: 0, max: 1, step: 0.001 },
+        ],
+    },
+    {
+        id: 4, key: "chorus", label: "Chorus", stereo: true, offset: 11,
+        params: [
+            { port: 0, symbol: "level", name: "Level", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "delay", name: "Delay", default: 0.02, min: 0, max: 0.2, step: 0.01 },
+            { port: 2, symbol: "depth", name: "Depth", default: 0.02, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "freq", name: "Freq", default: 3, min: 0.1, max: 10, step: 0.01 },
+        ],
+    },
+    {
+        id: 5, key: "flanger", label: "Flanger", stereo: false, offset: 15,
+        params: [
+            { port: 0, symbol: "depth", name: "Depth", default: 0.5, min: 0, max: 5, step: 0.01 },
+            { port: 1, symbol: "width", name: "Width", default: 5, min: 0, max: 10, step: 0.01 },
+            { port: 2, symbol: "freq", name: "Freq", default: 0.2, min: 0.05, max: 10, step: 1.06 },
+            { port: 3, symbol: "feedback", name: "Feedback", default: -0.707, min: -0.99, max: 0.99, step: 0.01 },
+            { port: 4, symbol: "dry_wet", name: "Wet", default: 100, min: 0, max: 100, step: 1 },
+            { port: 5, symbol: "mix", name: "Mix", default: 0, min: -1, max: 1, step: 0.1 },
+        ],
+    },
+    {
+        id: 6, key: "phaser", label: "Phaser", stereo: false, offset: 21,
+        params: [
+            { port: 0, symbol: "dry_wet", name: "Dry/Wet", default: 50, min: 0, max: 100, step: 1 },
+            { port: 1, symbol: "level", name: "Level", default: 0, min: -60, max: 10, step: 0.1 },
+            { port: 2, symbol: "speed", name: "Speed", default: 0.5, min: 0, max: 10, step: 0.01 },
+        ],
+    },
+    {
+        id: 7, key: "tremolo", label: "Tremolo", stereo: false, offset: 24,
+        params: [
+            { port: 0, symbol: "dry_wet", name: "Dry/Wet", default: 50, min: 0, max: 100, step: 1 },
+            { port: 1, symbol: "mode", name: "Mode", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 2, symbol: "depth", name: "Depth", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "freq", name: "Freq", default: 5, min: 0.1, max: 50, step: 0.1 },
+        ],
+    },
+    {
+        id: 8, key: "delay", label: "Delay", stereo: true, offset: 28,
+        params: [
+            { port: 0, symbol: "mode", name: "Mode", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 1, symbol: "level_r", name: "R Level", default: -10, min: -20, max: 20, step: 0.1 },
+            { port: 2, symbol: "timt_r", name: "R Time", default: 1000, min: 1, max: 5000, step: 10 },
+            { port: 3, symbol: "level_l", name: "L Level", default: -10, min: -20, max: 20, step: 0.1 },
+            { port: 4, symbol: "timt_l", name: "L Time", default: 1000, min: 1, max: 5000, step: 10 },
+            { port: 5, symbol: "lfo", name: "LFO", default: 0.2, min: 0.2, max: 5, step: 0.01 },
+            { port: 6, symbol: "link", name: "Link (L+R)", default: 0, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 9, key: "echo", label: "Echo", stereo: true, offset: 35,
+        params: [
+            { port: 0, symbol: "mode", name: "Mode", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 1, symbol: "level_r", name: "R Level", default: 30, min: 0, max: 100, step: 0.1 },
+            { port: 2, symbol: "timt_r", name: "R Time", default: 100, min: 1, max: 2000, step: 1 },
+            { port: 3, symbol: "level_l", name: "L Level", default: 30, min: 0, max: 100, step: 0.1 },
+            { port: 4, symbol: "timt_l", name: "L Time", default: 100, min: 1, max: 2000, step: 1 },
+            { port: 5, symbol: "lfo", name: "LFO", default: 0.2, min: 0.2, max: 5, step: 0.01 },
+            { port: 6, symbol: "link", name: "Link (L+R)", default: 0, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 10, key: "reverb", label: "Reverb", stereo: true, offset: 42,
+        params: [
+            { port: 0, symbol: "dry_wet", name: "Dry/Wet", default: 50, min: 0, max: 100, step: 1 },
+            { port: 1, symbol: "lfo", name: "LFO", default: 0.2, min: 0.2, max: 5, step: 0.01 },
+            { port: 2, symbol: "roomsize", name: "Roomsize", default: 0.5, min: 0, max: 1, step: 0.025 },
+            { port: 3, symbol: "damp", name: "Damp", default: 0.2, min: 0, max: 1, step: 0.025 },
+            { port: 4, symbol: "mode", name: "Mode", default: 0, min: 0, max: 1, step: 1, integer: true },
+        ],
+    },
+];
+
+export const FX_TOTAL_PARAMS = 47;
+
+// --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
+
+function fxLookupParam(fxId: number, param: number): FxParamDef | null {
+    const fx = FX_EFFECTS[fxId];
+    if (!fx || !Number.isInteger(param) || param < 0 || param >= fx.params.length) return null;
+    return fx.params[param];
+}
+
+function clamp01(v: number): number {
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/** 0..1 knob position → engine value (clamped; integer params round). */
+export function fxParamFrom01(fxId: number, param: number, v01: number): number {
+    const def = fxLookupParam(fxId, param);
+    if (!def) return NaN;
+    const v = def.min + clamp01(v01) * (def.max - def.min);
+    const r = def.integer ? Math.round(v) : v;
+    return r < def.min ? def.min : r > def.max ? def.max : r;
+}
+
+/** Engine value → 0..1 knob position (clamped). */
+export function fxParamTo01(fxId: number, param: number, v: number): number {
+    const def = fxLookupParam(fxId, param);
+    if (!def) return NaN;
+    const span = def.max - def.min;
+    if (span === 0) return 0;
+    return clamp01((v - def.min) / span);
+}
+
+/** Default value expressed in 0..1 knob space. */
+export function fxParamDefault01(fxId: number, param: number): number {
+    const def = fxLookupParam(fxId, param);
+    if (!def) return NaN;
+    return fxParamTo01(fxId, param, def.default);
+}
+
+// --- flat-mirror helpers (used by persistence + worklet bulk state) ---
+
+/** Index into the flat FX_TOTAL_PARAMS mirror: cumulative offset + param. */
+export function fxFlatIndex(fxId: number, param: number): number {
+    const fx = FX_EFFECTS[fxId];
+    if (!fx || !Number.isInteger(param) || param < 0 || param >= fx.params.length) return -1;
+    return fx.offset + param;
+}
+
+export function isFxId(v: number): boolean {
+    return Number.isInteger(v) && v >= 0 && v < FX_COUNT;
+}

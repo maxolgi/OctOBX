@@ -26,11 +26,14 @@ import { createKnob } from "./knob";
 import { createGrMeter } from "./gr-meter";
 import { createMeterCanvas, type MeterHandle } from "./meter-canvas";
 import { createEqCurve } from "./eq-curve";
+import { FX_EFFECTS, FX_SLOTS, FX_INSTANCE_COUNT, fxParamTo01 } from "../gxfx-params";
+import { getFxInstance, setFxParamUI, setFxEnabledUI, moveFxSlot, onFxStateChange, type FxInstanceState } from "./fx-rack";
 
 const fmtDb = (v: number) => v.toFixed(1);
 const fmtRatio = (v: number) => (v >= 20 ? "20:1" : v.toFixed(1) + ":1");
 const fmtHz = (v: number) => (v >= 1000 ? (v / 1000).toFixed(1) + "k" : v.toFixed(0));
 const fmtMs = (v: number) => (v < 1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : v.toFixed(0));
+const fmtFx = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
 
 function fmtPan(p: number): string {
     if (Math.abs(p) < 0.02) return "C";
@@ -41,6 +44,8 @@ export interface TrackStripHandle {
     element: HTMLElement;
     /** Push fresh meter data (called by console.ts's shared rAF loop). */
     tickMeters(): void;
+    /** Tear down the FX state subscription (tracks 0–9 only). */
+    disposeFx?(): void;
 }
 
 export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle {
@@ -51,11 +56,13 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
 
     let inputOpen = false;
     let eqOpen = false;
+    let fxOpen = false;
 
     function applyWidth(): void {
         let w = 100;
         if (inputOpen) w = Math.max(w, 360);
         if (eqOpen) w = Math.max(w, 230);
+        if (fxOpen) w = Math.max(w, 300);
         root.style.width = `${w}px`;
     }
 
@@ -344,6 +351,151 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
     panSection.appendChild(panRow);
     root.appendChild(panSection);
 
+    // ── FX (guitarix insert chain; tracks 0–9 only) ─────────────────────
+    let disposeFx: (() => void) | undefined;
+    if (t < FX_INSTANCE_COUNT) {
+        let fxSlot = 0;
+        let fxSlotLocked = false;
+
+        const fxSection = document.createElement("div");
+        fxSection.className = "detail-section";
+        const fxDivider = document.createElement("div");
+        fxDivider.className = "detail-section-divider collapsible";
+        const fxLabel = document.createElement("span");
+        fxLabel.className = "detail-section-label";
+        fxLabel.textContent = "FX";
+        fxDivider.appendChild(fxLabel);
+        fxSection.appendChild(fxDivider);
+
+        const fxLeds = document.createElement("div");
+        fxLeds.className = "detail-fx-leds";
+        fxSection.appendChild(fxLeds);
+
+        const fxBody = document.createElement("div");
+        fxBody.style.display = fxOpen ? "" : "none";
+        fxDivider.addEventListener("click", () => {
+            fxOpen = !fxOpen;
+            fxBody.style.display = fxOpen ? "" : "none";
+            applyWidth();
+        });
+        fxSection.appendChild(fxBody);
+
+        const fxChain = document.createElement("div");
+        fxChain.className = "fx-chain-list";
+        fxBody.appendChild(fxChain);
+
+        const fxEdit = document.createElement("div");
+        fxEdit.className = "fx-edit-area";
+        fxBody.appendChild(fxEdit);
+
+        function defaultFxSlot(st: FxInstanceState): number {
+            for (let s = 0; s < FX_SLOTS; s++) {
+                if (st.enabled[st.order[s]]) return s;
+            }
+            return 0;
+        }
+
+        function renderFxLeds(): void {
+            const st = getFxInstance(t);
+            fxLeds.textContent = "";
+            for (let s = 0; s < FX_SLOTS; s++) {
+                const fxId = st.order[s];
+                const on = st.enabled[fxId];
+                const dot = document.createElement("span");
+                dot.className = "fx-led" + (on ? " on" : "");
+                dot.title = `${s + 1}. ${FX_EFFECTS[fxId]?.label ?? "?"}${on ? "" : " (off)"}`;
+                fxLeds.appendChild(dot);
+            }
+        }
+
+        function renderFxChain(): void {
+            const st = getFxInstance(t);
+            fxChain.textContent = "";
+            for (let s = 0; s < FX_SLOTS; s++) {
+                const fxId = st.order[s];
+                const fx = FX_EFFECTS[fxId];
+                if (!fx) continue;
+                const row = document.createElement("div");
+                row.className = "fx-row" + (s === fxSlot ? " selected" : "");
+                const up = document.createElement("button");
+                up.className = "fx-row-btn";
+                up.textContent = "▲";
+                up.title = "Move earlier in chain";
+                up.disabled = s === 0;
+                up.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    moveFxSlot(t, s, s - 1);
+                });
+                const dn = document.createElement("button");
+                dn.className = "fx-row-btn";
+                dn.textContent = "▼";
+                dn.title = "Move later in chain";
+                dn.disabled = s === FX_SLOTS - 1;
+                dn.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    moveFxSlot(t, s, s + 1);
+                });
+                const tg = document.createElement("button");
+                tg.className = "detail-toggle " + (st.enabled[fxId] ? "active" : "bypassed");
+                tg.textContent = st.enabled[fxId] ? "IN" : "BYP";
+                tg.title = `${fx.label} in / bypass`;
+                tg.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    setFxEnabledUI(t, fxId, !st.enabled[fxId]);
+                });
+                const lbl = document.createElement("span");
+                lbl.className = "fx-row-label";
+                lbl.textContent = fx.label;
+                row.appendChild(up);
+                row.appendChild(dn);
+                row.appendChild(tg);
+                row.appendChild(lbl);
+                row.addEventListener("click", () => {
+                    fxSlot = s;
+                    fxSlotLocked = true;
+                    renderFxChain();
+                    renderFxEdit();
+                });
+                fxChain.appendChild(row);
+            }
+        }
+
+        function renderFxEdit(): void {
+            const st = getFxInstance(t);
+            const fxId = st.order[fxSlot] ?? 0;
+            const fx = FX_EFFECTS[fxId];
+            if (!fx) return;
+            fxEdit.textContent = "";
+            const title = document.createElement("div");
+            title.className = "fx-edit-title";
+            title.textContent = `${fx.label} · ${fx.stereo ? "stereo" : "mono"}`;
+            fxEdit.appendChild(title);
+            const row = document.createElement("div");
+            row.className = "knob-row";
+            fx.params.forEach((p, pi) => {
+                row.appendChild(createKnob({
+                    label: p.name, value: st.params[fx.offset + pi], min: p.min, max: p.max,
+                    defaultValue: p.default, format: fmtFx, size: 28,
+                    onChange: (v) => setFxParamUI(t, fxId, pi, fxParamTo01(fxId, pi, v)),
+                }).element);
+            });
+            fxEdit.appendChild(row);
+        }
+
+        renderFxLeds();
+        renderFxChain();
+        renderFxEdit();
+
+        disposeFx = onFxStateChange(() => {
+            if (!fxSlotLocked) fxSlot = defaultFxSlot(getFxInstance(t));
+            renderFxLeds();
+            renderFxChain();
+            renderFxEdit();
+        });
+
+        root.appendChild(fxSection);
+    }
+
     // ── Output: L meter / fader / R meter + S/M ──────────────────────────
     const outputSection = document.createElement("div");
     outputSection.className = "detail-section detail-output";
@@ -430,5 +582,6 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
             // Show the deeper of the two channels' compressor reductions.
             compGr.set(Math.min(m.grL, m.grR));
         },
+        ...(disposeFx ? { disposeFx } : {}),
     };
 }

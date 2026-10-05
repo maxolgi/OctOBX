@@ -25,6 +25,8 @@
  * explicitly so a future "multi-select" UI doesn't need an API change.
  */
 
+import { FX_COUNT, FX_EFFECTS, FX_INSTANCE_COUNT, FX_SLOTS, FX_TOTAL_PARAMS, isFxId } from "./gxfx-params";
+
 let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let moduleAdded = false;
@@ -725,6 +727,75 @@ export async function dumpAllDrumParams(): Promise<number[] | null> {
     const raw = await replyPromise;
     if (!raw) return null;
     return (raw as { params?: number[] }).params ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Guitarix FX insert chains (per-instance)
+// ---------------------------------------------------------------------------
+
+export interface FxBulkState {
+    params: number[];
+    order: number[];
+    enabled: number[];
+}
+
+export function setFxParam(instanceId: number, fxId: number, param: number, engineValue: number): void {
+    if (instanceId < 0 || instanceId >= FX_INSTANCE_COUNT) return;
+    if (!isFxId(fxId)) return;
+    const fx = FX_EFFECTS[fxId];
+    if (!Number.isInteger(param) || param < 0 || param >= fx.params.length) return;
+    postWorkletMessage({ type: "fx_set_param", instance_id: instanceId, fx_id: fxId, param, value: engineValue });
+}
+
+export function setFxEnabled(instanceId: number, fxId: number, enabled: boolean): void {
+    if (instanceId < 0 || instanceId >= FX_INSTANCE_COUNT) return;
+    if (!isFxId(fxId)) return;
+    postWorkletMessage({ type: "fx_set_enabled", instance_id: instanceId, fx_id: fxId, enabled });
+}
+
+export function setFxOrder(instanceId: number, order: number[]): void {
+    if (instanceId < 0 || instanceId >= FX_INSTANCE_COUNT) return;
+    if (!Array.isArray(order) || order.length !== FX_SLOTS) return;
+    const seen = new Set<number>();
+    for (const v of order) {
+        if (!Number.isInteger(v) || v < 0 || v >= FX_COUNT || seen.has(v)) return;
+        seen.add(v);
+    }
+    postWorkletMessage({ type: "fx_set_order", instance_id: instanceId, order });
+}
+
+export async function getFxState(): Promise<FxBulkState | null> {
+    if (!workletNode) return null;
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "fx_state",
+        5000,
+    );
+    workletNode.port.postMessage({ type: "fx_get_state" });
+    const raw = await replyPromise;
+    if (!raw) return null;
+    const params = (raw as { params?: number[] }).params;
+    const order = (raw as { order?: number[] }).order;
+    const enabled = (raw as { enabled?: number[] }).enabled;
+    if (!Array.isArray(params) || params.length !== FX_INSTANCE_COUNT * FX_TOTAL_PARAMS) return null;
+    if (!Array.isArray(order) || order.length !== FX_INSTANCE_COUNT * FX_SLOTS) return null;
+    if (!Array.isArray(enabled) || enabled.length !== FX_INSTANCE_COUNT * FX_SLOTS) return null;
+    return { params, order, enabled };
+}
+
+export async function restoreFxState(state: FxBulkState): Promise<boolean> {
+    if (!Array.isArray(state.params) || state.params.length !== FX_INSTANCE_COUNT * FX_TOTAL_PARAMS) return false;
+    if (!Array.isArray(state.order) || state.order.length !== FX_INSTANCE_COUNT * FX_SLOTS) return false;
+    if (!Array.isArray(state.enabled) || state.enabled.length !== FX_INSTANCE_COUNT * FX_SLOTS) return false;
+    if (!workletNode) return false;
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "fx_state_restored",
+        10000,
+    );
+    workletNode.port.postMessage({ type: "fx_restore_state", params: state.params, order: state.order, enabled: state.enabled });
+    const raw = await replyPromise;
+    return !!raw;
 }
 
 // ---------------------------------------------------------------------------

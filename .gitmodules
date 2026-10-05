@@ -9,3 +9,8 @@
 	path = third_party/OB-Xf
 	url = https://github.com/maxolgi/OB-Xf.git
 	branch = main
+[submodule "third_party/guitarix"]
+	path = third_party/guitarix
+	url = git@github.com:maxolgi/guitarix.git
+	branch = master
+	shallow = true

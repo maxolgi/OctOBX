@@ -279,6 +279,51 @@ const CSS = `
 #mixer-panel .master-clip-indicator .clip.active {
     color: #f00; border-color: #f00; background: rgba(255,0,0,0.1);
 }
+/* ── Guitarix FX rack ─────────────────────────────────────────────── */
+#mixer-panel .detail-fx-leds {
+    display: flex; align-items: center; gap: 2px; padding: 3px 0 1px;
+}
+#mixer-panel .fx-led {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #1e1e28;
+}
+#mixer-panel .fx-led.on {
+    background: #4a8fdd;
+    box-shadow: 0 0 4px rgba(74,143,221,0.5);
+}
+#mixer-panel .fx-chain-list {
+    display: flex; flex-direction: column; gap: 2px; padding: 4px 0;
+}
+#mixer-panel .fx-row {
+    display: flex; align-items: center; gap: 4px;
+    padding: 1px 2px; border: 1px solid transparent; border-radius: 3px;
+    cursor: pointer;
+}
+#mixer-panel .fx-row:hover { background: rgba(255,255,255,0.03); }
+#mixer-panel .fx-row.selected {
+    background: #142031; border-color: #2a4a6a;
+}
+#mixer-panel .fx-row.selected .fx-row-label { color: #8ab4f8; }
+#mixer-panel .fx-row-btn {
+    width: 16px; height: 16px; font-size: 9px; line-height: 1;
+    border: 1px solid #2a2a30; border-radius: 2px; background: #16161e;
+    color: #666; cursor: pointer; padding: 0; transition: all 0.1s;
+}
+#mixer-panel .fx-row-btn:hover { border-color: #444; color: #aaa; }
+#mixer-panel .fx-row-btn:disabled { opacity: 0.3; cursor: default; }
+#mixer-panel .fx-row .detail-toggle { padding: 1px 4px; }
+#mixer-panel .fx-row-label {
+    flex: 1; min-width: 0; font-size: 11px; color: #aaa;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#mixer-panel .fx-edit-area {
+    border-top: 1px solid #1a1a25; margin-top: 2px; padding-top: 4px;
+}
+#mixer-panel .fx-edit-area .knob-row { flex-wrap: wrap; }
+#mixer-panel .fx-edit-title {
+    font-size: 11px; color: #888; font-weight: 700; letter-spacing: 1px;
+    padding: 2px 0;
+}
 `;
 
 let injected = false;

@@ -521,6 +521,239 @@ async function main() {
     if (!(s1 > 0)) return `pad1 sum-of-squares = ${s1} (silent after load)`;
   });
 
+  // --- guitarix FX chains (wasm/obxd/gxfx_host.cpp) ------------------------
+  // The FX insert lives between the synth render and the per-instance track
+  // taps: obxd_render() writes g_track_l/r, gxfx_process() filters them in
+  // place (early-out while the whole chain is disabled; runs on ZERO input
+  // while the synth idles so delay/echo/reverb tails ring out past the last
+  // note), then the master sum reads the wet rows. obxd_init() is idempotent
+  // and calls gxfx_init(), which resets params to FX_DEFAULTS, order to the
+  // identity 0..10 and every effect to disabled — the behavioral checks
+  // below re-init so they stay independent of each other's side-effects.
+
+  // (l) FX surface ----------------------------------------------------------
+  expect('l. fx surface: counts, offsets, stereo flags', () => {
+    if (mod._fx_effect_count() !== 11) return `effect_count=${mod._fx_effect_count()}, want 11`;
+    if (mod._fx_total_params() !== 47) return `total_params=${mod._fx_total_params()}, want 47`;
+    if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
+    if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
+    if (mod._fx_param_count(11) !== -1) return `param_count(11)=${mod._fx_param_count(11)}, want -1 (out of range)`;
+    if (mod._fx_param_offset(10) !== 42) return `param_offset(10)=${mod._fx_param_offset(10)}, want 42 (reverb)`;
+    if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
+    if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
+  });
+
+  // Fresh FX state for the behavioral checks: params = defaults, order =
+  // identity, all effects disabled.
+  mod._obxd_init(48000);
+
+  // (m) Param round-trip + flat-mirror layout -------------------------------
+  expect('m. fx param round-trip via get + HEAPF32 mirror; invalid ids are no-ops', () => {
+    mod._fx_set_param(3, 8, 2, 1234.5); // inst 3, delay R_DELAY -> params[3*47 + 28 + 2]
+    const viaGet = mod._fx_get_param(3, 8, 2);
+    if (viaGet !== f32(1234.5)) return `get=${viaGet}, want ${f32(1234.5)}`;
+    const params = new Float32Array(mod.HEAPF32.buffer, mod._fx_get_params_ptr(), 10 * 47);
+    const viaView = params[3 * 47 + mod._fx_param_offset(8) + 2];
+    if (viaView !== f32(1234.5)) return `mirror view=${viaView}, want ${f32(1234.5)}`;
+    // Neighbor param (R_GAIN, default -10) untouched — offset math is exact.
+    const neighbor = mod._fx_get_param(3, 8, 1);
+    if (neighbor !== f32(-10)) return `neighbor R_GAIN=${neighbor}, want default ${f32(-10)}`;
+    // Invalid inst/fx/param: silent no-ops, get returns 0.0.
+    mod._fx_set_param(10, 0, 0, 9.9);
+    mod._fx_set_param(0, 11, 0, 9.9);
+    mod._fx_set_param(0, 0, 99, 9.9);
+    for (const [i, f, p] of [[10, 0, 0], [0, 11, 0], [0, 0, 99]]) {
+      const got = mod._fx_get_param(i, f, p);
+      if (got !== 0.0) return `get(${i},${f},${p})=${got}, want 0.0`;
+    }
+  });
+
+  // (n) Order semantics -----------------------------------------------------
+  expect('n. fx order: default identity, duplicate rejected, clear+move ok, view updated', () => {
+    for (let s = 0; s < 11; s++) {
+      const v = mod._fx_get_order_entry(0, s);
+      if (v !== s) return `default order slot ${s}=${v}, want ${s}`;
+    }
+    // fx 5 already sits in slot 5 — moving it to slot 0 must be rejected.
+    if (mod._fx_set_order_entry(0, 0, 5) !== 0) return 'duplicate fx 5 accepted into slot 0, want reject (0)';
+    if (mod._fx_set_order_entry(0, 5, -1) !== 1) return 'clearing slot 5 rejected, want 1';
+    if (mod._fx_set_order_entry(0, 0, 5) !== 1) return 'moving fx 5 into freed slot 0 rejected, want 1';
+    if (mod._fx_get_order_entry(0, 0) !== 5) return `order(0,0)=${mod._fx_get_order_entry(0, 0)}, want 5`;
+    if (mod._fx_get_order_entry(0, 5) !== -1) return `order(0,5)=${mod._fx_get_order_entry(0, 5)}, want -1`;
+    // The emcc runtime only attaches HEAPU8/HEAPF32 to Module — wrap our own
+    // Int8Array view for the signed-char order mirror.
+    const op = mod._fx_get_order_ptr(); // signed char[10][11] view
+    const orderView = new Int8Array(mod.HEAPF32.buffer, op, 11);
+    if (orderView[0] !== 5) return `order view [0][0]=${orderView[0]}, want 5`;
+    if (orderView[5] !== -1) return `order view [0][5]=${orderView[5]}, want -1`;
+  });
+
+  // (o) Wet path ------------------------------------------------------------
+  expect('o. fx wet path: reverb-only chain renders finite, non-silent track', () => {
+    mod._obxd_init(48000); // self-contained: default FX state, no leftover tails
+    mod._obxd_midi_in(0, 0x90, 60, 100);
+    // Dry reference: chain fully disabled -> gxfx_process early-outs, the
+    // track row is the raw synth output (non-silent).
+    let drySq = 0;
+    for (let q = 0; q < 8; q++) {
+      mod._obxd_render(128);
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      for (let i = 0; i < 128; i++) drySq += l[i] * l[i];
+    }
+    if (!(drySq > 0)) return `dry sum-of-squares = ${drySq} (silent before FX)`;
+
+    mod._fx_set_enabled(0, 10, 1); // reverb only on instance 0
+    if (mod._fx_get_enabled(0, 10) !== 1) return 'enabled(0,10) != 1 after set';
+    let wetSq = 0;
+    let finite = true;
+    for (let q = 0; q < 40; q++) {
+      mod._obxd_render(128);
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      for (let i = 0; i < 128; i++) {
+        if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+        wetSq += l[i] * l[i] + r[i] * r[i];
+      }
+    }
+    if (!finite) return 'non-finite sample in wet track row';
+    if (!(wetSq > 0)) return `wet sum-of-squares = ${wetSq} (silent with reverb on)`;
+  });
+
+  // (p) Reverb tail past synth idle -----------------------------------------
+  // obxd_panic() -> allSoundOff() and anySounding is recomputed per block,
+  // so a couple of quanta after the note-off the engine takes the memset
+  // fast path: everything the track row shows afterwards is produced by the
+  // FX insert running on zero input.
+  expect('p. fx reverb tail continues past synth idle (zero-input insert)', () => {
+    mod._obxd_init(48000);
+    mod._fx_set_enabled(0, 10, 1);
+    mod._obxd_midi_in(0, 0x90, 60, 100);
+    const blockRms = () => {
+      mod._obxd_render(128);
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      let s = 0;
+      for (let i = 0; i < 128; i++) {
+        if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) return NaN;
+        s += l[i] * l[i] + r[i] * r[i];
+      }
+      return Math.sqrt(s / 256);
+    };
+    let held = 0;
+    for (let q = 0; q < 60; q++) held = blockRms();
+    if (!Number.isFinite(held) || !(held > 1e-4)) return `held-note RMS = ${held} (too quiet to seed the tail)`;
+    mod._obxd_midi_in(0, 0x80, 60, 0);
+    mod._obxd_panic(0); // engine idle from here on
+    for (let q = 0; q < 4; q++) blockRms(); // drain residual release
+    const tail = [];
+    for (let q = 0; q < 6; q++) tail.push(blockRms());
+    if (tail.some((v) => !Number.isFinite(v))) return `non-finite tail sample: [${tail.join(', ')}]`;
+    // Blocks ~5..10 after note-off: only the FX insert can be audible now.
+    if (!(tail[4] > 1e-5)) {
+      return `tail RMS after note-off = [${tail.map((v) => v.toExponential(2)).join(', ')}] — tail died with the synth`;
+    }
+  });
+
+  // (q) Hard bypass ---------------------------------------------------------
+  expect('q. fx hard bypass: disabling the chain silences the idle track row', () => {
+    mod._obxd_init(48000);
+    mod._fx_set_enabled(0, 10, 1);
+    mod._obxd_midi_in(0, 0x90, 60, 100);
+    for (let q = 0; q < 30; q++) mod._obxd_render(128); // seed the reverb
+    mod._obxd_midi_in(0, 0x80, 60, 0);
+    mod._obxd_panic(0);
+    mod._obxd_render(128); // one quantum: tail ringing on zero input
+    const l0 = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+    let tailSq = 0;
+    for (let i = 0; i < 128; i++) tailSq += l0[i] * l0[i];
+    if (!(tailSq > 0)) return 'no tail to cut (pre-condition failed)';
+
+    mod._fx_set_enabled(0, 10, 0);
+    if (mod._fx_get_enabled(0, 10) !== 0) return 'enabled(0,10) != 0 after disable';
+    const ep = mod._fx_get_enabled_ptr(); // unsigned char[10][11] view
+    if (mod.HEAPU8[ep + 0 * 11 + 10] !== 0) return `enabled view [0][10]=${mod.HEAPU8[ep + 0 * 11 + 10]}, want 0`;
+    // Chain disabled + engine idle -> track row must be pure zeros (the
+    // memset fast path output passes through untouched).
+    let silent = true;
+    let bad = '';
+    for (let q = 0; q < 10 && silent; q++) {
+      mod._obxd_render(128);
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      for (let i = 0; i < 128; i++) {
+        if (l[i] !== 0 || r[i] !== 0) {
+          silent = false;
+          bad = `frame ${i}: L=${l[i]} R=${r[i]}`;
+          break;
+        }
+      }
+    }
+    if (!silent) return `track row non-zero with chain disabled + engine idle — ${bad}`;
+  });
+
+  // (r) Bulk restore --------------------------------------------------------
+  expect('r. fx_restore_ptr bulk-restores params + order + enabled', () => {
+    mod._obxd_init(48000); // known defaults to snapshot
+    // Params: defaults except echo TIME_L (fx 9, param 4 -> flat 35+4) = 0.9.
+    // (Note: 35+4, not 35+3 — the echo PortIndex order is INVERT, PERCENT_R,
+    // TIME_R, PERCENT_L, TIME_L, so TIME_L is param 4.)
+    const paramsArr = new Float32Array(
+      new Float32Array(mod.HEAPF32.buffer, mod._fx_get_params_ptr(), 470),
+    );
+    paramsArr[0 * 47 + 35 + 4] = 0.9;
+    // Order: instance 0 reversed (slot i holds fx 10-i), others identity.
+    const orderArr = new Int8Array(110);
+    for (let e = 0; e < 10; e++) {
+      for (let s = 0; s < 11; s++) orderArr[e * 11 + s] = e === 0 ? 10 - s : s;
+    }
+    // Enabled: instance 0 runs ONLY the echo (fx 9); everything else off.
+    const enabledArr = new Uint8Array(110);
+    enabledArr[0 * 11 + 9] = 1;
+
+    const pp = mod._malloc(470 * 4);
+    const po = mod._malloc(110);
+    const pe = mod._malloc(110);
+    mod.HEAPF32.set(paramsArr, pp >> 2);
+    new Int8Array(mod.HEAPF32.buffer, po, 110).set(orderArr);
+    mod.HEAPU8.set(enabledArr, pe);
+    mod._fx_restore_ptr(pp, po, pe);
+    mod._free(pp);
+    mod._free(po);
+    mod._free(pe);
+
+    if (mod._fx_get_order_entry(0, 0) !== 10) return `order(0,0)=${mod._fx_get_order_entry(0, 0)}, want 10 (reversed)`;
+    if (mod._fx_get_order_entry(0, 5) !== 5) return `order(0,5)=${mod._fx_get_order_entry(0, 5)}, want 5`;
+    if (mod._fx_get_order_entry(5, 3) !== 3) return `order(5,3)=${mod._fx_get_order_entry(5, 3)}, want 3 (other instances untouched)`;
+    if (mod._fx_get_enabled(0, 9) !== 1) return `enabled(0,9)=${mod._fx_get_enabled(0, 9)}, want 1`;
+    if (mod._fx_get_enabled(0, 10) !== 0) return `enabled(0,10)=${mod._fx_get_enabled(0, 10)}, want 0`;
+    if (mod._fx_get_enabled(1, 9) !== 0) return `enabled(1,9)=${mod._fx_get_enabled(1, 9)}, want 0`;
+    const ev = new Uint8Array(mod.HEAPU8.buffer, mod._fx_get_enabled_ptr(), 110);
+    if (ev[0 * 11 + 9] !== 1 || ev[0 * 11 + 10] !== 0) {
+      return `enabled view [0][9]=${ev[9]}, [0][10]=${ev[10]}, want 1 / 0`;
+    }
+    if (mod._fx_get_param(0, 9, 4) !== f32(0.9)) {
+      return `echo TIME_L=${mod._fx_get_param(0, 9, 4)}, want ${f32(0.9)}`;
+    }
+    // Audio: a held note through the restored echo-only chain must render
+    // finite, non-silent audio.
+    mod._obxd_midi_in(0, 0x90, 60, 100);
+    let sq = 0;
+    let finite = true;
+    for (let q = 0; q < 10; q++) {
+      mod._obxd_render(128);
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      for (let i = 0; i < 128; i++) {
+        if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+        sq += l[i] * l[i] + r[i] * r[i];
+      }
+    }
+    mod._obxd_midi_in(0, 0x80, 60, 0);
+    mod._obxd_panic(0);
+    if (!finite) return 'non-finite sample after bulk restore';
+    if (!(sq > 0)) return `sum-of-squares = ${sq} (silent after restore)`;
+  });
+
   // --- summary -------------------------------------------------------------
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);

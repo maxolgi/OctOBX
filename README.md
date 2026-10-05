@@ -25,6 +25,10 @@ Emscripten pthreads), not ALSA/winmm.
   AudioWorklet. Driven by Octopus MIDI channels 1–10 (reassignable per
   instance). 32-voice polyphony per instance, second LFO, MPE matrix, and the
   full OB-Xf editor UI (104 parameter-bound controls).
+- **Guitarix FX chains** — a user-reorderable insert chain of 11 guitarix
+  effects (wah → overdrive → distortion → compressor → chorus → flanger →
+  phaser → tremolo → delay → echo → reverb) per synth instance, between the
+  synth output and the mixer tap. Edited from the mixer view's track strips.
 - **Hardware MIDI I/O** — Web MIDI API output to real synths + input from
   real controllers (Chrome/Edge only), with MIDI-learn binding for the OB-Xf
   panel.
@@ -41,8 +45,11 @@ Emscripten pthreads), not ALSA/winmm.
 │   │                      current synth engine; carries our PCM/wasm-perf commits)
 │   │                      + 5 sub-submodules under libs/ (sst-basic-blocks, sst-cpputils,
 │   │                        simde, fmt, JUCE) — see "First-time clone"
-│   └── JUCE/              git submodule → maxolgi/JUCE (fork of juce-framework/JUCE;
-│                            JUCE 9.0.3 + our ThreadPriorities commit — feeds juce_amalgam.cpp)
+│   ├── JUCE/              git submodule → maxolgi/JUCE (fork of juce-framework/JUCE;
+│   │                        JUCE 9.0.3 + our ThreadPriorities commit — feeds juce_amalgam.cpp)
+│   └── guitarix/          git submodule → maxolgi/guitarix (shallow fork of
+│                            brummer10/guitarix, zero OctOBX commits — feeds gxfx_dsp.cpp/
+│                            gxfx_host.cpp + zita-resampler for the FX chains)
 ├── wasm/
 │   ├── main_wasm.c        Octopus engine entry point + exported API + sample-driven pump
 │   ├── hal_wasm.c         eCos HAL shim (OCT_AWP cooperative: virtual clock, polled alarms)
@@ -53,6 +60,9 @@ Emscripten pthreads), not ALSA/winmm.
 │   ├── obxd/
 │   │   ├── main_obxd.cpp       multi-instance OB-Xf SynthEngine wrapper (10 instances)
 │   │   ├── juce_amalgam.cpp    single-TU JUCE core + events + audio_basics + processors_headless
+│   │   ├── gxfx_dsp.cpp        11 guitarix faust DSP classes, namespace-wrapped (one TU)
+│   │   ├── gxfx_host.cpp       10 per-instance FX chains + fx_* exports
+│   │   ├── gxfx_prelude.h      headless stand-in for gx_common.h/gx_compiler.h
 │   │   ├── obxf_stubs/        2 header stubs (fast-exp Utils.h, MTS-ESP no-op) shadowing fork deps
 │   │   ├── param_table.h   GENERATED OB-Xd→OB-Xf dispatch tables (from tools/param-spec.mjs)
 │   │   ├── patches/        10 CC0 .fxp factory patches (embedded via xxd → patches.h)
@@ -69,7 +79,7 @@ Emscripten pthreads), not ALSA/winmm.
 
 ## First-time clone
 
-This repo uses three submodules:
+This repo uses four submodules:
 
 ```bash
 git clone --recurse-submodules <repo-url>
@@ -83,13 +93,16 @@ git submodule update --init --recursive
 > submodules explicitly (see below).
 
 The firmware submodule (`firmware/`) is required for the Octopus WASM build.
-The OB-Xf and JUCE submodules (`third_party/OB-Xf`, `third_party/JUCE`) are
-required for the synth WASM build (`make -C wasm/obxd`). Both ride user
-forks that track upstream: `third_party/JUCE` is pinned at `251768d`
-(JUCE 9.0.3 plus our WASM branch in `juce_ThreadPriorities_native.h`,
-committed directly on the fork), and `third_party/OB-Xf` is pinned at
-`7fe23a8` (upstream `b08ffb6` plus 3 OctOBX commits: PCM sampler additions,
-wasm fast-math perf, and a `recalculateMatrix` signature fixup). **OB-Xf
+The OB-Xf, JUCE, and guitarix submodules (`third_party/OB-Xf`,
+`third_party/JUCE`, `third_party/guitarix`) are required for the synth WASM
+build (`make -C wasm/obxd`). All three ride user forks that track upstream:
+`third_party/JUCE` is pinned at `251768d` (JUCE 9.0.3 plus our WASM branch in
+`juce_ThreadPriorities_native.h`, committed directly on the fork),
+`third_party/OB-Xf` is pinned at `7fe23a8` (upstream `b08ffb6` plus 3 OctOBX
+commits: PCM sampler additions, wasm fast-math perf, and a
+`recalculateMatrix` signature fixup), and `third_party/guitarix` is pinned
+at `a4c561a` (= upstream, zero OctOBX commits — the headless build needs no
+fork patches; the prelude + namespace-wrapping live in `wasm/obxd/`). **OB-Xf
 carries nested sub-submodules under `libs/`** — only the five required for a
 WASM/AudioWorklet build need to be initialized:
 
@@ -110,19 +123,21 @@ The legacy `third_party/Obxd/` submodule has been removed.
 
 ### Syncing the forks with upstream
 
-Both `third_party/` submodules ride user forks that track upstream. To pick
-up new upstream work:
+All three `third_party/` submodules ride user forks that track upstream. To
+pick up new upstream work:
 
 1. GitHub **"Sync fork"** on the fork's default branch
-   (`maxolgi/OB-Xf` `main`, `maxolgi/JUCE` `master`).
-2. `git submodule update --remote third_party/OB-Xf` (or `third_party/JUCE`)
-   in this repo.
+   (`maxolgi/OB-Xf` `main`, `maxolgi/JUCE` / `maxolgi/guitarix` `master`).
+2. `git submodule update --remote third_party/OB-Xf` (or
+   `third_party/JUCE`, `third_party/guitarix`) in this repo.
 3. Resolve any conflicts with the OctOBX commits on the fork (marked with
    `// OctOBX PCM` / `// OctOBX perf` comments for easy spotting). Syncing
    OB-Xf past upstream #705 required adapting our PCM `recalculateMatrix`
    calls; future upstream changes to the 5 engine files we patch
    (`SynthEngine.h`, `Motherboard.h`, `Voice.h`, `Filter.h`,
-   `AdsrEnvelope.h`) may need the same.
+   `AdsrEnvelope.h`) may need the same. The guitarix fork carries zero
+   OctOBX commits (the headless shims live in `wasm/obxd/`), so its syncs
+   are conflict-free pointer bumps.
 4. Rebuild (`./build.sh synth`) and run `npm test` / `npm run test:wasm`.
 5. Commit the submodule pointer bump — CI tests the committed pointer, not
    the remote tip.
@@ -190,7 +205,7 @@ make -C wasm           # → wasm/build/octopus_wasm.{js,wasm}
 make -C wasm NEMO=1    # Nemo variant → wasm/build/nemo_wasm.{js,wasm}
 make -C wasm clean
 
-# OB-Xf synth (requires third_party/{OB-Xf,JUCE} + OB-Xf's 5 sub-submodules)
+# OB-Xf synth (requires third_party/{OB-Xf,JUCE,guitarix} + OB-Xf's 5 sub-submodules)
 make -C wasm/obxd          # → wasm/build/obxd_wasm.{js,wasm}
 make -C wasm/obxd obxf-check   # syntax-only header parse (no codegen/link)
 make -C wasm/obxd clean
@@ -341,6 +356,8 @@ Browser (COOP/COEP/CORP cross-origin isolated)
     ├── obxd_wasm.wasm — OB-Xf synth
     │   ├── main_obxd.cpp — 10 SynthEngine instances summed + soft-clipped
     │   │   └── Instance 9 = drum sampler (32 voices, 8 pads × 4 layers, PCM)
+    │   ├── gxfx_host.cpp — 10 per-instance guitarix FX chains (insert between
+    │   │   the synth output and the mixer taps / master sum; RMS post-FX)
     │   └── juce_amalgam.cpp — juce_core + juce_events + juce_audio_basics + juce_audio_processors_headless
     ├── mixer_wasm_bg.wasm — CakeMix mixer engine (Rust wasm-bindgen, own
     │   linear memory; fetched from /mixer_wasm_bg.wasm, best-effort)
@@ -673,6 +690,13 @@ breakdown and return codes.
 | `obxd_clear_pcm(id)` | Free all PCM samples + reset state |
 | `obxd_set_drum_layer_param(pad, layer, idx, v)` | Per-layer voice-level param mirror (global params route live via `apply_param_instance(9, …)`) |
 | `obxd_get_drum_layer_param(pad, layer, idx)` | Read per-layer param from mirror |
+| `fx_effect_count()` / `fx_total_params()` | Guitarix FX rack shape: 11 effects / 47 params |
+| `fx_param_count(id)` / `fx_param_offset(id)` / `fx_is_stereo(id)` | Per-effect param layout + stereo flag |
+| `fx_set_param(inst, fx_id, param, v)` / `fx_get_param(…)` | Per-instance FX param (ENGINE units — ttl ranges, not 0..1; TS layer converts) |
+| `fx_set_enabled(inst, fx_id, on)` / `fx_get_enabled(…)` | Per-effect IN/BYP (lazy `activate()` on first render after enable) |
+| `fx_set_order_entry(inst, slot, fx_id)` / `fx_get_order_entry(…)` | Chain order slot write/read (duplicate fx_id rejected) |
+| `fx_get_params_ptr()` / `fx_get_order_ptr()` / `fx_get_enabled_ptr()` | Mirror views for the bulk `fx_get_state` pull (470 + 110 + 110) |
+| `fx_restore_ptr(params, order, enabled)` | Bulk restore of the whole 10-instance FX rack |
 
 > **Reserved CCs:** mod wheel (CC 1), sustain pedal (CC 64), all-sound-off
 > (CC 120), and all-notes-off (CC 123) are handled inside `obxd_midi_in()`'s
@@ -748,6 +772,42 @@ Makefile header comment for the full rationale of each flag. The
 `obxf-check` target runs an `-fsyntax-only` pass over the key OB-Xf headers
 for fast include-chain error surfacing without a full codegen/link.
 
+### `gxfx_dsp.cpp` + `gxfx_host.cpp` (guitarix FX chains)
+
+Per-instance insert chains built from 11 guitarix effect types (wah →
+overdrive → distortion → compressor → chorus → flanger → phaser → tremolo →
+delay → echo → reverb), one chain per OB-Xf instance:
+
+- `gxfx_dsp.cpp` includes the faust-generated DSP classes from
+  `third_party/guitarix/trunk/src/LV2/faust-generated/` (gcb_95, scream,
+  bossds1, compressor, chorus, gx_flanger, phaser_mono, tremolo,
+  stereodelay, stereoecho, stereoverb), each wrapped in its own namespace
+  with its `PortIndex` enum (the enums would collide at global scope).
+  `gxfx_prelude.h` is the headless stand-in for gx_common.h/gx_compiler.h
+  (no SSE fxsave denormal control, no rt section attributes); zita-resampler
+  (bundled in the guitarix tree) backs bossds1's oversampler via
+  gx_resampler. These TUs must NEVER include JUCE/OB-Xf headers — the
+  guitarix include dirs are scoped to them only.
+- `gxfx_host.cpp` owns the runtime: each chain is a user-reorderable
+  `order[11]` (each type at most once, enforced by the duplicate guard in
+  `fx_set_order_entry`); params are keyed by `fx_id` in a flat
+  `g_fx_params[10][47]` mirror, so reordering never moves values; mono
+  effects run dual-mono (L+R `PluginLV2` pairs) while chorus/delay/echo/
+  reverb run their native `stereo_audio` path; effects lazily `activate()`
+  (allocate delay buffers) on the first render after being enabled; a fully
+  disabled chain is a zero-cost no-op; and chains keep processing zero input
+  while the synth idles so delay/echo/reverb tails ring out.
+- **Insert point:** `obxd_render` runs `gxfx_process` per instance between
+  the synth output and the track taps — both the CakeMix mixer taps and the
+  legacy C-side master sum see the wet signal; per-instance RMS is post-FX.
+- **UI/persistence:** FX editing lives in the mixer view (collapsible FX
+  section per track strip 0..9: collapsed = LED chain summary, expanded =
+  reorderable chain list ▲/▼ + IN/BYP per effect + a selected-effect knob
+  edit area), backed by `src/mixer/fx-rack.ts` and the param tables in
+  `src/gxfx-params.ts` (transcribed from `tools/gxfx-param-spec.json`,
+  extracted from the guitarix ttl). Persisted as the optional `fx` field of
+  the app-state schema v2 — no migration; absent = engine defaults.
+
 ## TypeScript source (`src/`)
 
 | File | Role |
@@ -762,7 +822,7 @@ for fast include-chain error surfacing without a full codegen/link.
 | `midi-input.ts` | Web MIDI API **input** (Chrome/Edge). `HardwareMidiInput` attaches `onmidimessage` to the selected input port and forwards `(status, d1, d2)` to `ctl.midiInput()` (`oct_midi_in` messages). Sysex / active-sensing / tune-request dropped. |
 | `obxd-audio.ts` | Main-thread bootstrap + per-instance API for the combined OB-Xf/Octopus AudioWorklet. The node is created AT STARTUP by `bootOctopusEngine()`; `setupObxdAudio(octopusAssets?)` is idempotent (later rack calls are no-ops that just re-resume the AudioContext). Pre-fetches the synth + Octopus WASM binaries (plus `/mixer_wasm_bg.wasm` best-effort) and passes them via `processorOptions` (`wasmBinary` + `octopusWasmBinary`/`octopusMemory`/`octopusInitialState`, mixer as `mixerWasmBinary`). Permanent listener registry (`addWorkletMessageListener`) + one-shot reply router for async worklet RPCs. Adds `setObxdInstanceMpe` for per-instance MPE flag mirroring. |
 | `obxd-bridge.ts` | Channel→instance routing state for the OB-Xf synth (default channels 1–10 → instances 0–9, reassignable per instance). MPE-aware: an instance with MPE enabled claims a lower zone (master + N voice channels) before non-MPE instances fill the rest. Pushes the routing table to the worklet via `sendObxdMidiRouting()`; the synth consumes MIDI itself from the shared ring inside process(). |
-| `obxd-processor.tail.js` | Plain JS appended to the emcc output(s) at build time to form `obxd-processor.js` (the file fed to `audioWorklet.addModule()`). Subclasses `AudioWorkletProcessor`. `ensureOctopus()` boots the Octopus engine in this same worklet against the shared memory; `process()` calls `_octopus_pump(128)` FIRST, then drains the Octopus synth MIDI ring (same quantum), the queued `pendingMidi`, the deferred AWP task queue, and `_obxd_render(128)`, then feeds the per-instance taps into the CakeMix mixer (`mixer.process(128)` — its master IS the node output; legacy master-sum fallback). Hosts the `oct_*` + `mix_*` message handlers. Caches `HEAPF32` views and refreshes them only when WASM memory grows (avoids per-quantum GC pressure that caused audio clicks). |
+| `obxd-processor.tail.js` | Plain JS appended to the emcc output(s) at build time to form `obxd-processor.js` (the file fed to `audioWorklet.addModule()`). Subclasses `AudioWorkletProcessor`. `ensureOctopus()` boots the Octopus engine in this same worklet against the shared memory; `process()` calls `_octopus_pump(128)` FIRST, then drains the Octopus synth MIDI ring (same quantum), the queued `pendingMidi`, the deferred AWP task queue, and `_obxd_render(128)`, then feeds the per-instance taps into the CakeMix mixer (`mixer.process(128)` — its master IS the node output; legacy master-sum fallback). Hosts the `oct_*` + `fx_*` + `mix_*` message handlers. Caches `HEAPF32` views and refreshes them only when WASM memory grows (avoids per-quantum GC pressure that caused audio clicks). |
 | `obxd-awp-shim.js` | Plain JS prepended to the emcc output. Polyfills `self`/`location`/`fetch`/`performance` for emcc's worker-env output inside AudioWorkletGlobalScope, plus `TextEncoder`/`TextDecoder` and `crypto.getRandomValues` (needed by the wasm-bindgen mixer glue). |
 | `obxd-rack.ts` | OB-Xf rack UI: instance selector, power/polyphony/channel selectors, level meter (30Hz ping/pong), `.fxp` loader, Reset/Panic/Panic All buttons, per-instance MPE toggle + bend-range UI. The worklet node is already up at boot; the first PLAY just resumes the suspended AudioContext (autoplay-policy gesture). |
 | `obxd-synth-ui.ts` | Data-driven OB-Xf editor panel rendered from `obxf-layout.ts` (104 parameter-bound controls), absolute-positioned inside the 1150×576 OB-Xf VectorTheme canvas. Legacy-indexed controls dispatch via `setObxdInstanceParam(idx, v)`; OB-Xf-only controls get a sentinel `200 + canonical ordinal`, assigned NAME-KEYED from the generated `canonicalNewParamOrder` (the `RingModVol`→`RingModMix` layout-id alias is handled). `syncObxdControlsFromEngine(instanceId)` re-seeds widget positions from `g_param_mirror` (legacy) and `g_new_param_mirror` (NEW params) on instance switch / patch load. |
@@ -774,13 +834,15 @@ for fast include-chain error surfacing without a full codegen/link.
 | `obxf-midi-learn-ui.ts` | MIDI-learn **overlay** UI: renders the OB-Xf `midiLearnButton`, paints per-knob `CC{n}` badges above bound controls, toggles the red panel-border learn-mode indicator, click-badge-to-unlearn. |
 | `transport-sync.ts` | Wires PLAY/STOP/BPM to the Octopus engine (controller `oct_*` messages) and updates the on-screen transport indicator; seeds the tempo display from the shared status block. |
 | `state-persistence.ts` | Octopus sequencer state save/load as BYTES through the worklet (`ctl.saveState()`/`ctl.loadState()`), stored in the octobx projects IndexedDB (idb-projects.ts); localStorage holds only the project index + active-project name. Internal GRID+PGM saves arrive as `oct_state_saved` bytes → `onStateSavedBytes` (auto-save + download). LOAD imports `.bin` files via `ctl.loadState()`. Shift+LOAD purges legacy `EM_FS_*` IDBFS leftovers + clears app state (recovery). Boot auto-load comes from the active project inside `bootOctopusEngine()`. |
-| `app-state.ts` | Synth + drum state persistence. Dumps all synth (10×108) and drum (8×4×108) params from the AWP in bulk, plus per-instance settings (power, polyphony, channel, MPE, bend range) and drum kit, to localStorage JSON. Restores after AWP ready via `onAWPReady` callback. |
+| `app-state.ts` | Synth + drum + FX state persistence. Dumps all synth (10×108) and drum (8×4×108) params from the AWP in bulk, plus per-instance settings (power, polyphony, channel, MPE, bend range), drum kit, and the guitarix FX rack (optional `fx` field; absent = engine defaults), to localStorage JSON. Restores after AWP ready via `onAWPReady` callback. |
+| `gxfx-params.ts` | Guitarix FX param tables — 11 effects / 47 params / 10 instances, transcribed from `tools/gxfx-param-spec.json` (extracted from the guitarix ttl). Ports, min/max/step/default in ENGINE units + the 0..1 ↔ engine transforms the knob UI uses. Cross-checked by `test/gxfx-params.test.ts`. |
 | `drum-rack.ts` | Drum module UI: kit selector, 8 pads × 4 layers with dual sample-kit + sample dropdowns (cross-kit sample mixing via `DrumLayer.sourceUrl` + `SAMPLE_CATALOG`), mute/enable toggles, and per-layer knob strips (48 controls: 8 global + 40 per-layer). SVG arc knobs with iOS-style toggle pills and tri-state LFO-routing pills. Layer section has Gain/Pan/Pitch knobs with custom dispatch (bypass `g_drum_layer_params`, update `DrumLayer` object + `pushLayer` → `set_pcm_layer`). `syncEditor`/`syncKnobStrips` re-seed knob positions on pad/layer switch. |
 | `drum-audio.ts` | Main-thread audio bootstrap for the drum module on OB-Xf instance 9 (32 voices). `loadDrumKit` fetches samples from smpldsnds CDN, decodes via `AudioContext.decodeAudioData`, posts float arrays to the worklet via `obxd_load_pcm`. Per-layer URL resolution via `layerSampleUrl(lyr, kitSource)` (`lyr.sourceUrl ?? kitSource`) supports cross-kit sample mixing. Serialized via `kitLoadChain` promise chain (prevents concurrent loads). `sendLayerParams` pushes per-layer params (gain, filter, amp env, pan, pitch). `seedLayerMirror` seeds `g_drum_layer_params` on load. `pushLayer` re-sends one layer's full param set. |
 | `drum-state.ts` | Pure data layer: `DrumLayer` / `DrumPad` / `DrumKit` interfaces + factory functions. No project dependencies. `DrumLayer` fields: enabled, sampleName, sourceUrl (optional — when set, sample loads from this URL prefix instead of the loaded kit's source; enables cross-kit sample mixing), gain, filterCutoff/Resonance/Mode, amp ADSR, pan, pitch (0..1, 0.5=original), muted, `_seeded` flag. |
 | `drum-kits.ts` | 10 drum-kit presets sourced from the Public Domain smpldsnds CDN. Each kit maps its samples onto 8 GM pads (Kick, Snare, Closed HH, Open HH, Tom Lo, Clap, Cowbell, Ride). Secondary layers get `gain: 0.55, filterCutoff: 0.8` (quieter + darker). Closed HH + Open HH share choke group 0. Also exports `SAMPLE_CATALOG` (one entry per kit with deduped sample list + source URL) that drives the layer-editor dual dropdown UI for cross-kit sample mixing. |
 | `mixer.ts` | Thin module boundary for the mixer view: re-exports `mountMixer` (= `mountMixerConsole`) from `src/mixer/console.ts`, the vanilla-TS port of the CakeMix console (16 stereo strips + master with EQ/dynamics) that replaced the old 10-strip fader view. Retains `createVuMeter` (reused by drum-rack). |
 | `mixer/store.ts` | Console state + `mix_*` worklet messaging (vanilla-TS port of CakeMix's SolidJS store): every control write fans out to per-mono-channel messages (`trackChannel(t, side)`; stereo pairs), pan wired through the `channelPans` stereo-balance split. `seedEngineFromStore()` replays the full console state to the engine; owns the one permanent `mixer_meter` listener. `mix_get_params` → `mixer_params` is the diagnostics pull. |
+| `mixer/fx-rack.ts` | State cache for the per-instance guitarix FX chains (order, enabled, flat 47-param mirror per instance). Loaded once per console mount via `getFxState()` (bulk `fx_get_state` pull); the UI mutations here (0..1 → engine-unit param writes, enable, move-slot) are the only writers after load. Pure logic — no DOM. |
 | `mixer/` (console widgets) | Vanilla-TS port of CakeMix's console UI — `knob.ts`, `meter-canvas.ts`, `gr-meter.ts`, `eq-curve.ts`, `track-strip.ts`, `master-strip.ts`, `console.ts` (mounts 16 strips + master), `styles.ts`. Meters poll the store arrays from one rAF loop. |
 
 Input conventions: `skey(key, press)` → `ctl.key()` → `oct_key` message →
@@ -848,7 +910,8 @@ obxd_wasm.wasm
     g_mpe_enabled[10]             (per-instance MPE flag, mirrored from rack UI)
     g_engine_rms[10]              (per-instance RMS, updated during render)
     ↓
-obxd_render(n): for each active engine, processSample, sum, x/(1+|x|) soft-clip
+obxd_render(n): per engine, processSample → gxfx_process (per-instance
+    guitarix FX insert) → sum + x/(1+|x|) soft-clip
     ↓
 AudioContext.destination
 ```
@@ -1034,7 +1097,7 @@ OctOBX persists state across page reloads via these mechanisms:
 | Layer | Storage | Trigger | Format |
 |---|---|---|---|
 | Octopus sequencer | IndexedDB projects (`idb-projects.ts`) | SAVE button, GRID+PGM (auto) | binary bytes through the worklet |
-| Synth + drum state | localStorage | SAVE button | JSON (`octobx:app_state:v1`) |
+| Synth + drum + FX state | localStorage | SAVE button | JSON (`octobx:app_state:v1`; FX = optional `fx` field, absent = defaults) |
 | MIDI-learn bindings | localStorage | learn/unlearn (auto) | JSON (`octobx:midi_learn_v1`) |
 
 **Octopus engine state** — saved/loaded as BYTES through the worklet:
@@ -1057,7 +1120,8 @@ localStorage app state (recovery for corrupt state).
 
 **Synth/drum restore** — cached on page load, pushed to the worklet after
 AWP ready via an `onAWPReady` callback. The restore sequence is: drum kit
-load → synth params → drum layer params → per-instance settings + routing.
+load → synth params → drum layer params → per-instance settings + routing →
+FX chains (bulk `fx_restore_state`).
 
 **Recovery** — append `?nosync` to the URL to skip the boot auto-load.
 
@@ -1067,8 +1131,11 @@ load → synth params → drum layer params → per-instance settings + routing.
 (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
 `obxf-param-mappings.ts`, `obxf-param-format.ts`,
 `obxf-dispatch-coverage`, `sentinel-migration`, `dense-layer-index`,
-`awp-task-queue`) — no browser required. `npm run test:wasm` additionally
-exercises the built synth WASM under Node (`tools/verify-obxd-wasm.mjs`).
+`awp-task-queue`, `mixer-store`, `gxfx-params`) — 215 tests, no browser
+required. `npm run test:wasm` additionally exercises the built synth WASM
+under Node (`tools/verify-obxd-wasm.mjs`, 27 checks — incl. 7 guitarix-FX
+checks: surface, mirror round-trip, order semantics, wet path, tail
+continuation, hard bypass, bulk restore).
 `npm run test:octopus` drives the built Octopus engine WASM behaviorally in
 headless Chromium (`tools/verify-octopus-wasm.mjs`, playwright-core +
 system Chromium, serving `dist/` with COOP/COEP): 10 manual-grounded
@@ -1126,12 +1193,18 @@ browser console:
    modules (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
    `obxf-param-mappings.ts`, `obxf-param-format.ts`,
    `obxf-dispatch-coverage`, `sentinel-migration`, `dense-layer-index`,
-   `awp-task-queue`) — 179 tests; `npm run test:wasm`
-   (`tools/verify-obxd-wasm.mjs`) covers the OB-Xf synth WASM under Node;
-   `npm run test:octopus` (`tools/verify-octopus-wasm.mjs`) covers the
+   `awp-task-queue`, `mixer-store`, `gxfx-params`) — 215 tests; `npm run
+   test:wasm` (`tools/verify-obxd-wasm.mjs`) covers the OB-Xf synth WASM
+   under Node (27 checks); `npm run test:octopus`
+   (`tools/verify-octopus-wasm.mjs`) covers the
    Octopus engine WASM behaviorally in headless Chromium (10 tests — see
    Testing). Still manual-only: drum audio, Web MIDI hardware I/O, project
    save/reload round-trip, and the AudioWorklet integration paths.
+5. **Guitarix FX lazy activation allocates on the audio thread** — the first
+   render after an effect is enabled runs its `activate()` (delay-buffer
+   allocation) inside `process()`. It is rare and bounded, but enabling many
+   delay/echo/reverb chains at once can momentarily grow the WASM heap on
+   the audio thread.
 
 ## License
 
@@ -1147,6 +1220,7 @@ choice keeps the combined work license-compatible.
 | Octopus/Nemo firmware | `firmware/` (submodule → `maxolgi/OCT_CE_OS`) | see `firmware/OCT_OS/COPYING.txt` |
 | OB-Xf `SynthEngine` | `third_party/OB-Xf/` (submodule → `maxolgi/OB-Xf`, fork of `surge-synthesizer/OB-Xf`) | GPL-3.0-or-later |
 | JUCE core + events + audio_basics + processors_headless | `third_party/JUCE/` (submodule → `maxolgi/JUCE`, fork of `juce-framework/JUCE`) | ISC (core modules) — see `third_party/JUCE/LICENSE.md` |
+| Guitarix faust FX DSP (gcb_95 … stereoverb) + zita-resampler | `third_party/guitarix/` (submodule → `maxolgi/guitarix`, shallow fork of `brummer10/guitarix`) | GPL-2.0-or-later — see `third_party/guitarix/trunk/COPYING` |
 | SST basic-blocks / cpputils, simde, fmt | `third_party/OB-Xf/libs/...` (sub-submodules) | see each submodule's LICENSE |
 
 (The legacy OB-XD engine submodule `third_party/Obxd/` was removed after the

@@ -28,7 +28,9 @@ TARGET = ../build/obxd_wasm
 # PCM-sampler + wasm perf commits).
 # Only .cpp files belong in SRCS; the OB-Xf .h files are pulled in via the
 # include chain; the generated param_table.h is #include'd by main_obxd.cpp.
-SRCS = main_obxd.cpp juce_amalgam.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
+# gxfx_dsp.cpp + gxfx_host.cpp are the guitarix FX chain (see below) —
+# separate TUs that must NEVER include JUCE/OB-Xf headers.
+SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
 
 # Header dependencies — most of the engine lives in headers (Voice.h,
 # Motherboard.h, OscillatorBlock.h, Filter.h, Utils.h, ...) #include'd by the
@@ -40,7 +42,7 @@ SRCS = main_obxd.cpp juce_amalgam.cpp ../../third_party/OB-Xf/src/state/ObxdImpo
 # param_table.h is NOT listed — it doesn't exist on a fresh clone before
 # build.sh synth generates it; its staleness is gated separately by
 # gen-param-table.mjs --check in build.sh.)
-HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h)
+HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h gxfx_prelude.h ../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h ../../third_party/guitarix/trunk/src/LV2/faust-generated/*.cc ../../third_party/guitarix/trunk/src/LV2/faust/*.h ../../third_party/guitarix/trunk/src/LV2/faust/clipt*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/gx_resampler.* ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0/zita-resampler/*.h)
 
 # OB-Xf include paths. The engine sources are consumed STRAIGHT from the
 # fork tree at ../../third_party/OB-Xf/src (the maxolgi/OB-Xf fork main,
@@ -75,6 +77,16 @@ OBXF_INCLUDES = \
     -I ../../third_party/OB-Xf/src/engine \
     -I ../../third_party/OB-Xf/src/parameter \
     -I ../../third_party/OB-Xf/src/state
+
+# Guitarix FX includes (gxfx_dsp.cpp / gxfx_host.cpp only — main_obxd.cpp and
+# juce_amalgam.cpp must not see these). faust-generated/ holds the DSP .cc
+# classes, faust/ holds clipping.h (+ its clipt*.cc tables) pulled in by
+# bossds1.cc, zita-resampler-1.1.0 backs gx_resampler's FixedRateResampler
+# (bossds1 oversampler).
+GXFU_INCLUDES = \
+    -I ../../third_party/guitarix/trunk/src/LV2/faust-generated \
+    -I ../../third_party/guitarix/trunk/src/LV2/faust \
+    -I ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0
 
 # -sENVIRONMENT=worker sets up the runtime for a worker-like scope
 #   (no `window`, no `document`). Used because AudioWorkletGlobalScope is
@@ -133,10 +145,12 @@ CXXFLAGS = -O3 -g2 \
     -Wno-unused-variable \
     -Wno-unused-but-set-variable \
     -Wno-deprecated-pragma \
+    -Wno-vla-cxx-extension \
     $(JUCE_MODULE_DEFINES) \
     -I . \
     -I ../../third_party/JUCE/modules \
-    $(OBXF_INCLUDES)
+    $(OBXF_INCLUDES) \
+    $(GXFU_INCLUDES)
 
 # Export list MUST be kept in sync with src/obxd-processor.tail.js.
 # Multi-instance (Phase A) — every per-instance export takes an instance_id
@@ -148,7 +162,7 @@ CXXFLAGS = -O3 -g2 \
 # directly to the engine, bypassing the unreliable Octopus-echo path.
 # (Keep on a single physical line — Make's `\<newline>` continuation
 # inserts whitespace, which the emcc settings parser rejects.)
-EXPORTS = _obxd_init,_obxd_render,_obxd_set_active,_obxd_set_polyphony,_obxd_get_polyphony,_obxd_midi_in,_obxd_set_gain,_obxd_set_param,_obxd_get_param,_obxd_load_fxp,_obxd_all_notes_off,_obxd_panic,_obxd_panic_all,_obxd_reset_patch,_obxd_get_patch_name,_obxd_set_factory_patch,_obxd_get_factory_patch_count,_obxd_get_factory_patch_name,_obxd_get_factory_patch_category,_obxd_get_active,_obxd_get_instance_rms,_obxd_set_freq,_obxd_set_mpe,_obxd_set_mod_wheel,_obxd_set_sustain,_obxd_get_voice_activity,_obxd_set_mpe_glide_range,_obxd_set_matrix_row,_obxd_clear_matrix_row,_get_buf_l_ptr,_get_buf_r_ptr,_get_track_l_ptr,_get_track_r_ptr,_malloc,_free,_obxd_load_pcm,_obxd_set_pcm_layer,_obxd_set_pcm_note_map,_obxd_set_pcm_layer_count,_obxd_set_pcm_choke,_obxd_clear_pcm,_obxd_set_drum_layer_param,_obxd_get_drum_layer_param,_obxd_is_global_drum_param,_obxd_restore_stage,_obxd_set_master_render
+EXPORTS = _obxd_init,_obxd_render,_obxd_set_active,_obxd_set_polyphony,_obxd_get_polyphony,_obxd_midi_in,_obxd_set_gain,_obxd_set_param,_obxd_get_param,_obxd_load_fxp,_obxd_all_notes_off,_obxd_panic,_obxd_panic_all,_obxd_reset_patch,_obxd_get_patch_name,_obxd_set_factory_patch,_obxd_get_factory_patch_count,_obxd_get_factory_patch_name,_obxd_get_factory_patch_category,_obxd_get_active,_obxd_get_instance_rms,_obxd_set_freq,_obxd_set_mpe,_obxd_set_mod_wheel,_obxd_set_sustain,_obxd_get_voice_activity,_obxd_set_mpe_glide_range,_obxd_set_matrix_row,_obxd_clear_matrix_row,_get_buf_l_ptr,_get_buf_r_ptr,_get_track_l_ptr,_get_track_r_ptr,_malloc,_free,_obxd_load_pcm,_obxd_set_pcm_layer,_obxd_set_pcm_note_map,_obxd_set_pcm_layer_count,_obxd_set_pcm_choke,_obxd_clear_pcm,_obxd_set_drum_layer_param,_obxd_get_drum_layer_param,_obxd_is_global_drum_param,_obxd_restore_stage,_obxd_set_master_render,_fx_effect_count,_fx_param_count,_fx_param_offset,_fx_is_stereo,_fx_set_param,_fx_get_param,_fx_set_enabled,_fx_get_enabled,_fx_set_order_entry,_fx_get_order_entry,_fx_restore_ptr,_fx_get_params_ptr,_fx_get_order_ptr,_fx_get_enabled_ptr,_fx_total_params
 
 # INITIAL_MEMORY: 256 MB. The OB-Xf engine is MUCH heavier than the legacy
 #   OB-Xd: each SynthEngine owns a fixed `Voice voices[MAX_VOICES]` array

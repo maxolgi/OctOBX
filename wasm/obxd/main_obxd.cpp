@@ -114,6 +114,11 @@
 // after the engine includes — see its header comment for the contract.
 #include "param_table.h"
 
+// gxfx_host.cpp — per-instance guitarix FX chains (inserted in obxd_render
+// between the synth output and the track taps / master sum).
+void gxfx_init(uint32_t sample_rate);
+void gxfx_process(int instance_id, float* l, float* r, int n);
+
 // =========================================================================
 // Optional real-.fxp factory patches
 //
@@ -1273,14 +1278,17 @@ void obxd_init(int sample_rate) {
     // OctOBX PCM: one-time seed of the per-layer param store (8 pads × 4 layers)
     // so fresh drum layers start from the OB-Xf init defaults.
     seed_drum_layer_defaults();
+    // Guitarix FX chains: default params, canonical order, all effects off.
+    gxfx_init((uint32_t)sr);
 }
 
 // Render `n` samples into the master stereo buffer. The AudioWorklet
 // calls this with n=128 each quantum, then copies the first 128 frames
-// out via HEAPF32. Every active engine is summed sample-by-sample, and
-// the master bus is run through x/(1+|x|) per-sample soft-clip so 10
-// summed voices can never exceed ±1.0 at the output. Per-instance RMS
-// is updated during this pass for the meter UI.
+// out via HEAPF32. Every engine renders into its per-instance track rows,
+// the guitarix FX chain (gxfx_host.cpp) processes each row in place, and
+// the wet rows are then summed into the master bus, which is run through
+// x/(1+|x|) per-sample soft-clip so 10 summed voices can never exceed
+// ±1.0 at the output. Per-instance RMS is measured post-FX for the meter UI.
 EMSCRIPTEN_KEEPALIVE
 void obxd_render(int n) {
     if (n < 0) n = 0;
@@ -1297,33 +1305,32 @@ void obxd_render(int n) {
 
     float tmp_l, tmp_r;
     for (int e = 0; e < INSTANCE_COUNT; ++e) {
-        if (!g_engines[e] || !g_engine_active[e]) {
-            g_engine_rms[e] = 0.0f;
-            memset(g_track_l[e], 0, (size_t)n * sizeof(float));
-            memset(g_track_r[e], 0, (size_t)n * sizeof(float));
-            continue;
-        }
-        Motherboard* mb = g_engines[e]->getMotherboard();
-        if (mb && !mb->anySounding) {
+        Motherboard* mb = (g_engines[e] && g_engine_active[e]) ? g_engines[e]->getMotherboard() : nullptr;
+        if (mb && mb->anySounding) {
+            for (int i = 0; i < n; ++i) {
+                g_engines[e]->processSample(&tmp_l, &tmp_r);
+                g_track_l[e][i] = tmp_l;
+                g_track_r[e][i] = tmp_r;
+            }
+        } else {
             // Block-level idle skip: note events only arrive between renders
             // (setNoteOn flips anySounding synchronously), so an engine that was
             // silent at the end of the last quantum stays silent for this one —
             // same result as the engine's per-sample fast path, without 128 calls.
-            g_engine_rms[e] = 0.0f;
             memset(g_track_l[e], 0, (size_t)n * sizeof(float));
             memset(g_track_r[e], 0, (size_t)n * sizeof(float));
-            continue;
         }
+        // Per-instance FX insert (guitarix chains). No-op when the chain is
+        // fully disabled; runs on zero input while the synth idles so
+        // delay/echo/reverb tails ring out past the last note.
+        gxfx_process(e, g_track_l[e], g_track_r[e], n);
         float sum_sq = 0.0f;
         for (int i = 0; i < n; ++i) {
-            g_engines[e]->processSample(&tmp_l, &tmp_r);
             if (render_master) {
-                g_master_l[i] += tmp_l;
-                g_master_r[i] += tmp_r;
+                g_master_l[i] += g_track_l[e][i];
+                g_master_r[i] += g_track_r[e][i];
             }
-            g_track_l[e][i] = tmp_l;
-            g_track_r[e][i] = tmp_r;
-            sum_sq += tmp_l * tmp_l + tmp_r * tmp_r;
+            sum_sq += g_track_l[e][i] * g_track_l[e][i] + g_track_r[e][i] * g_track_r[e][i];
         }
         g_engine_rms[e] = sqrtf(sum_sq / (2.0f * (float)n));
     }
