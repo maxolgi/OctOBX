@@ -538,7 +538,7 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 61) return `effect_count=${mod._fx_effect_count()}, want 61 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb)`;
+    if (mod._fx_effect_count() !== 66) return `effect_count=${mod._fx_effect_count()}, want 66 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
@@ -567,7 +567,12 @@ async function main() {
     if (mod._fx_param_count(58) !== 3) return `param_count(58)=${mod._fx_param_count(58)}, want 3 (freeverb)`;
     if (mod._fx_param_count(59) !== 5) return `param_count(59)=${mod._fx_param_count(59)}, want 5 (room_simulator)`;
     if (mod._fx_param_count(60) !== 12) return `param_count(60)=${mod._fx_param_count(60)}, want 12 (shimmizita)`;
-    if (mod._fx_param_count(61) !== -1) return `param_count(61)=${mod._fx_param_count(61)}, want -1 (out of range)`;
+    if (mod._fx_param_count(61) !== 6) return `param_count(61)=${mod._fx_param_count(61)}, want 6 (ampmodel aggregate)`;
+    if (mod._fx_param_count(62) !== 4) return `param_count(62)=${mod._fx_param_count(62)}, want 4 (tonestack aggregate)`;
+    if (mod._fx_param_count(63) !== 12) return `param_count(63)=${mod._fx_param_count(63)}, want 12 (studiopre)`;
+    if (mod._fx_param_count(64) !== 5) return `param_count(64)=${mod._fx_param_count(64)}, want 5 (alembic)`;
+    if (mod._fx_param_count(65) !== 2) return `param_count(65)=${mod._fx_param_count(65)}, want 2 (w20)`;
+    if (mod._fx_param_count(66) !== -1) return `param_count(66)=${mod._fx_param_count(66)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -584,6 +589,11 @@ async function main() {
     if (mod._fx_is_stereo(60) !== 1) return `is_stereo(60)=${mod._fx_is_stereo(60)}, want 1 (shimmizita, native stereo)`;
     if (mod._fx_is_stereo(58) !== 0) return `is_stereo(58)=${mod._fx_is_stereo(58)}, want 0 (freeverb, dual-mono)`;
     if (mod._fx_is_stereo(59) !== 0) return `is_stereo(59)=${mod._fx_is_stereo(59)}, want 0 (room_simulator, dual-mono)`;
+    if (mod._fx_is_stereo(61) !== 0) return `is_stereo(61)=${mod._fx_is_stereo(61)}, want 0 (ampmodel, dual-mono)`;
+    if (mod._fx_is_stereo(62) !== 1) return `is_stereo(62)=${mod._fx_is_stereo(62)}, want 1 (tonestack, stereo aggregate)`;
+    if (mod._fx_is_stereo(63) !== 1) return `is_stereo(63)=${mod._fx_is_stereo(63)}, want 1 (studiopre_st, native stereo)`;
+    if (mod._fx_is_stereo(64) !== 0) return `is_stereo(64)=${mod._fx_is_stereo(64)}, want 0 (alembic, dual-mono)`;
+    if (mod._fx_is_stereo(65) !== 0) return `is_stereo(65)=${mod._fx_is_stereo(65)}, want 0 (w20, dual-mono)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
@@ -611,6 +621,12 @@ async function main() {
     if (mod._fx_default(59, 1) !== 20) return `default(59,1)=${mod._fx_default(59, 1)}, want 20 (room_simulator PREDELAYMS)`;
     if (mod._fx_default(60, 8) !== f32(0.0)) return `default(60,8)=${mod._fx_default(60, 8)}, want 0 (shimmizita SHIFT)`;
     if (mod._fx_default(60, 10) !== f32(3.0)) return `default(60,10)=${mod._fx_default(60, 10)}, want 3 (shimmizita T60DS)`;
+    if (mod._fx_default(61, 2) !== 20) return `default(61,2)=${mod._fx_default(61, 2)}, want 20 (ampmodel Distortion)`;
+    if (mod._fx_default(61, 4) !== 0) return `default(61,4)=${mod._fx_default(61, 4)}, want 0 (ampmodel MODEL)`;
+    if (mod._fx_default(62, 3) !== 0) return `default(62,3)=${mod._fx_default(62, 3)}, want 0 (tonestack MODEL)`;
+    if (mod._fx_default(63, 1) !== f32(0.5)) return `default(63,1)=${mod._fx_default(63, 1)}, want ${f32(0.5)} (studiopre volume_l)`;
+    if (mod._fx_default(64, 4) !== f32(0.5)) return `default(64,4)=${mod._fx_default(64, 4)}, want ${f32(0.5)} (alembic volume)`;
+    if (mod._fx_default(65, 0) !== f32(0.5)) return `default(65,0)=${mod._fx_default(65, 0)}, want ${f32(0.5)} (w20 gain)`;
     if (mod._fx_default(61, 0) !== 0) return `default(61,0)=${mod._fx_default(61, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
@@ -629,7 +645,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 61); // FX_COUNT == 61 since Phase 1-f
+    mod._fx_set_slot(0, 0, 66); // FX_COUNT == 66 since Phase 1-g
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -1210,25 +1226,40 @@ async function main() {
     // duck_delay FEEDBACK reach: AMOUNT is the envelope-duck DEPTH in dB
     // (0 = wet always on — duck_delay.dsp gates the wet path by
     // 1 - amp_follower*db2linear(amount), so a sustained note at amount 56
-    // silences the repeats). With AMOUNT 0 + TIME 30 ms + FEEDBACK 0.9 the
-    // repeats recirculate ~3x per half-window: the intra-run SECOND-half /
-    // FIRST-half energy ratio climbs well above 1, while FEEDBACK 0 stays
-    // flat — an intra-run metric, immune to the run-to-run synth variance
-    // that flakes absolute-RMS comparisons (see check v).
-    const halfRatio = (t) => {
-      const n = t.perQuantum.length;
-      const h = n >> 1;
-      const e = (a, b) => t.perQuantum.slice(a, b).reduce((x, y) => x + y * y, 0);
-      return e(h, n) / e(0, h);
+    // silences the repeats). Burst-tail probe: short note (off after 20
+    // quanta), TIME 30 ms, then measure energy in quanta 100..159 — far
+    // past the note and its release. FEEDBACK 0.9 recirculates the repeats
+    // for hundreds of ms (tail energy 100x+ the fb-0 release floor across
+    // runs), while the synth's own contribution there is spent. The old
+    // sustained-note halfRatio variant flaked: the engine's random voice
+    // slop (juce::Random-seeded level/ampEnv, Voice.h) makes the note's
+    // intra-run envelope swing more than the feedback effect — a tail
+    // metric after the note ends is immune.
+    const burstTail = (fb, quanta = 160, noteOff = 20, from = 100) => {
+      mod._obxd_init(48000);
+      mod._fx_set_slot(0, 0, 45);
+      mod._fx_set_param(0, 0, 0, 0);   // AMOUNT 0 (wet always on)
+      mod._fx_set_param(0, 0, 4, 30);  // TIME 30 ms
+      mod._fx_set_param(0, 0, 2, fb);  // FEEDBACK
+      mod._fx_set_enabled(0, 0, 1);
+      mod._obxd_midi_in(0, 0x90, 60, 100);
+      const perQuantum = [];
+      for (let q = 0; q < quanta; q++) {
+        if (q === noteOff) mod._obxd_midi_in(0, 0x80, 60, 0);
+        mod._obxd_render(128);
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        let qs = 0;
+        for (let i = 0; i < 128; i++) qs += l[i] * l[i] + r[i] * r[i];
+        perQuantum.push(qs);
+      }
+      mod._obxd_panic(0);
+      return perQuantum.slice(from).reduce((x, y) => x + y, 0);
     };
-    const fb0 = renderTrace(45, [[0, 0], [4, 30], [2, 0]]);   // AMOUNT 0, TIME 30ms, FEEDBACK 0
-    if (fb0.err) return fb0.err;
-    const fb9 = renderTrace(45, [[0, 0], [4, 30], [2, 0.9]]); // same, FEEDBACK 0.9
-    if (fb9.err) return fb9.err;
-    const r0 = halfRatio(fb0);
-    const r9 = halfRatio(fb9);
-    if (!(r9 > Math.max(1.3, r0 + 0.25))) {
-      return `duck_delay FEEDBACK does not reach the DSP: halfRatio(fb0)=${r0.toFixed(3)} halfRatio(fb0.9)=${r9.toFixed(3)} (want fb0.9 > max(1.3, fb0+0.25))`;
+    const tail0 = burstTail(0);
+    const tail9 = burstTail(0.9);
+    if (!(tail9 > 10 * tail0 && tail9 > 0)) {
+      return `duck_delay FEEDBACK does not reach the DSP: tail energy fb0=${tail0.toExponential(3)} fb0.9=${tail9.toExponential(3)} (want fb0.9 > 10x fb0; observed 100x+ across runs)`;
     }
     // digital_delay heap probe: fVec2[524288] doubles = 4 MB per object,
     // news EAGERLY in fx_set_slot (dual-mono => 2 objects / 8 MB per slot).
@@ -1333,25 +1364,134 @@ async function main() {
       return `zita_rev1 DRY_WET_MIX does not reach the DSP: wet/dry rms ratio ${wetR.toFixed(3)} ~ 1`;
     }
     // room_simulator DRYWET reach (param ordinal 4 = port 6, 0..1):
-    // full-wet vs dry-only. With ROOMSIZE maxed the wet path is dense.
+    // full-wet vs dry-only. The whole-run rms ratio flaked (the engine's
+    // random voice slop swings the sustained note's level run-to-run more
+    // than the mix difference) — compare the TAIL region instead (last
+    // quarter, after the note-off 60 quanta before the end): there the wet
+    // render carries the room decay on top of the identical-ish release,
+    // a 3x+ energy ratio across runs, while dry has only the release.
     const roomWet = renderTrace(59, [[4, 1], [3, 1]]);
     if (roomWet.err) return roomWet.err;
     const roomDry = renderTrace(59, [[4, 0], [3, 1]]);
     if (roomDry.err) return roomDry.err;
-    const roomR = roomWet.rms / roomDry.rms;
-    if (!(roomR < 0.8 || roomR > 1.25)) {
-      return `room_simulator DRYWET does not reach the DSP: wet/dry rms ratio ${roomR.toFixed(3)} ~ 1`;
+    const tailEnergyOf = (t) => {
+      const n = t.perQuantum.length;
+      return t.perQuantum.slice(n - (n >> 2)).reduce((x, y) => x + y * y, 0);
+    };
+    const wetTail = tailEnergyOf(roomWet);
+    const dryTail = tailEnergyOf(roomDry);
+    if (!(wetTail > 1.5 * dryTail)) {
+      return `room_simulator DRYWET does not reach the DSP: wet/dry tail energy ${wetTail.toExponential(3)} vs ${dryTail.toExponential(3)} (want wet > 1.5x dry; observed 3x+ across runs)`;
     }
     // tail past note-off: with the note released 60 quanta before the end,
     // the full-wet room_simulator output must still carry energy in the
     // last quarter of the run (dry would be near-silent there).
-    const n = roomWet.perQuantum.length;
-    const tail = roomWet.perQuantum.slice(n - (n >> 2));
-    const tailEnergy = tail.reduce((x, y) => x + y * y, 0);
-    if (!(tailEnergy > 0)) {
-      return `room_simulator wet tail dead after note-off (tailEnergy=${tailEnergy.toExponential(3)})`;
+    if (!(wetTail > 0)) {
+      return `room_simulator wet tail dead after note-off (tailEnergy=${wetTail.toExponential(3)})`;
     }
-    console.log(`    reverb wet/dry rms ratios: zita_rev1 ${wetR.toFixed(3)}, room_simulator ${roomR.toFixed(3)} (both away from 1 — the mix ports reach the DSP)`);
+    console.log(`    reverb wet/dry tail energy ratio: room_simulator ${(wetTail / dryTail).toFixed(2)} (well above 1 — the mix port reaches the DSP); zita_rev1 whole-run wet/dry rms ratio ${wetR.toFixed(3)}`);
+  });
+
+  // (y) Amp + tonestack family spot check (Phase 1-g) -------------------------
+  // Exercises the two host-side aggregates (gxfx_dsp_amps.cpp): "Amp Model"
+  // (id 61, 19 mono gxamp classes hot-swapped on MODEL param ordinal 4 =
+  // port 9) and "Tone Stack" (id 62, 27 stereo classes on MODEL ordinal 3 =
+  // port 10), plus the studiopre STEREO / alembic / w20 preamps. Amp model
+  // differences are driven with the gains open (PreGain +12, Distortion 100,
+  // Drive 1) so two tube stages differ audibly on a sustained note; the
+  // tonestack comparison maxes the B/M/T knobs so two EQ curves differ.
+  // Mid-render MODEL swaps walk both aggregates' full model ranges inside
+  // ONE render pass — the hot-swap path (create + connect +
+  // activate-if-active + destroy old) must stay finite and alive.
+  expect('y. amp family: aggregates + preamps render; MODEL selects change the sound; params round-trip; mid-render swaps finite', () => {
+    const renderTrace = (fxId, setParams, quanta = 120, skip = 10, onQuantum) => {
+      mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
+      mod._fx_set_slot(0, 0, fxId);
+      if (mod._fx_get_slot(0, 0) !== fxId) return { err: `slot(0,0)=${mod._fx_get_slot(0, 0)}, want ${fxId}` };
+      setParams.forEach(([p, v]) => mod._fx_set_param(0, 0, p, v));
+      mod._fx_set_enabled(0, 0, 1);
+      mod._obxd_midi_in(0, 0x90, 60, 100);
+      let s = 0;
+      let finite = true;
+      const perQuantum = [];
+      for (let q = 0; q < quanta; q++) {
+        if (onQuantum) onQuantum(q);
+        mod._obxd_render(128);
+        if (q === quanta - 60) mod._obxd_midi_in(0, 0x80, 60, 0); // note off 60 quanta in
+        if (q < skip) continue; // let the note settle
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        let qs = 0;
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+          qs += l[i] * l[i] + r[i] * r[i];
+        }
+        s += qs;
+        perQuantum.push(Math.sqrt(qs / 256));
+      }
+      mod._obxd_panic(0);
+      if (!finite) return { err: `non-finite sample through fx ${fxId}` };
+      return { rms: Math.sqrt(s / ((quanta - skip) * 256)), perQuantum };
+    };
+    // default renders — wrapper PortIndex links, tube tables link, finite
+    for (const [fxId, name] of [
+      [61, 'ampmodel'], [62, 'tonestack'], [63, 'studiopre'], [64, 'alembic'], [65, 'w20'],
+    ]) {
+      const r = renderTrace(fxId, []);
+      if (r.err) return `${name}: ${r.err}`;
+      if (!(r.rms > 0)) return `${name} output silent (rms=${r.rms.toExponential(3)})`;
+    }
+    // param round-trips for both aggregates (set/get over every param).
+    // Fresh set_slot first — the renderTrace calls above end with
+    // _obxd_init + w20 in slot 0, whose 2-param surface would no-op p>=2.
+    for (const [fxId, name, n] of [[61, 'ampmodel', 6], [62, 'tonestack', 4]]) {
+      mod._obxd_init(48000);
+      mod._fx_set_slot(0, 0, fxId);
+      for (let p = 0; p < n; p++) {
+        mod._fx_set_param(0, 0, p, 0);
+        if (mod._fx_get_param(0, 0, p) !== 0) return `${name} param ${p} round-trip 0 failed (${mod._fx_get_param(0, 0, p)})`;
+        mod._fx_set_param(0, 0, p, 1.5);
+        if (mod._fx_get_param(0, 0, p) !== 1.5) return `${name} param ${p} round-trip 1.5 failed (${mod._fx_get_param(0, 0, p)})`;
+      }
+    }
+    // amp MODEL 0 (12ax7) vs 16 (12AU7 push-pull 6V6) must differ with the
+    // gains open (params: PreGain +12 dB ordinal 1, Distortion 100 ordinal
+    // 2, Drive 1 ordinal 3, MODEL ordinal 4)
+    const ampOpen = [[1, 12], [2, 100], [3, 1]];
+    const ampA = renderTrace(61, [...ampOpen, [4, 0]]);
+    if (ampA.err) return `ampmodel m0: ${ampA.err}`;
+    const ampB = renderTrace(61, [...ampOpen, [4, 16]]);
+    if (ampB.err) return `ampmodel m16: ${ampB.err}`;
+    let ampDiff = 0;
+    for (let i = 0; i < ampA.perQuantum.length; i++)
+      ampDiff = Math.max(ampDiff, Math.abs(ampA.perQuantum[i] - ampB.perQuantum[i]));
+    if (!(ampDiff > 1e-4)) {
+      return `ampmodel MODEL 0 vs 16 identical on a transient sweep (max per-quantum rms delta ${ampDiff.toExponential(3)})`;
+    }
+    // tonestack MODEL 0 (default) vs 26 (engl) must differ with B/M/T maxed
+    const tsOpen = [[0, 1], [1, 1], [2, 1]];
+    const tsA = renderTrace(62, [...tsOpen, [3, 0]]);
+    if (tsA.err) return `tonestack m0: ${tsA.err}`;
+    const tsB = renderTrace(62, [...tsOpen, [3, 26]]);
+    if (tsB.err) return `tonestack m26: ${tsB.err}`;
+    let tsDiff = 0;
+    for (let i = 0; i < tsA.perQuantum.length; i++)
+      tsDiff = Math.max(tsDiff, Math.abs(tsA.perQuantum[i] - tsB.perQuantum[i]));
+    if (!(tsDiff > 1e-4)) {
+      return `tonestack MODEL 0 vs 26 identical (max per-quantum rms delta ${tsDiff.toExponential(3)})`;
+    }
+    // mid-render MODEL swaps: walk every model of both aggregates inside
+    // one render pass; output must stay finite and alive throughout
+    for (const [fxId, name, modelOrdinal, modelCount] of [
+      [61, 'ampmodel', 4, 19], [62, 'tonestack', 3, 27],
+    ]) {
+      const r = renderTrace(fxId, [], 200, 10, (q) => {
+        if (q % 3 === 0) mod._fx_set_param(0, 0, modelOrdinal, (q / 3) % modelCount);
+      });
+      if (r.err) return `${name} mid-render swaps: ${r.err}`;
+      if (!(r.rms > 0)) return `${name} silent across mid-render model swaps (rms=${r.rms.toExponential(3)})`;
+    }
+    console.log(`    amp/tonestack MODEL selectivity: amp 0↔16 max rms delta ${ampDiff.toFixed(4)}, tonestack 0↔26 ${tsDiff.toFixed(4)}; both aggregates survive ${19 + 27} mid-render swaps`);
   });
 
   // --- summary -------------------------------------------------------------

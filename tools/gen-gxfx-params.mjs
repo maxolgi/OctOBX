@@ -195,6 +195,25 @@ const V1_KEYS = Object.keys(V1_CATEGORY_BY_KEY);
 // tonestack_ampeg_rev(.cc/_stereo.cc) are TONESTACK classes (amp family),
 // the "rev" is Ampeg's model name, not a reverb; impulseresponse.cc is the
 // Phase-2 convolver orphan.
+// Phase 1-g ships the amp + tonestack family (gxfx_dsp_amps.cpp, with
+// valve.h included ONCE at global scope so the 14 tube_tables/*.cc files
+// (~2.2 MB) are shared by all 19 gxamp namespaces): the "Amp Model"
+// aggregate (19 mono gxamp classes behind MODEL 0..18 — gxamp.cc +
+// gxamp2..18.cc + gxnoamp.cc at 18, order == upstream amp_model[]; the
+// wrapper-level tonestack + convolver cab stages are NOT ported, cabs are
+// Phase 2), the "Tone Stack" aggregate (27 STEREO tonestack classes behind
+// MODEL 0..26, order == upstream tonestack_model[]), and three preamps:
+// studiopre (the STEREO gx_studiopre_st class — its mono sibling shares the
+// guard-less alembic_* circuit tables, so only one variant can ride the
+// TU), alembic (no tables), w20 (own w20 tables). gxtilttone is NOT
+// shipped: fx2plan's composite default (its LV2 wrapper chains noiser.cc;
+// the amp-family enumeration excludes it). Also present but NOT shipped:
+// gxampN_stereo.cc classes (the mono wrapper is the canonical aggregate;
+// shipping both would double the TU's table-linked classes for no menu
+// gain), gx_chump/gx_bigchump/gx_vibrochump (Phase 2 redeye convolver
+// family), gxmetal_amp/gxmetal_head (Phase 2 cab_data convolution),
+// gx_preamp.cc (references gx_head engine headers), jcm800pre (Phase 4,
+// Eigen).
 // ---------------------------------------------------------------------------
 const MANIFEST = [
     // --- v1 eleven (ids 0..10) — pinned data, canonical default chain ---
@@ -289,6 +308,39 @@ const MANIFEST = [
     { key: 'freeverb', menuName: 'Freeverb', category: 'reverb', orphan: 'freeverb.cc' },
     { key: 'room_simulator', menuName: 'Room Simulator', category: 'reverb', ttl: 'gx_room_simulator.lv2/gx_room_simulator.ttl' },
     { key: 'shimmizita', menuName: 'Shimmizita', category: 'reverb', ttl: 'gx_shimmizita.lv2/gx_shimmizita.ttl' },
+
+    // --- Phase 1-g: amp + tonestack family ---
+    // ampmodel: HOST-SIDE AGGREGATE (gxfx_dsp_amps.cpp AmpModelDsp) over the
+    // 19 gxamp model classes (gxamp.cc + gxamp2..18.cc + gxnoamp.cc), model
+    // order == the gx_amp.ttl `model` scale points == upstream amp_model[].
+    // The ttl describes the WRAPPER's full chain (head + tonestack + cab);
+    // skipPorts drops the tonestack (Middle/Bass/Treble/t_model) and cab
+    // (Cabinet/Presence/c_model) stages plus the wrapper-only trim, so the
+    // exposed surface is the amp-model params + MODEL only (fx2plan: port
+    // ONLY the model classes; cabs are Phase 2 convolver).
+    { key: 'ampmodel', menuName: 'Amp Model', category: 'amp', ttl: 'gx_amp.lv2/gx_amp.ttl', skipPorts: ['Middle', 'Bass', 'Treble', 'Cabinet', 'Presence', 't_model', 'c_model', 'trim'] },
+    // tonestack: HOST-SIDE AGGREGATE (ToneStackModelDsp) over the 27 STEREO
+    // tonestack classes; model 0..26 = upstream tonestack_model[] order ==
+    // the gx_amp.ttl t_model scale points minus the historical "Off" hole.
+    // No standalone gx_tonestack.lv2 bundle exists (the wrapper lives in
+    // gx_amp.lv2/gx_tonestack.cc), so the surface is inline: Bass/Middle/
+    // Treble ranges from gx_amp.ttl ports 4..6, MODEL at t_model's port 10 —
+    // the wrapper-space indexes the aggregate forwards untranslated.
+    { key: 'tonestack', menuName: 'Tone Stack', category: 'tonestack', stereo: true, params: [
+        { port: 4, symbol: 'Middle', name: 'Middle', default: 0.5, min: 0, max: 1, step: 0.01 },
+        { port: 5, symbol: 'Bass', name: 'Bass', default: 0.5, min: 0, max: 1, step: 0.01 },
+        { port: 6, symbol: 'Treble', name: 'Treble', default: 0.5, min: 0, max: 1, step: 0.01 },
+        { port: 10, symbol: 'Model', name: 'Model', default: 0, min: 0, max: 26, step: 1, integer: true },
+    ] },
+    // preamps (plain classes — convolver-based redeye/metal/cabinet are
+    // Phase 2, gx_preamp.cc references engine headers): studiopre ships the
+    // STEREO variant (separate native-stereo class; the mono .cc shares the
+    // guard-less alembic_* tables so only one can ride the TU). alembic has
+    // no tables; w20 embeds its own tiltdrivepro-derived w20 tables.
+    { key: 'studiopre', menuName: 'Studio Pre', category: 'amp', ttl: 'gx_studiopre_st.lv2/gx_studiopre_st.ttl' },
+    { key: 'alembic', menuName: 'Alembic Pre', category: 'amp', ttl: 'gx_alembic.lv2/gx_alembic.ttl' },
+    { key: 'w20', menuName: 'W20 Pre', category: 'amp', ttl: 'gx_w20.lv2/gx_w20.ttl' },
+
 ];
 
 const FX_COUNT = MANIFEST.length;
@@ -555,6 +607,17 @@ const LABEL_OVERRIDES = {
     CONTROL: 'Env Control',
     // freeverb orphan
     DAMP: 'Damping',
+    // --- Phase 1-g amp + tonestack family (keys chosen to NOT collide with
+    // any symbol/name of effects 0..60 — regeneration keeps those
+    // byte-identical; 'model' (lowercase, gx_amp.ttl) needs no override,
+    // titleCase yields "Model") ---
+    // gx_amp.ttl amp-model ports (EnhancedUI camelCase symbols)
+    MasterGain: 'Master Gain',
+    PreGain: 'Pre Gain',
+    HIGHGAIN: 'High Gain',
+    // gx_studiopre_st.ttl port 12 carries upstream's name typo "master_L"
+    // on the R-channel master — key the symbol, not the name.
+    master_r: 'Master R',
 };
 
 function titleCase(s) {

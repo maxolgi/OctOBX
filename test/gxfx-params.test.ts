@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(61);
+        expect(FX_COUNT).toBe(66);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -112,6 +112,10 @@ describe("gxfx-params — layout invariants", () => {
             "delay", "delay",                          // classic_delay, classic_echo
             // Phase 1-f reverb family (57..60)
             "reverb", "reverb", "reverb", "reverb",    // zita_rev1, freeverb, room_simulator, shimmizita
+            // Phase 1-g amp + tonestack family (61..65)
+            "amp",                                       // ampmodel (aggregate)
+            "tonestack",                                 // tonestack (aggregate)
+            "amp", "amp", "amp",                         // studiopre, alembic, w20
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -119,14 +123,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 300", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 329", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(300);
-        expect(FX_TOTAL_PARAMS).toBe(300);
+        expect(running).toBe(329);
+        expect(FX_TOTAL_PARAMS).toBe(329);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -196,16 +200,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..60", () => {
-        for (let i = 0; i < 61; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..65", () => {
+        for (let i = 0; i < 66; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(61)).toBe(false);
+        expect(isFxId(66)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(61, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(66, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -691,5 +695,78 @@ describe("gxfx-params — Phase 1-f reverb family additions", () => {
         expect(shim.params[8]).toMatchObject({ default: 0, min: -6, max: 6, step: 0.1 }); // SHIFT semitones
         expect(shim.params[10]).toMatchObject({ default: 3, min: 1, max: 8, step: 0.1 }); // T60DS sec
         expect(shim.params[9]).toMatchObject({ default: 0.1, min: 0.1, max: 10, step: 0.1 }); // SPEED
+    });
+});
+
+describe("gxfx-params — Phase 1-g amp + tonestack family additions", () => {
+    it("ampmodel (ttl with skipPorts, mono aggregate): amp-model params only + MODEL — tonestack/cab/trim ports dropped", () => {
+        const fx = FX_EFFECTS[61];
+        expect(fx.key).toBe("ampmodel");
+        expect(fx.label).toBe("Amp Model");
+        expect(fx.category).toBe("amp");
+        expect(fx.stereo).toBe(false);
+        expect(fx.params.map((p) => p.symbol)).toEqual([
+            "MasterGain", "PreGain", "Distortion", "Drive", "model", "HIGHGAIN",
+        ]);
+        expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 9, 18]);
+        expect(fx.params.map((p) => p.name)).toEqual([
+            "Master Gain", "Pre Gain", "Distortion", "Drive", "Model", "High Gain",
+        ]);
+        expect(fx.params[0]).toMatchObject({ default: 0, min: -20, max: 20, step: 1 });
+        expect(fx.params[2]).toMatchObject({ default: 20, min: 1, max: 100, step: 1 });
+        expect(fx.params[3]).toMatchObject({ default: 0.25, min: 0.01, max: 1, step: 0.01 });
+        expect(fx.params[4]).toMatchObject({ default: 0, min: 0, max: 18, step: 1, integer: true });
+        expect(fx.params[5]).toMatchObject({ default: 0, min: 0, max: 1, step: 1 }); // toggled
+    });
+
+    it("tonestack (inline params, STEREO aggregate): Bass/Middle/Treble at gx_amp wrapper ports + MODEL 0..26", () => {
+        const fx = FX_EFFECTS[62];
+        expect(fx.key).toBe("tonestack");
+        expect(fx.label).toBe("Tone Stack");
+        expect(fx.category).toBe("tonestack");
+        expect(fx.stereo).toBe(true);
+        expect(fx.params.map((p) => p.symbol)).toEqual(["Middle", "Bass", "Treble", "Model"]);
+        expect(fx.params.map((p) => p.port)).toEqual([4, 5, 6, 10]);
+        expect(fx.params.map((p) => p.name)).toEqual(["Middle", "Bass", "Treble", "Model"]);
+        expect(fx.params[0]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.01 });
+        expect(fx.params[3]).toMatchObject({ default: 0, min: 0, max: 26, step: 1, integer: true });
+    });
+
+    it("preamps: studiopre (STEREO variant, 12 L/R params), alembic (5), w20 (2)", () => {
+        const pre = FX_EFFECTS[63];
+        expect(pre.key).toBe("studiopre");
+        expect(pre.label).toBe("Studio Pre");
+        expect(pre.category).toBe("amp");
+        expect(pre.stereo).toBe(true);
+        expect(pre.params.map((p) => p.symbol)).toEqual([
+            "bright_l", "volume_l", "bass_l", "middle_l", "treble_l", "master_l",
+            "bright_r", "volume_r", "bass_r", "middle_r", "treble_r", "master_r",
+        ]);
+        expect(pre.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        expect(pre.params.map((p) => p.name)).toEqual([
+            "Bright L", "Volume L", "Bass L", "Middle L", "Treble L", "Master L",
+            "Bright R", "Volume R", "Bass R", "Middle R", "Treble R", "Master R",
+        ]);
+        expect(pre.params[0]).toMatchObject({ default: 0, min: 0, max: 1, step: 1 }); // toggled bright
+        expect(pre.params[5]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.01 });
+
+        const ale = FX_EFFECTS[64];
+        expect(ale.key).toBe("alembic");
+        expect(ale.label).toBe("Alembic Pre");
+        expect(ale.category).toBe("amp");
+        expect(ale.stereo).toBe(false);
+        expect(ale.params.map((p) => p.symbol)).toEqual(["input", "bass", "middle", "treble", "volume"]);
+        expect(ale.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4]);
+        expect(ale.params[0]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.01 });
+
+        const w20 = FX_EFFECTS[65];
+        expect(w20.key).toBe("w20");
+        expect(w20.label).toBe("W20 Pre");
+        expect(w20.category).toBe("amp");
+        expect(w20.stereo).toBe(false);
+        expect(w20.params.map((p) => p.symbol)).toEqual(["gain", "level"]);
+        expect(w20.params.map((p) => p.port)).toEqual([0, 1]);
+        expect(w20.params[0]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.01 });
+        expect(w20.params[1]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.01 });
     });
 });

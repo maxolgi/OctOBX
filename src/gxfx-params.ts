@@ -13,7 +13,7 @@
  * Freshness check:    node tools/gen-gxfx-params.mjs --check   (CI gate)
  */
 
-export const FX_COUNT = 61;
+export const FX_COUNT = 66;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
 export const FX_SLOT_PARAMS = 48;
@@ -40,7 +40,7 @@ export interface FxEffectDef {
     label: string;
     category: FxCategory;
     stereo: boolean;
-    offset: number;    // cumulative param offset into the flat 300-slot mirror
+    offset: number;    // cumulative param offset into the flat 329-slot mirror
     params: FxParamDef[];
 }
 
@@ -48,7 +48,7 @@ export interface FxEffectDef {
  * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →
  * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the
  * Phase-1 additions selectable per slot.
- * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2,11,3,5,12 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267,269,280,283,288. */
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2,11,3,5,12,6,4,12,5,2 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267,269,280,283,288,300,306,310,322,327. */
 export const FX_EFFECTS: FxEffectDef[] = [
     {
         id: 0, key: "wah", label: "Wah", category: "wah", stereo: false, offset: 0,
@@ -655,9 +655,63 @@ export const FX_EFFECTS: FxEffectDef[] = [
             { port: 15, symbol: "T60M", name: "T60 Mid", default: 2, min: 1, max: 8, step: 0.1 },
         ],
     },
+    {
+        id: 61, key: "ampmodel", label: "Amp Model", category: "amp", stereo: false, offset: 300,
+        params: [
+            { port: 0, symbol: "MasterGain", name: "Master Gain", default: 0, min: -20, max: 20, step: 1 },
+            { port: 1, symbol: "PreGain", name: "Pre Gain", default: 0, min: -20, max: 20, step: 1 },
+            { port: 2, symbol: "Distortion", name: "Distortion", default: 20, min: 1, max: 100, step: 1 },
+            { port: 3, symbol: "Drive", name: "Drive", default: 0.25, min: 0.01, max: 1, step: 0.01 },
+            { port: 9, symbol: "model", name: "Model", default: 0, min: 0, max: 18, step: 1, integer: true },
+            { port: 18, symbol: "HIGHGAIN", name: "High Gain", default: 0, min: 0, max: 1, step: 1 },
+        ],
+    },
+    {
+        id: 62, key: "tonestack", label: "Tone Stack", category: "tonestack", stereo: true, offset: 306,
+        params: [
+            { port: 4, symbol: "Middle", name: "Middle", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 5, symbol: "Bass", name: "Bass", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 6, symbol: "Treble", name: "Treble", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 10, symbol: "Model", name: "Model", default: 0, min: 0, max: 26, step: 1, integer: true },
+        ],
+    },
+    {
+        id: 63, key: "studiopre", label: "Studio Pre", category: "amp", stereo: true, offset: 310,
+        params: [
+            { port: 0, symbol: "bright_l", name: "Bright L", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 1, symbol: "volume_l", name: "Volume L", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "bass_l", name: "Bass L", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "middle_l", name: "Middle L", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 4, symbol: "treble_l", name: "Treble L", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 5, symbol: "master_l", name: "Master L", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 6, symbol: "bright_r", name: "Bright R", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 7, symbol: "volume_r", name: "Volume R", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 8, symbol: "bass_r", name: "Bass R", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 9, symbol: "middle_r", name: "Middle R", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 10, symbol: "treble_r", name: "Treble R", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 11, symbol: "master_r", name: "Master R", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 64, key: "alembic", label: "Alembic Pre", category: "amp", stereo: false, offset: 322,
+        params: [
+            { port: 0, symbol: "input", name: "Input", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "bass", name: "Bass", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "middle", name: "Middle", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "treble", name: "Treble", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 4, symbol: "volume", name: "Volume", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 65, key: "w20", label: "W20 Pre", category: "amp", stereo: false, offset: 327,
+        params: [
+            { port: 0, symbol: "gain", name: "Gain", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "level", name: "Level", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
 ];
 
-export const FX_TOTAL_PARAMS = 300;
+export const FX_TOTAL_PARAMS = 329;
 
 // --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
 

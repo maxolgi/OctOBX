@@ -96,6 +96,16 @@ PluginLV2* gxfx_create_zita_rev1();
 PluginLV2* gxfx_create_freeverb();
 PluginLV2* gxfx_create_room_simulator();
 PluginLV2* gxfx_create_shimmizita();
+// amp + tonestack family (gxfx_dsp_amps.cpp, Phase 1-g — valve.h included
+// once at global scope so the tube tables are shared: the "Amp Model"
+// aggregate hot-swaps the 19 mono gxamp classes on MODEL 0..18, the
+// "Tone Stack" aggregate the 27 STEREO tonestack classes on MODEL 0..26,
+// plus the studiopre STEREO / alembic / w20 preamps)
+PluginLV2* gxfx_create_ampmodel();
+PluginLV2* gxfx_create_tonemodel();
+PluginLV2* gxfx_create_studiopre();
+PluginLV2* gxfx_create_alembic();
+PluginLV2* gxfx_create_w20();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -159,7 +169,12 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_zita_rev1,
     gxfx_create_freeverb,
     gxfx_create_room_simulator,
-    gxfx_create_shimmizita
+    gxfx_create_shimmizita,
+    gxfx_create_ampmodel,
+    gxfx_create_tonemodel,
+    gxfx_create_studiopre,
+    gxfx_create_alembic,
+    gxfx_create_w20
 };
 
 // Generator↔host drift guard: the factory registry above must list every
