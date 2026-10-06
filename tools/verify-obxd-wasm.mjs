@@ -538,7 +538,7 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 66) return `effect_count=${mod._fx_effect_count()}, want 66 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack)`;
+    if (mod._fx_effect_count() !== 76) return `effect_count=${mod._fx_effect_count()}, want 76 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
@@ -572,7 +572,17 @@ async function main() {
     if (mod._fx_param_count(63) !== 12) return `param_count(63)=${mod._fx_param_count(63)}, want 12 (studiopre)`;
     if (mod._fx_param_count(64) !== 5) return `param_count(64)=${mod._fx_param_count(64)}, want 5 (alembic)`;
     if (mod._fx_param_count(65) !== 2) return `param_count(65)=${mod._fx_param_count(65)}, want 2 (w20)`;
-    if (mod._fx_param_count(66) !== -1) return `param_count(66)=${mod._fx_param_count(66)}, want -1 (out of range)`;
+    if (mod._fx_param_count(66) !== 34) return `param_count(66)=${mod._fx_param_count(66)}, want 34 (mbcompressor — biggest after livelooper)`;
+    if (mod._fx_param_count(67) !== 19) return `param_count(67)=${mod._fx_param_count(67)}, want 19 (mbdelay)`;
+    if (mod._fx_param_count(68) !== 15) return `param_count(68)=${mod._fx_param_count(68)}, want 15 (mbdistortion)`;
+    if (mod._fx_param_count(69) !== 14) return `param_count(69)=${mod._fx_param_count(69)}, want 14 (mbecho)`;
+    if (mod._fx_param_count(70) !== 24) return `param_count(70)=${mod._fx_param_count(70)}, want 24 (barkgraphiceq)`;
+    if (mod._fx_param_count(71) !== 3) return `param_count(71)=${mod._fx_param_count(71)}, want 3 (bigmuffpi)`;
+    if (mod._fx_param_count(72) !== 1) return `param_count(72)=${mod._fx_param_count(72)}, want 1 (balance)`;
+    if (mod._fx_param_count(73) !== 1) return `param_count(73)=${mod._fx_param_count(73)}, want 1 (outputlevel)`;
+    if (mod._fx_param_count(74) !== 1) return `param_count(74)=${mod._fx_param_count(74)}, want 1 (ampout)`;
+    if (mod._fx_param_count(75) !== 7) return `param_count(75)=${mod._fx_param_count(75)}, want 7 (ampmodul)`;
+    if (mod._fx_param_count(76) !== -1) return `param_count(76)=${mod._fx_param_count(76)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -594,6 +604,13 @@ async function main() {
     if (mod._fx_is_stereo(63) !== 1) return `is_stereo(63)=${mod._fx_is_stereo(63)}, want 1 (studiopre_st, native stereo)`;
     if (mod._fx_is_stereo(64) !== 0) return `is_stereo(64)=${mod._fx_is_stereo(64)}, want 0 (alembic, dual-mono)`;
     if (mod._fx_is_stereo(65) !== 0) return `is_stereo(65)=${mod._fx_is_stereo(65)}, want 0 (w20, dual-mono)`;
+    if (mod._fx_is_stereo(66) !== 0) return `is_stereo(66)=${mod._fx_is_stereo(66)}, want 0 (mbcompressor, dual-mono)`;
+    if (mod._fx_is_stereo(70) !== 0) return `is_stereo(70)=${mod._fx_is_stereo(70)}, want 0 (barkgraphiceq, dual-mono)`;
+    if (mod._fx_is_stereo(71) !== 0) return `is_stereo(71)=${mod._fx_is_stereo(71)}, want 0 (bigmuffpi, dual-mono)`;
+    if (mod._fx_is_stereo(72) !== 1) return `is_stereo(72)=${mod._fx_is_stereo(72)}, want 1 (balance, native stereo)`;
+    if (mod._fx_is_stereo(73) !== 1) return `is_stereo(73)=${mod._fx_is_stereo(73)}, want 1 (outputlevel, native stereo)`;
+    if (mod._fx_is_stereo(74) !== 0) return `is_stereo(74)=${mod._fx_is_stereo(74)}, want 0 (ampout, dual-mono)`;
+    if (mod._fx_is_stereo(75) !== 1) return `is_stereo(75)=${mod._fx_is_stereo(75)}, want 1 (ampmodul, native stereo)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
@@ -627,6 +644,14 @@ async function main() {
     if (mod._fx_default(63, 1) !== f32(0.5)) return `default(63,1)=${mod._fx_default(63, 1)}, want ${f32(0.5)} (studiopre volume_l)`;
     if (mod._fx_default(64, 4) !== f32(0.5)) return `default(64,4)=${mod._fx_default(64, 4)}, want ${f32(0.5)} (alembic volume)`;
     if (mod._fx_default(65, 0) !== f32(0.5)) return `default(65,0)=${mod._fx_default(65, 0)}, want ${f32(0.5)} (w20 gain)`;
+    if (mod._fx_default(66, 15) !== 13) return `default(66,15)=${mod._fx_default(66, 15)}, want 13 (mbcompressor RATIO1, ttl)`;
+    if (mod._fx_default(66, 30) !== 80) return `default(66,30)=${mod._fx_default(66, 30)}, want 80 (mbcompressor CROSSOVER_B1_B2)`;
+    if (mod._fx_default(67, 0) !== 30) return `default(67,0)=${mod._fx_default(67, 0)}, want 30 (mbdelay DELAY1)`;
+    if (mod._fx_default(70, 23) !== 0) return `default(70,23)=${mod._fx_default(70, 23)}, want 0 (barkgraphiceq G24)`;
+    if (mod._fx_default(71, 0) !== f32(0.5)) return `default(71,0)=${mod._fx_default(71, 0)}, want ${f32(0.5)} (bigmuffpi SUSTAIN)`;
+    if (mod._fx_default(72, 0) !== 0) return `default(72,0)=${mod._fx_default(72, 0)}, want 0 (balance)`;
+    if (mod._fx_default(73, 0) !== 0) return `default(73,0)=${mod._fx_default(73, 0)}, want 0 (outputlevel)`;
+    if (mod._fx_default(75, 4) !== 6) return `default(75,4)=${mod._fx_default(75, 4)}, want 6 (ampmodul TUBE1)`;
     if (mod._fx_default(61, 0) !== 0) return `default(61,0)=${mod._fx_default(61, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
@@ -645,7 +670,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 66); // FX_COUNT == 66 since Phase 1-g
+    mod._fx_set_slot(0, 0, 76); // FX_COUNT == 76 since Phase 1-h
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -892,6 +917,55 @@ async function main() {
     mod._obxd_panic(0);
     if (!finite) return 'non-finite sample after bulk restore';
     if (!(sq > 0)) return `sum-of-squares = ${sq} (silent after restore)`;
+  });
+
+  // (s) Multiband spot check: mb param sweep reaches the DSP ---------------
+  // mbcompressor (fx 66) in instance 3 slot 4, enabled, fed by a held note.
+  // The RATIO3 sweep must change the track RMS (band 3 spans 210..1700 Hz —
+  // the note's fundamental at 261 Hz lives there), and a MAKEUP3 swing must
+  // change it a lot; everything stays finite (the meter-scratch parking in
+  // gxfx_mb.cpp keeps the V1..V10 writes off uninitialized pointers).
+  expect('s. fx mbcompressor: ratio-based param sweep reaches the DSP (finite)', () => {
+    mod._obxd_init(48000);
+    mod._fx_set_slot(3, 4, 66);
+    mod._fx_set_enabled(3, 4, 1);
+    mod._obxd_midi_in(3, 0x90, 60, 110);
+    const renderRms = (quanta) => {
+      let s = 0;
+      for (let q = 0; q < quanta; q++) {
+        mod._obxd_render(128);
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(3), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(3), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) return NaN;
+          s += l[i] * l[i] + r[i] * r[i];
+        }
+      }
+      return Math.sqrt(s / (quanta * 256));
+    };
+    const settle = () => renderRms(30); // ~80 ms: attack/release detectors settle
+    // Ratio sweep: RATIO3 (param 17, port 17) 1 (bypass-ish) vs 100 (max).
+    mod._fx_set_param(3, 4, 17, 1);
+    settle();
+    const rmsRatio1 = renderRms(30);
+    mod._fx_set_param(3, 4, 17, 100);
+    settle();
+    const rmsRatio100 = renderRms(30);
+    if (!Number.isFinite(rmsRatio1) || !Number.isFinite(rmsRatio100)) {
+      return `non-finite mb output (ratio 1: ${rmsRatio1}, ratio 100: ${rmsRatio100}) — meter parking broken?`;
+    }
+    if (!(rmsRatio1 > 1e-4)) return `rms at RATIO3=1 too quiet to test: ${rmsRatio1}`;
+    const rel = Math.abs(rmsRatio1 - rmsRatio100) / rmsRatio1;
+    if (!(rel > 0.005)) return `RATIO3 sweep 1→100 changed RMS by only ${(rel * 100).toFixed(3)}% (${rmsRatio1} → ${rmsRatio100}) — param not reaching the DSP`;
+    // Makeup sweep: MAKEUP3 (param 7) 10 dB → -40 dB must audibly cut band 3
+    // (210..1700 Hz). Not a halving — higher harmonics live in bands 4/5 —
+    // but a clear drop that proves the makeup port reaches the DSP too.
+    mod._fx_set_param(3, 4, 7, -40);
+    settle();
+    const rmsCut = renderRms(30);
+    if (!(rmsCut < rmsRatio100 * 0.95)) return `MAKEUP3 -40 dB left RMS at ${((rmsCut / rmsRatio100) * 100).toFixed(1)}% of loud RMS (${rmsRatio100} → ${rmsCut}) — makeup not reaching the DSP`;
+    mod._obxd_midi_in(3, 0x80, 60, 0);
+    mod._obxd_panic(3);
   });
 
   // (s) Drive family spot check (Phase 1-a) ---------------------------------

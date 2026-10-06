@@ -106,6 +106,22 @@ PluginLV2* gxfx_create_tonemodel();
 PluginLV2* gxfx_create_studiopre();
 PluginLV2* gxfx_create_alembic();
 PluginLV2* gxfx_create_w20();
+// multiband + utility family (Phase 1-h): the four gx_mb* bundles + the
+// bundle-local barkgraphiceq live in gxfx_mb.cpp (meters parked on TU-local
+// scratch), the enumeration-audit gx_bmp Big Muff Pi rides gxfx_dsp.cpp
+// (gx_resample dependency), the balance/outputlevel/ampout orphans ride
+// gxfx_mb.cpp, and ampmodul's DSP rides gxfx_dsp_amps.cpp (valve.h table
+// sharing).
+PluginLV2* gxfx_create_mbcompressor();
+PluginLV2* gxfx_create_mbdelay();
+PluginLV2* gxfx_create_mbdistortion();
+PluginLV2* gxfx_create_mbecho();
+PluginLV2* gxfx_create_barkgraphiceq();
+PluginLV2* gxfx_create_bigmuffpi();
+PluginLV2* gxfx_create_balance();
+PluginLV2* gxfx_create_outputlevel();
+PluginLV2* gxfx_create_ampout();
+PluginLV2* gxfx_create_ampmodul();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -174,7 +190,17 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_tonemodel,
     gxfx_create_studiopre,
     gxfx_create_alembic,
-    gxfx_create_w20
+    gxfx_create_w20,
+    gxfx_create_mbcompressor,
+    gxfx_create_mbdelay,
+    gxfx_create_mbdistortion,
+    gxfx_create_mbecho,
+    gxfx_create_barkgraphiceq,
+    gxfx_create_bigmuffpi,
+    gxfx_create_balance,
+    gxfx_create_outputlevel,
+    gxfx_create_ampout,
+    gxfx_create_ampmodul
 };
 
 // Generator↔host drift guard: the factory registry above must list every

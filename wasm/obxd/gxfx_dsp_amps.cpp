@@ -1,7 +1,8 @@
 // OctOBX: Phase 1-g amp + tonestack guitarix family, wrapped headless into
-// one TU (same pattern as gxfx_dsp.cpp). Effect ids 61..65 — same order as
-// the generator manifest (tools/gen-gxfx-params.mjs) and the factory table
-// in gxfx_host.cpp (static_assert-guarded against GXFX_EFFECT_COUNT).
+// one TU (same pattern as gxfx_dsp.cpp). Effect ids 61..65 (plus the
+// Phase 1-h ampmodul at 74 — see its comment below) — same order as the
+// generator manifest (tools/gen-gxfx-params.mjs) and the factory table in
+// gxfx_host.cpp (static_assert-guarded against GXFX_EFFECT_COUNT).
 //
 // valve.h INCLUDE-ONCE TRICK (fx2plan "Amp models"): every gxampN.cc starts
 // with `#include "valve.h"`, which pulls the 14 DSP/tube_tables/*.cc files
@@ -668,11 +669,26 @@ typedef enum { GAIN, LEVEL } PortIndex;
 #include "../../third_party/guitarix/trunk/src/LV2/faust-generated/gx_w20.cc"
 }
 
+// gx_ampmodul ("Postamp" — Phase 1-h UTILITY family, menu-wise; the DSP is
+// a modulation-adjacent tube postamp: two feedback paths around gxamp2's
+// tubec, dry + wet). It lives in THIS TU, not gxfx_mb.cpp, because its .cc
+// #includes "valve.h" (6V6 tables): the table symbols are non-static
+// globals already defined once here at global scope, and a second TU
+// including valve.h would be a duplicate-symbol link error. The include
+// guard neuters the in-namespace include — same trick as the gxampN files.
+// PortIndex = the .cc's trailing enum (FEEDBAC dry-path feedback, FEEDBACK
+// wet-path feedback, LEVEL, HIGHGAIN, TUBE1/TUBE2 stage gains, WET_DRY).
+namespace gxfx_ampmodul {
+typedef enum { FEEDBAC, FEEDBACK, LEVEL, HIGHGAIN, TUBE1, TUBE2, WET_DRY } PortIndex;
+#include "../../third_party/guitarix/trunk/src/LV2/faust-generated/gx_ampmodul.cc"
+}
+
 // namespace paths: gxfx_ampmodel::create() etc. Factory order MUST match the
-// generator manifest order (ids 61..65).
+// generator manifest order (ids 61..65 + the Phase 1-h ampmodul at 74).
 typedef PluginLV2* (*gxfx_factory)();
 PluginLV2* gxfx_create_ampmodel() { return gxfx_ampmodel::create(); }
 PluginLV2* gxfx_create_tonemodel() { return gxfx_tonemodel::create(); }
 PluginLV2* gxfx_create_studiopre() { return gxfx_studiopre_st::gx_studiopre_st::plugin(); }
 PluginLV2* gxfx_create_alembic() { return gxfx_alembic::gx_alembic::plugin(); }
 PluginLV2* gxfx_create_w20() { return gxfx_w20::gx_w20::plugin(); }
+PluginLV2* gxfx_create_ampmodul() { return gxfx_ampmodul::gx_ampmodul::plugin(); }

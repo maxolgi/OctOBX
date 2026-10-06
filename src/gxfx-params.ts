@@ -13,7 +13,7 @@
  * Freshness check:    node tools/gen-gxfx-params.mjs --check   (CI gate)
  */
 
-export const FX_COUNT = 66;
+export const FX_COUNT = 76;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
 export const FX_SLOT_PARAMS = 48;
@@ -40,7 +40,7 @@ export interface FxEffectDef {
     label: string;
     category: FxCategory;
     stereo: boolean;
-    offset: number;    // cumulative param offset into the flat 329-slot mirror
+    offset: number;    // cumulative param offset into the flat 448-slot mirror
     params: FxParamDef[];
 }
 
@@ -48,7 +48,7 @@ export interface FxEffectDef {
  * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →
  * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the
  * Phase-1 additions selectable per slot.
- * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2,11,3,5,12,6,4,12,5,2 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267,269,280,283,288,300,306,310,322,327. */
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2,11,3,5,12,6,4,12,5,2,34,19,15,14,24,3,1,1,1,7 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267,269,280,283,288,300,306,310,322,327,329,363,382,397,411,435,438,439,440,441. */
 export const FX_EFFECTS: FxEffectDef[] = [
     {
         id: 0, key: "wah", label: "Wah", category: "wah", stereo: false, offset: 0,
@@ -709,9 +709,178 @@ export const FX_EFFECTS: FxEffectDef[] = [
             { port: 1, symbol: "level", name: "Level", default: 0.5, min: 0, max: 1, step: 0.01 },
         ],
     },
+    {
+        id: 66, key: "mbcompressor", label: "MB Compressor", category: "multiband", stereo: false, offset: 329,
+        params: [
+            { port: 0, symbol: "MODE1", name: "Mode 1", default: 1, min: 1, max: 3, step: 1, integer: true },
+            { port: 1, symbol: "MODE2", name: "Mode 2", default: 1, min: 1, max: 3, step: 1, integer: true },
+            { port: 2, symbol: "MODE3", name: "Mode 3", default: 1, min: 1, max: 3, step: 1, integer: true },
+            { port: 3, symbol: "MODE4", name: "Mode 4", default: 1, min: 1, max: 3, step: 1, integer: true },
+            { port: 4, symbol: "MODE5", name: "Mode 5", default: 1, min: 1, max: 3, step: 1, integer: true },
+            { port: 5, symbol: "MAKEUP1", name: "Makeup 1", default: 10, min: -50, max: 50, step: 1 },
+            { port: 6, symbol: "MAKEUP2", name: "Makeup 2", default: 10, min: -50, max: 50, step: 1 },
+            { port: 7, symbol: "MAKEUP3", name: "Makeup 3", default: 10, min: -50, max: 50, step: 1 },
+            { port: 8, symbol: "MAKEUP4", name: "Makeup 4", default: 10, min: -50, max: 50, step: 1 },
+            { port: 9, symbol: "MAKEUP5", name: "Makeup 5", default: 10, min: -50, max: 50, step: 1 },
+            { port: 10, symbol: "MAKEUPTHRESHOLD1", name: "Makeup Thresh 1", default: 2, min: 0, max: 10, step: 0.1 },
+            { port: 11, symbol: "MAKEUPTHRESHOLD2", name: "Makeup Thresh 2", default: 2, min: 0, max: 10, step: 0.1 },
+            { port: 12, symbol: "MAKEUPTHRESHOLD3", name: "Makeup Thresh 3", default: 2, min: 0, max: 10, step: 0.1 },
+            { port: 13, symbol: "MAKEUPTHRESHOLD4", name: "Makeup Thresh 4", default: 2, min: 0, max: 10, step: 0.1 },
+            { port: 14, symbol: "MAKEUPTHRESHOLD5", name: "Makeup Thresh 5", default: 2, min: 0, max: 10, step: 0.1 },
+            { port: 15, symbol: "RATIO1", name: "Ratio 1", default: 13, min: 1, max: 100, step: 1 },
+            { port: 16, symbol: "RATIO2", name: "Ratio 2", default: 10, min: 1, max: 100, step: 1 },
+            { port: 17, symbol: "RATIO3", name: "Ratio 3", default: 4, min: 1, max: 100, step: 1 },
+            { port: 18, symbol: "RATIO4", name: "Ratio 4", default: 8, min: 1, max: 100, step: 1 },
+            { port: 19, symbol: "RATIO5", name: "Ratio 5", default: 11, min: 1, max: 100, step: 1 },
+            { port: 20, symbol: "ATTACK1", name: "Attack 1", default: 0.012, min: 0.001, max: 1, step: 0.01 },
+            { port: 21, symbol: "ATTACK2", name: "Attack 2", default: 0.012, min: 0.001, max: 1, step: 0.01 },
+            { port: 22, symbol: "ATTACK3", name: "Attack 3", default: 0.012, min: 0.001, max: 1, step: 0.01 },
+            { port: 23, symbol: "ATTACK4", name: "Attack 4", default: 0.012, min: 0.001, max: 1, step: 0.01 },
+            { port: 24, symbol: "ATTACK5", name: "Attack 5", default: 0.012, min: 0.001, max: 1, step: 0.01 },
+            { port: 25, symbol: "RELEASE1", name: "Release 1", default: 1.25, min: 0.01, max: 10, step: 0.1 },
+            { port: 26, symbol: "RELEASE2", name: "Release 2", default: 1.25, min: 0.01, max: 10, step: 0.1 },
+            { port: 27, symbol: "RELEASE3", name: "Release 3", default: 1.25, min: 0.01, max: 10, step: 0.1 },
+            { port: 28, symbol: "RELEASE4", name: "Release 4", default: 1.25, min: 0.01, max: 10, step: 0.1 },
+            { port: 29, symbol: "RELEASE5", name: "Release 5", default: 1.25, min: 0.01, max: 10, step: 0.1 },
+            { port: 30, symbol: "CROSSOVER_B1_B2", name: "Crossover B1/B2", default: 80, min: 20, max: 20000, step: 10 },
+            { port: 31, symbol: "CROSSOVER_B2_B3", name: "Crossover B2/B3", default: 210, min: 20, max: 20000, step: 10 },
+            { port: 32, symbol: "CROSSOVER_B3_B4", name: "Crossover B3/B4", default: 1700, min: 20, max: 20000, step: 10 },
+            { port: 33, symbol: "CROSSOVER_B4_B5", name: "Crossover B4/B5", default: 5000, min: 20, max: 20000, step: 10 },
+        ],
+    },
+    {
+        id: 67, key: "mbdelay", label: "MB Delay", category: "multiband", stereo: false, offset: 363,
+        params: [
+            { port: 0, symbol: "DELAY1", name: "Delay 1", default: 30, min: 24, max: 360, step: 10 },
+            { port: 1, symbol: "DELAY2", name: "Delay 2", default: 60, min: 24, max: 360, step: 10 },
+            { port: 2, symbol: "DELAY3", name: "Delay 3", default: 90, min: 24, max: 360, step: 10 },
+            { port: 3, symbol: "DELAY4", name: "Delay 4", default: 120, min: 24, max: 360, step: 10 },
+            { port: 4, symbol: "DELAY5", name: "Delay 5", default: 150, min: 24, max: 360, step: 10 },
+            { port: 5, symbol: "FEEDBACK1", name: "Feedback 1", default: 50, min: 1, max: 100, step: 1 },
+            { port: 6, symbol: "FEEDBACK2", name: "Feedback 2", default: 50, min: 1, max: 100, step: 1 },
+            { port: 7, symbol: "FEEDBACK3", name: "Feedback 3", default: 50, min: 1, max: 100, step: 1 },
+            { port: 8, symbol: "FEEDBACK4", name: "Feedback 4", default: 50, min: 1, max: 100, step: 1 },
+            { port: 9, symbol: "FEEDBACK5", name: "Feedback 5", default: 50, min: 1, max: 100, step: 1 },
+            { port: 10, symbol: "GAIN1", name: "Gain 1", default: -10, min: -40, max: 2, step: 1 },
+            { port: 11, symbol: "GAIN2", name: "Gain 2", default: -5, min: -40, max: 2, step: 1 },
+            { port: 12, symbol: "GAIN3", name: "Gain 3", default: -2, min: -40, max: 2, step: 1 },
+            { port: 13, symbol: "GAIN4", name: "Gain 4", default: 0, min: -40, max: 2, step: 1 },
+            { port: 14, symbol: "GAIN5", name: "Gain 5", default: -10, min: -40, max: 2, step: 1 },
+            { port: 15, symbol: "CROSSOVER_B1_B2", name: "Crossover B1/B2", default: 90, min: 20, max: 20000, step: 10 },
+            { port: 16, symbol: "CROSSOVER_B2_B3", name: "Crossover B2/B3", default: 410, min: 20, max: 20000, step: 10 },
+            { port: 17, symbol: "CROSSOVER_B3_B4", name: "Crossover B3/B4", default: 1800, min: 20, max: 20000, step: 10 },
+            { port: 18, symbol: "CROSSOVER_B4_B5", name: "Crossover B4/B5", default: 6153, min: 20, max: 20000, step: 10 },
+        ],
+    },
+    {
+        id: 68, key: "mbdistortion", label: "MB Distortion", category: "multiband", stereo: false, offset: 382,
+        params: [
+            { port: 0, symbol: "DRIVE1", name: "Drive 1", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "DRIVE2", name: "Drive 2", default: 0.25, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "DRIVE3", name: "Drive 3", default: 0.65, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "DRIVE4", name: "Drive 4", default: 0.25, min: 0, max: 1, step: 0.01 },
+            { port: 4, symbol: "DRIVE5", name: "Drive 5", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 5, symbol: "GAIN", name: "Gain", default: -15, min: -40, max: 4, step: 1 },
+            { port: 6, symbol: "OFFSET1", name: "Offset 1", default: 0.17, min: 0, max: 0.5, step: 0.01 },
+            { port: 7, symbol: "OFFSET2", name: "Offset 2", default: 0.2, min: 0, max: 0.5, step: 0.01 },
+            { port: 8, symbol: "OFFSET3", name: "Offset 3", default: 0.2, min: 0, max: 0.5, step: 0.01 },
+            { port: 9, symbol: "OFFSET4", name: "Offset 4", default: 0.2, min: 0, max: 0.5, step: 0.01 },
+            { port: 10, symbol: "OFFSET5", name: "Offset 5", default: 0.17, min: 0, max: 0.5, step: 0.01 },
+            { port: 11, symbol: "CROSSOVER_B1_B2", name: "Crossover B1/B2", default: 80, min: 20, max: 20000, step: 10 },
+            { port: 12, symbol: "CROSSOVER_B2_B3", name: "Crossover B2/B3", default: 210, min: 20, max: 20000, step: 10 },
+            { port: 13, symbol: "CROSSOVER_B3_B4", name: "Crossover B3/B4", default: 1700, min: 20, max: 20000, step: 10 },
+            { port: 14, symbol: "CROSSOVER_B4_B5", name: "Crossover B4/B5", default: 5000, min: 20, max: 20000, step: 10 },
+        ],
+    },
+    {
+        id: 69, key: "mbecho", label: "MB Echo", category: "multiband", stereo: false, offset: 397,
+        params: [
+            { port: 0, symbol: "PERCENT1", name: "Wet 1", default: 10, min: 0, max: 100, step: 1 },
+            { port: 1, symbol: "PERCENT2", name: "Wet 2", default: 30, min: 0, max: 100, step: 1 },
+            { port: 2, symbol: "PERCENT3", name: "Wet 3", default: 45, min: 0, max: 100, step: 1 },
+            { port: 3, symbol: "PERCENT4", name: "Wet 4", default: 20, min: 0, max: 100, step: 1 },
+            { port: 4, symbol: "PERCENT5", name: "Wet 5", default: 0, min: 0, max: 100, step: 1 },
+            { port: 5, symbol: "TIME1", name: "Time 1", default: 30, min: 24, max: 360, step: 10 },
+            { port: 6, symbol: "TIME2", name: "Time 2", default: 60, min: 24, max: 360, step: 10 },
+            { port: 7, symbol: "TIME3", name: "Time 3", default: 120, min: 24, max: 360, step: 10 },
+            { port: 8, symbol: "TIME4", name: "Time 4", default: 150, min: 24, max: 360, step: 10 },
+            { port: 9, symbol: "TIME5", name: "Time 5", default: 240, min: 24, max: 360, step: 10 },
+            { port: 10, symbol: "CROSSOVER_B1_B2", name: "Crossover B1/B2", default: 80, min: 20, max: 20000, step: 10 },
+            { port: 11, symbol: "CROSSOVER_B2_B3", name: "Crossover B2/B3", default: 210, min: 20, max: 20000, step: 10 },
+            { port: 12, symbol: "CROSSOVER_B3_B4", name: "Crossover B3/B4", default: 1700, min: 20, max: 20000, step: 10 },
+            { port: 13, symbol: "CROSSOVER_B4_B5", name: "Crossover B4/B5", default: 5000, min: 20, max: 20000, step: 10 },
+        ],
+    },
+    {
+        id: 70, key: "barkgraphiceq", label: "Bark Graphic EQ", category: "multiband", stereo: false, offset: 411,
+        params: [
+            { port: 0, symbol: "G1", name: "G1", default: 0, min: -30, max: 20, step: 1 },
+            { port: 1, symbol: "G2", name: "G2", default: 0, min: -30, max: 20, step: 1 },
+            { port: 2, symbol: "G3", name: "G3", default: 0, min: -30, max: 20, step: 1 },
+            { port: 3, symbol: "G4", name: "G4", default: 0, min: -30, max: 20, step: 1 },
+            { port: 4, symbol: "G5", name: "G5", default: 0, min: -30, max: 20, step: 1 },
+            { port: 5, symbol: "G6", name: "G6", default: 0, min: -30, max: 20, step: 1 },
+            { port: 6, symbol: "G7", name: "G7", default: 0, min: -30, max: 20, step: 1 },
+            { port: 7, symbol: "G8", name: "G8", default: 0, min: -30, max: 20, step: 1 },
+            { port: 8, symbol: "G9", name: "G9", default: 0, min: -30, max: 20, step: 1 },
+            { port: 9, symbol: "G10", name: "G10", default: 0, min: -30, max: 20, step: 1 },
+            { port: 10, symbol: "G11", name: "G11", default: 0, min: -30, max: 20, step: 1 },
+            { port: 11, symbol: "G12", name: "G12", default: 0, min: -30, max: 20, step: 1 },
+            { port: 12, symbol: "G13", name: "G13", default: 0, min: -30, max: 20, step: 1 },
+            { port: 13, symbol: "G14", name: "G14", default: 0, min: -30, max: 20, step: 1 },
+            { port: 14, symbol: "G15", name: "G15", default: 0, min: -30, max: 20, step: 1 },
+            { port: 15, symbol: "G16", name: "G16", default: 0, min: -30, max: 20, step: 1 },
+            { port: 16, symbol: "G17", name: "G17", default: 0, min: -30, max: 20, step: 1 },
+            { port: 17, symbol: "G18", name: "G18", default: 0, min: -30, max: 20, step: 1 },
+            { port: 18, symbol: "G19", name: "G19", default: 0, min: -30, max: 20, step: 1 },
+            { port: 19, symbol: "G20", name: "G20", default: 0, min: -30, max: 20, step: 1 },
+            { port: 20, symbol: "G21", name: "G21", default: 0, min: -30, max: 20, step: 1 },
+            { port: 21, symbol: "G22", name: "G22", default: 0, min: -30, max: 20, step: 1 },
+            { port: 22, symbol: "G23", name: "G23", default: 0, min: -30, max: 20, step: 1 },
+            { port: 23, symbol: "G24", name: "G24", default: 0, min: -30, max: 20, step: 1 },
+        ],
+    },
+    {
+        id: 71, key: "bigmuffpi", label: "Big Muff Pi", category: "drive", stereo: false, offset: 435,
+        params: [
+            { port: 2, symbol: "SUSTAIN", name: "Sustain", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "TONE", name: "Tone", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 4, symbol: "VOLUME", name: "Volume", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 72, key: "balance", label: "Balance", category: "utility", stereo: true, offset: 438,
+        params: [
+            { port: 0, symbol: "BALANCE", name: "Balance", default: 0, min: -1, max: 1, step: 0.1 },
+        ],
+    },
+    {
+        id: 73, key: "outputlevel", label: "Output Level", category: "utility", stereo: true, offset: 439,
+        params: [
+            { port: 0, symbol: "OUT_MASTER", name: "Level", default: 0, min: -50, max: 4, step: 0.1 },
+        ],
+    },
+    {
+        id: 74, key: "ampout", label: "Amp Out", category: "utility", stereo: false, offset: 440,
+        params: [
+            { port: 0, symbol: "OUT_AMP", name: "Level", default: 0, min: -20, max: 4, step: 0.1 },
+        ],
+    },
+    {
+        id: 75, key: "ampmodul", label: "Postamp", category: "utility", stereo: true, offset: 441,
+        params: [
+            { port: 0, symbol: "FEEDBAC", name: "Dry Feedback", default: 0, min: -1, max: 1, step: 0.01 },
+            { port: 1, symbol: "FEEDBACK", name: "Feedback", default: 0, min: -1, max: 1, step: 0.01 },
+            { port: 2, symbol: "LEVEL", name: "Level", default: -20, min: -40, max: 4, step: 0.1 },
+            { port: 3, symbol: "HIGHGAIN", name: "High Gain", default: 0, min: 0, max: 1, step: 1 },
+            { port: 4, symbol: "TUBE1", name: "Tube 1", default: 6, min: -20, max: 20, step: 0.1 },
+            { port: 5, symbol: "TUBE2", name: "Tube 2", default: 6, min: -20, max: 20, step: 0.1 },
+            { port: 6, symbol: "WET_DRY", name: "Dry/Wet", default: 0, min: -1, max: 1, step: 0.1 },
+        ],
+    },
 ];
 
-export const FX_TOTAL_PARAMS = 329;
+export const FX_TOTAL_PARAMS = 448;
 
 // --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
 

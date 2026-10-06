@@ -4462,6 +4462,1773 @@
           "integer": false
         }
       ]
+    },
+    {
+      "id": 66,
+      "key": "mbcompressor",
+      "label": "MB Compressor",
+      "dsp": "mbcompressor",
+      "stereo": false,
+      "category": "multiband",
+      "out_ports": [
+        {
+          "port": 34,
+          "symbol": "V1",
+          "name": "V1",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 35,
+          "symbol": "V2",
+          "name": "V2",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 36,
+          "symbol": "V3",
+          "name": "V3",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 37,
+          "symbol": "V4",
+          "name": "V4",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 38,
+          "symbol": "V5",
+          "name": "V5",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 39,
+          "symbol": "V6",
+          "name": "V6",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 40,
+          "symbol": "V7",
+          "name": "V7",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 41,
+          "symbol": "V8",
+          "name": "V8",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 42,
+          "symbol": "V9",
+          "name": "V9",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 43,
+          "symbol": "V10",
+          "name": "V10",
+          "min": -70,
+          "max": 4
+        }
+      ],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "MODE1",
+          "name": "Mode 1",
+          "default": 1,
+          "min": 1,
+          "max": 3,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 1,
+          "symbol": "MODE2",
+          "name": "Mode 2",
+          "default": 1,
+          "min": 1,
+          "max": 3,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 2,
+          "symbol": "MODE3",
+          "name": "Mode 3",
+          "default": 1,
+          "min": 1,
+          "max": 3,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 3,
+          "symbol": "MODE4",
+          "name": "Mode 4",
+          "default": 1,
+          "min": 1,
+          "max": 3,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 4,
+          "symbol": "MODE5",
+          "name": "Mode 5",
+          "default": 1,
+          "min": 1,
+          "max": 3,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 5,
+          "symbol": "MAKEUP1",
+          "name": "Makeup 1",
+          "default": 10,
+          "min": -50,
+          "max": 50,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "MAKEUP2",
+          "name": "Makeup 2",
+          "default": 10,
+          "min": -50,
+          "max": 50,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "MAKEUP3",
+          "name": "Makeup 3",
+          "default": 10,
+          "min": -50,
+          "max": 50,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "MAKEUP4",
+          "name": "Makeup 4",
+          "default": 10,
+          "min": -50,
+          "max": 50,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "MAKEUP5",
+          "name": "Makeup 5",
+          "default": 10,
+          "min": -50,
+          "max": 50,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "MAKEUPTHRESHOLD1",
+          "name": "Makeup Thresh 1",
+          "default": 2,
+          "min": 0,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 11,
+          "symbol": "MAKEUPTHRESHOLD2",
+          "name": "Makeup Thresh 2",
+          "default": 2,
+          "min": 0,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 12,
+          "symbol": "MAKEUPTHRESHOLD3",
+          "name": "Makeup Thresh 3",
+          "default": 2,
+          "min": 0,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 13,
+          "symbol": "MAKEUPTHRESHOLD4",
+          "name": "Makeup Thresh 4",
+          "default": 2,
+          "min": 0,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 14,
+          "symbol": "MAKEUPTHRESHOLD5",
+          "name": "Makeup Thresh 5",
+          "default": 2,
+          "min": 0,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 15,
+          "symbol": "RATIO1",
+          "name": "Ratio 1",
+          "default": 13,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 16,
+          "symbol": "RATIO2",
+          "name": "Ratio 2",
+          "default": 10,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 17,
+          "symbol": "RATIO3",
+          "name": "Ratio 3",
+          "default": 4,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 18,
+          "symbol": "RATIO4",
+          "name": "Ratio 4",
+          "default": 8,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 19,
+          "symbol": "RATIO5",
+          "name": "Ratio 5",
+          "default": 11,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 20,
+          "symbol": "ATTACK1",
+          "name": "Attack 1",
+          "default": 0.012,
+          "min": 0.001,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 21,
+          "symbol": "ATTACK2",
+          "name": "Attack 2",
+          "default": 0.012,
+          "min": 0.001,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 22,
+          "symbol": "ATTACK3",
+          "name": "Attack 3",
+          "default": 0.012,
+          "min": 0.001,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 23,
+          "symbol": "ATTACK4",
+          "name": "Attack 4",
+          "default": 0.012,
+          "min": 0.001,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 24,
+          "symbol": "ATTACK5",
+          "name": "Attack 5",
+          "default": 0.012,
+          "min": 0.001,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 25,
+          "symbol": "RELEASE1",
+          "name": "Release 1",
+          "default": 1.25,
+          "min": 0.01,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 26,
+          "symbol": "RELEASE2",
+          "name": "Release 2",
+          "default": 1.25,
+          "min": 0.01,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 27,
+          "symbol": "RELEASE3",
+          "name": "Release 3",
+          "default": 1.25,
+          "min": 0.01,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 28,
+          "symbol": "RELEASE4",
+          "name": "Release 4",
+          "default": 1.25,
+          "min": 0.01,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 29,
+          "symbol": "RELEASE5",
+          "name": "Release 5",
+          "default": 1.25,
+          "min": 0.01,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 30,
+          "symbol": "CROSSOVER_B1_B2",
+          "name": "Crossover B1/B2",
+          "default": 80,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 31,
+          "symbol": "CROSSOVER_B2_B3",
+          "name": "Crossover B2/B3",
+          "default": 210,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 32,
+          "symbol": "CROSSOVER_B3_B4",
+          "name": "Crossover B3/B4",
+          "default": 1700,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 33,
+          "symbol": "CROSSOVER_B4_B5",
+          "name": "Crossover B4/B5",
+          "default": 5000,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 67,
+      "key": "mbdelay",
+      "label": "MB Delay",
+      "dsp": "mbdelay",
+      "stereo": false,
+      "category": "multiband",
+      "out_ports": [
+        {
+          "port": 19,
+          "symbol": "V1",
+          "name": "V1",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 20,
+          "symbol": "V2",
+          "name": "V2",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 21,
+          "symbol": "V3",
+          "name": "V3",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 22,
+          "symbol": "V4",
+          "name": "V4",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 23,
+          "symbol": "V5",
+          "name": "V5",
+          "min": -70,
+          "max": 4
+        }
+      ],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "DELAY1",
+          "name": "Delay 1",
+          "default": 30,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "DELAY2",
+          "name": "Delay 2",
+          "default": 60,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "DELAY3",
+          "name": "Delay 3",
+          "default": 90,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "DELAY4",
+          "name": "Delay 4",
+          "default": 120,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "DELAY5",
+          "name": "Delay 5",
+          "default": 150,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "FEEDBACK1",
+          "name": "Feedback 1",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "FEEDBACK2",
+          "name": "Feedback 2",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "FEEDBACK3",
+          "name": "Feedback 3",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "FEEDBACK4",
+          "name": "Feedback 4",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "FEEDBACK5",
+          "name": "Feedback 5",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "GAIN1",
+          "name": "Gain 1",
+          "default": -10,
+          "min": -40,
+          "max": 2,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 11,
+          "symbol": "GAIN2",
+          "name": "Gain 2",
+          "default": -5,
+          "min": -40,
+          "max": 2,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 12,
+          "symbol": "GAIN3",
+          "name": "Gain 3",
+          "default": -2,
+          "min": -40,
+          "max": 2,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 13,
+          "symbol": "GAIN4",
+          "name": "Gain 4",
+          "default": 0,
+          "min": -40,
+          "max": 2,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 14,
+          "symbol": "GAIN5",
+          "name": "Gain 5",
+          "default": -10,
+          "min": -40,
+          "max": 2,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 15,
+          "symbol": "CROSSOVER_B1_B2",
+          "name": "Crossover B1/B2",
+          "default": 90,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 16,
+          "symbol": "CROSSOVER_B2_B3",
+          "name": "Crossover B2/B3",
+          "default": 410,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 17,
+          "symbol": "CROSSOVER_B3_B4",
+          "name": "Crossover B3/B4",
+          "default": 1800,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 18,
+          "symbol": "CROSSOVER_B4_B5",
+          "name": "Crossover B4/B5",
+          "default": 6153,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 68,
+      "key": "mbdistortion",
+      "label": "MB Distortion",
+      "dsp": "mbdistortion",
+      "stereo": false,
+      "category": "multiband",
+      "out_ports": [
+        {
+          "port": 15,
+          "symbol": "V1",
+          "name": "V1",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 16,
+          "symbol": "V2",
+          "name": "V2",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 17,
+          "symbol": "V3",
+          "name": "V3",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 18,
+          "symbol": "V4",
+          "name": "V4",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 19,
+          "symbol": "V5",
+          "name": "V5",
+          "min": -70,
+          "max": 4
+        }
+      ],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "DRIVE1",
+          "name": "Drive 1",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "DRIVE2",
+          "name": "Drive 2",
+          "default": 0.25,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "DRIVE3",
+          "name": "Drive 3",
+          "default": 0.65,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "DRIVE4",
+          "name": "Drive 4",
+          "default": 0.25,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "DRIVE5",
+          "name": "Drive 5",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "GAIN",
+          "name": "Gain",
+          "default": -15,
+          "min": -40,
+          "max": 4,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "OFFSET1",
+          "name": "Offset 1",
+          "default": 0.17,
+          "min": 0,
+          "max": 0.5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "OFFSET2",
+          "name": "Offset 2",
+          "default": 0.2,
+          "min": 0,
+          "max": 0.5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "OFFSET3",
+          "name": "Offset 3",
+          "default": 0.2,
+          "min": 0,
+          "max": 0.5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "OFFSET4",
+          "name": "Offset 4",
+          "default": 0.2,
+          "min": 0,
+          "max": 0.5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "OFFSET5",
+          "name": "Offset 5",
+          "default": 0.17,
+          "min": 0,
+          "max": 0.5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 11,
+          "symbol": "CROSSOVER_B1_B2",
+          "name": "Crossover B1/B2",
+          "default": 80,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 12,
+          "symbol": "CROSSOVER_B2_B3",
+          "name": "Crossover B2/B3",
+          "default": 210,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 13,
+          "symbol": "CROSSOVER_B3_B4",
+          "name": "Crossover B3/B4",
+          "default": 1700,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 14,
+          "symbol": "CROSSOVER_B4_B5",
+          "name": "Crossover B4/B5",
+          "default": 5000,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 69,
+      "key": "mbecho",
+      "label": "MB Echo",
+      "dsp": "mbecho",
+      "stereo": false,
+      "category": "multiband",
+      "out_ports": [
+        {
+          "port": 14,
+          "symbol": "V1",
+          "name": "V1",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 15,
+          "symbol": "V2",
+          "name": "V2",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 16,
+          "symbol": "V3",
+          "name": "V3",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 17,
+          "symbol": "V4",
+          "name": "V4",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 18,
+          "symbol": "V5",
+          "name": "V5",
+          "min": -70,
+          "max": 4
+        }
+      ],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "PERCENT1",
+          "name": "Wet 1",
+          "default": 10,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "PERCENT2",
+          "name": "Wet 2",
+          "default": 30,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "PERCENT3",
+          "name": "Wet 3",
+          "default": 45,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "PERCENT4",
+          "name": "Wet 4",
+          "default": 20,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "PERCENT5",
+          "name": "Wet 5",
+          "default": 0,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "TIME1",
+          "name": "Time 1",
+          "default": 30,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "TIME2",
+          "name": "Time 2",
+          "default": 60,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "TIME3",
+          "name": "Time 3",
+          "default": 120,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "TIME4",
+          "name": "Time 4",
+          "default": 150,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "TIME5",
+          "name": "Time 5",
+          "default": 240,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "CROSSOVER_B1_B2",
+          "name": "Crossover B1/B2",
+          "default": 80,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 11,
+          "symbol": "CROSSOVER_B2_B3",
+          "name": "Crossover B2/B3",
+          "default": 210,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 12,
+          "symbol": "CROSSOVER_B3_B4",
+          "name": "Crossover B3/B4",
+          "default": 1700,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 13,
+          "symbol": "CROSSOVER_B4_B5",
+          "name": "Crossover B4/B5",
+          "default": 5000,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 70,
+      "key": "barkgraphiceq",
+      "label": "Bark Graphic EQ",
+      "dsp": "barkgraphiceq",
+      "stereo": false,
+      "category": "multiband",
+      "out_ports": [
+        {
+          "port": 24,
+          "symbol": "V1",
+          "name": "V1",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 25,
+          "symbol": "V2",
+          "name": "V2",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 26,
+          "symbol": "V3",
+          "name": "V3",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 27,
+          "symbol": "V4",
+          "name": "V4",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 28,
+          "symbol": "V5",
+          "name": "V5",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 29,
+          "symbol": "V6",
+          "name": "V6",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 30,
+          "symbol": "V7",
+          "name": "V7",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 31,
+          "symbol": "V8",
+          "name": "V8",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 32,
+          "symbol": "V9",
+          "name": "V9",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 33,
+          "symbol": "V10",
+          "name": "V10",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 34,
+          "symbol": "V11",
+          "name": "V11",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 35,
+          "symbol": "V12",
+          "name": "V12",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 36,
+          "symbol": "V13",
+          "name": "V13",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 37,
+          "symbol": "V14",
+          "name": "V14",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 38,
+          "symbol": "V15",
+          "name": "V15",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 39,
+          "symbol": "V16",
+          "name": "V16",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 40,
+          "symbol": "V17",
+          "name": "V17",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 41,
+          "symbol": "V18",
+          "name": "V18",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 42,
+          "symbol": "V19",
+          "name": "V19",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 43,
+          "symbol": "V20",
+          "name": "V20",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 44,
+          "symbol": "V21",
+          "name": "V21",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 45,
+          "symbol": "V22",
+          "name": "V22",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 46,
+          "symbol": "V23",
+          "name": "V23",
+          "min": -40,
+          "max": 4
+        },
+        {
+          "port": 47,
+          "symbol": "V24",
+          "name": "V24",
+          "min": -40,
+          "max": 4
+        }
+      ],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "G1",
+          "name": "G1",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "G2",
+          "name": "G2",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "G3",
+          "name": "G3",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "G4",
+          "name": "G4",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "G5",
+          "name": "G5",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "G6",
+          "name": "G6",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "G7",
+          "name": "G7",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "G8",
+          "name": "G8",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "G9",
+          "name": "G9",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "G10",
+          "name": "G10",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "G11",
+          "name": "G11",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 11,
+          "symbol": "G12",
+          "name": "G12",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 12,
+          "symbol": "G13",
+          "name": "G13",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 13,
+          "symbol": "G14",
+          "name": "G14",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 14,
+          "symbol": "G15",
+          "name": "G15",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 15,
+          "symbol": "G16",
+          "name": "G16",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 16,
+          "symbol": "G17",
+          "name": "G17",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 17,
+          "symbol": "G18",
+          "name": "G18",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 18,
+          "symbol": "G19",
+          "name": "G19",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 19,
+          "symbol": "G20",
+          "name": "G20",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 20,
+          "symbol": "G21",
+          "name": "G21",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 21,
+          "symbol": "G22",
+          "name": "G22",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 22,
+          "symbol": "G23",
+          "name": "G23",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 23,
+          "symbol": "G24",
+          "name": "G24",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 71,
+      "key": "bigmuffpi",
+      "label": "Big Muff Pi",
+      "dsp": "bigmuffpi",
+      "stereo": false,
+      "category": "drive",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 2,
+          "symbol": "SUSTAIN",
+          "name": "Sustain",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "TONE",
+          "name": "Tone",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "VOLUME",
+          "name": "Volume",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 72,
+      "key": "balance",
+      "label": "Balance",
+      "dsp": "balance",
+      "stereo": true,
+      "category": "utility",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "BALANCE",
+          "name": "Balance",
+          "default": 0,
+          "min": -1,
+          "max": 1,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 73,
+      "key": "outputlevel",
+      "label": "Output Level",
+      "dsp": "outputlevel",
+      "stereo": true,
+      "category": "utility",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "OUT_MASTER",
+          "name": "Level",
+          "default": 0,
+          "min": -50,
+          "max": 4,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 74,
+      "key": "ampout",
+      "label": "Amp Out",
+      "dsp": "ampout",
+      "stereo": false,
+      "category": "utility",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "OUT_AMP",
+          "name": "Level",
+          "default": 0,
+          "min": -20,
+          "max": 4,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 75,
+      "key": "ampmodul",
+      "label": "Postamp",
+      "dsp": "ampmodul",
+      "stereo": true,
+      "category": "utility",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "FEEDBAC",
+          "name": "Dry Feedback",
+          "default": 0,
+          "min": -1,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "FEEDBACK",
+          "name": "Feedback",
+          "default": 0,
+          "min": -1,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "LEVEL",
+          "name": "Level",
+          "default": -20,
+          "min": -40,
+          "max": 4,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "HIGHGAIN",
+          "name": "High Gain",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "TUBE1",
+          "name": "Tube 1",
+          "default": 6,
+          "min": -20,
+          "max": 20,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "TUBE2",
+          "name": "Tube 2",
+          "default": 6,
+          "min": -20,
+          "max": 20,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "WET_DRY",
+          "name": "Dry/Wet",
+          "default": 0,
+          "min": -1,
+          "max": 1,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
     }
   ]
 }

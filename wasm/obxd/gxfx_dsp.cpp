@@ -81,6 +81,19 @@ typedef enum { WET_DRY, LFOFREQ, ROOMSIZE, DAMP, INVERT, EFFECTS_OUTPUT, EFFECTS
 #include "../../third_party/guitarix/trunk/src/LV2/faust-generated/stereoverb.cc"
 }
 
+// gx_bmp.lv2 — "GxBigMuffPi" (Phase 1-h enumeration-audit find: a real,
+// working insert the plan's lists never enumerate; NOT the gx_fuzz
+// composite's bmfp part, and distinct from gx_muff — the full Big Muff PI
+// circuit with the SUSTAIN stage). Rides THIS TU because its .cc uses
+// gx_resample::FixedRateResampler like bossds1 — gx_resampler.cc + the
+// zita resampler sources are link-complete here only (a second TU pulling
+// them would duplicate the zita symbols). PortIndex from
+// gx_bmp.lv2/gx_bmp.h (audio pair first, params at ttl indexes 2..4).
+namespace gxfx_bmp {
+typedef enum { EFFECTS_OUTPUT, EFFECTS_INPUT, SUSTAIN, TONE, VOLUME } PortIndex;
+#include "../../third_party/guitarix/trunk/src/LV2/faust-generated/bmp.cc"
+}
+
 // namespace paths: gxfx_wah::gcb_95::plugin() etc.
 typedef PluginLV2* (*gxfx_factory)();
 PluginLV2* gxfx_create_wah() { return gxfx_wah::gcb_95::plugin(); }
@@ -94,3 +107,4 @@ PluginLV2* gxfx_create_tremolo() { return gxfx_tremolo::tremolo::plugin(); }
 PluginLV2* gxfx_create_delay() { return gxfx_delay::stereodelay::plugin(); }
 PluginLV2* gxfx_create_echo() { return gxfx_echo::stereoecho::plugin(); }
 PluginLV2* gxfx_create_reverb() { return gxfx_reverb::stereoverb::plugin(); }
+PluginLV2* gxfx_create_bigmuffpi() { return gxfx_bmp::bmp::plugin(); }

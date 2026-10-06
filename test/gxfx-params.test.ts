@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(66);
+        expect(FX_COUNT).toBe(76);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -116,6 +116,11 @@ describe("gxfx-params — layout invariants", () => {
             "amp",                                       // ampmodel (aggregate)
             "tonestack",                                 // tonestack (aggregate)
             "amp", "amp", "amp",                         // studiopre, alembic, w20
+            // Phase 1-h multiband family (66..70)
+            "multiband", "multiband", "multiband", "multiband", "multiband", // mbcompressor..barkgraphiceq
+            // Phase 1-h enumeration-audit find + utility family (71..75)
+            "drive",                                       // bigmuffpi (gx_bmp)
+            "utility", "utility", "utility", "utility", // balance, outputlevel, ampout, ampmodul
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -123,14 +128,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 329", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 448", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(329);
-        expect(FX_TOTAL_PARAMS).toBe(329);
+        expect(running).toBe(448);
+        expect(FX_TOTAL_PARAMS).toBe(448);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -200,16 +205,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..65", () => {
-        for (let i = 0; i < 66; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..75", () => {
+        for (let i = 0; i < 76; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(66)).toBe(false);
+        expect(isFxId(76)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(66, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(76, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -768,5 +773,110 @@ describe("gxfx-params — Phase 1-g amp + tonestack family additions", () => {
         expect(w20.params.map((p) => p.port)).toEqual([0, 1]);
         expect(w20.params[0]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.01 });
         expect(w20.params[1]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.01 });
+    });
+});
+
+describe("gxfx-params — Phase 1-h multiband + utility family additions", () => {
+    it("mbcompressor (ttl, mono): 34 params in ttl port order, 10 meter OUT ports kept out of the mirror", () => {
+        const fx = FX_EFFECTS[66];
+        expect(fx.key).toBe("mbcompressor");
+        expect(fx.label).toBe("MB Compressor");
+        expect(fx.category).toBe("multiband");
+        expect(fx.stereo).toBe(false);
+        expect(fx.params).toHaveLength(34); // tree's 2nd-largest effect (livelooper is 39)
+        expect(fx.params.slice(0, 5).map((p) => p.symbol)).toEqual(["MODE1", "MODE2", "MODE3", "MODE4", "MODE5"]);
+        expect(fx.params.slice(0, 5).map((p) => p.name)).toEqual(["Mode 1", "Mode 2", "Mode 3", "Mode 4", "Mode 5"]);
+        expect(fx.params[15]).toMatchObject({ port: 15, symbol: "RATIO1", default: 13, min: 1, max: 100 });
+        expect(fx.params[20]).toMatchObject({ symbol: "ATTACK1", default: 0.012, min: 0.001, max: 1, step: 0.01 });
+        expect(fx.params[30]).toMatchObject({ port: 30, symbol: "CROSSOVER_B1_B2", name: "Crossover B1/B2", default: 80, min: 20, max: 20000 });
+        expect(fx.params[0]).toMatchObject({ integer: true, step: 1 }); // lv2:integer MODE
+        // Meters are declared as spec out_ports (graphiceq precedent), never params.
+        const specFx = spec.effects[66];
+        expect(specFx.out_ports.map((p) => p.symbol)).toEqual(["V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V10"]);
+        expect(fx.params.some((p) => p.symbol.startsWith("V"))).toBe(false);
+    });
+
+    it("mbdelay/mbdistortion/mbecho: ttl ports; shared crossover labels; per-band params", () => {
+        const del = FX_EFFECTS[67];
+        expect(del.key).toBe("mbdelay");
+        expect(del.params).toHaveLength(19);
+        expect(del.params.map((p) => p.symbol)).toEqual([
+            "DELAY1", "DELAY2", "DELAY3", "DELAY4", "DELAY5",
+            "FEEDBACK1", "FEEDBACK2", "FEEDBACK3", "FEEDBACK4", "FEEDBACK5",
+            "GAIN1", "GAIN2", "GAIN3", "GAIN4", "GAIN5",
+            "CROSSOVER_B1_B2", "CROSSOVER_B2_B3", "CROSSOVER_B3_B4", "CROSSOVER_B4_B5",
+        ]);
+        expect(del.params[0]).toMatchObject({ default: 30, min: 24, max: 360 });
+        expect(spec.effects[67].out_ports).toHaveLength(5);
+
+        const dist = FX_EFFECTS[68];
+        expect(dist.key).toBe("mbdistortion");
+        expect(dist.params).toHaveLength(15);
+        expect(dist.params[5]).toMatchObject({ symbol: "GAIN", default: -15, min: -40, max: 4 });
+        expect(dist.params[6]).toMatchObject({ symbol: "OFFSET1", default: 0.17, min: 0, max: 0.5, step: 0.01 });
+        expect(spec.effects[68].out_ports).toHaveLength(5);
+
+        const echo = FX_EFFECTS[69];
+        expect(echo.key).toBe("mbecho");
+        expect(echo.params).toHaveLength(14);
+        expect(echo.params.slice(0, 5).map((p) => p.name)).toEqual(["Wet 1", "Wet 2", "Wet 3", "Wet 4", "Wet 5"]);
+        expect(echo.params[5]).toMatchObject({ symbol: "TIME1", default: 30, min: 24, max: 360 });
+        expect(spec.effects[69].out_ports).toHaveLength(5);
+    });
+
+    it("barkgraphiceq (bundle-local dsp, mono): 24 band gains G1..G24, 24 meter OUT ports, labels consistent with graphiceq", () => {
+        const fx = FX_EFFECTS[70];
+        expect(fx.key).toBe("barkgraphiceq");
+        expect(fx.label).toBe("Bark Graphic EQ");
+        expect(fx.category).toBe("multiband");
+        expect(fx.stereo).toBe(false);
+        expect(fx.params).toHaveLength(24);
+        expect(fx.params.map((p) => p.symbol)).toEqual(Array.from({ length: 24 }, (_, i) => `G${i + 1}`));
+        // NO G overrides: graphiceq id 28 pins "G1".."G11" — bark stays consistent.
+        expect(fx.params.map((p) => p.name)).toEqual(Array.from({ length: 24 }, (_, i) => `G${i + 1}`));
+        expect(fx.params[0]).toMatchObject({ default: 0, min: -30, max: 20 });
+        expect(spec.effects[70].out_ports).toHaveLength(24);
+        expect(spec.effects[70].out_ports.map((p) => p.symbol)).toEqual(Array.from({ length: 24 }, (_, i) => `V${i + 1}`));
+    });
+
+    it("utility orphans: balance/outputlevel (native stereo), ampout (mono), ampmodul (7 params)", () => {
+        const bmp = FX_EFFECTS[71];
+        expect(bmp.key).toBe("bigmuffpi");
+        expect(bmp.label).toBe("Big Muff Pi");
+        expect(bmp.category).toBe("drive");
+        expect(bmp.stereo).toBe(false);
+        expect(bmp.params.map((p) => p.symbol)).toEqual(["SUSTAIN", "TONE", "VOLUME"]);
+        expect(bmp.params.map((p) => p.name)).toEqual(["Sustain", "Tone", "Volume"]);
+        expect(bmp.params.map((p) => p.port)).toEqual([2, 3, 4]); // audio ports first in the wrapper enum
+        expect(bmp.params.every((p) => p.default === 0.5 && p.min === 0 && p.max === 1)).toBe(true);
+        expect(spec.effects[71].out_ports).toEqual([]);
+
+        const bal = FX_EFFECTS[72];
+        expect(bal.key).toBe("balance");
+        expect(bal.category).toBe("utility");
+        expect(bal.stereo).toBe(true); // stereo_audio only — override, not dual-mono
+        expect(bal.params).toEqual([{ port: 0, symbol: "BALANCE", name: "Balance", default: 0, min: -1, max: 1, step: 0.1 }]);
+
+        const lvl = FX_EFFECTS[73];
+        expect(lvl.key).toBe("outputlevel");
+        expect(lvl.label).toBe("Output Level");
+        expect(lvl.stereo).toBe(true);
+        expect(lvl.params[0]).toMatchObject({ port: 0, symbol: "OUT_MASTER", name: "Level", default: 0, min: -50, max: 4, step: 0.1 });
+
+        const amp = FX_EFFECTS[74];
+        expect(amp.key).toBe("ampout");
+        expect(amp.stereo).toBe(false); // mono_audio — dual-mono host
+        expect(amp.params[0]).toMatchObject({ port: 0, symbol: "OUT_AMP", name: "Level", default: 0, min: -20, max: 4, step: 0.1 });
+
+        const mod = FX_EFFECTS[75];
+        expect(mod.key).toBe("ampmodul");
+        expect(mod.label).toBe("Postamp");
+        expect(mod.category).toBe("utility");
+        expect(mod.stereo).toBe(true);
+        expect(mod.params.map((p) => p.symbol)).toEqual(["FEEDBAC", "FEEDBACK", "LEVEL", "HIGHGAIN", "TUBE1", "TUBE2", "WET_DRY"]);
+        expect(mod.params.map((p) => p.name)).toEqual(["Dry Feedback", "Feedback", "Level", "High Gain", "Tube 1", "Tube 2", "Dry/Wet"]);
+        expect(mod.params[0]).toMatchObject({ default: 0, min: -1, max: 1, step: 0.01 });
+        expect(mod.params[2]).toMatchObject({ default: -20, min: -40, max: 4, step: 0.1 });
+        expect(mod.params[4]).toMatchObject({ default: 6, min: -20, max: 20, step: 0.1 });
     });
 });

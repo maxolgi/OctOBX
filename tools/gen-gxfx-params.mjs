@@ -214,6 +214,43 @@ const V1_KEYS = Object.keys(V1_CATEGORY_BY_KEY);
 // family), gxmetal_amp/gxmetal_head (Phase 2 cab_data convolution),
 // gx_preamp.cc (references gx_head engine headers), jcm800pre (Phase 4,
 // Eigen).
+// Phase 1-h ships the multiband + utility family (gxfx_mb.cpp + one
+// ampmodul namespace in gxfx_dsp_amps.cpp) — the LAST Phase 1 family.
+// Multiband: the four gx_mb* bundles over the faust mbc/mbdel/mbd/mbe
+// classes (mbcompressor is the tree's 2nd-largest effect at 34 params) and
+// gx_barkgraphiceq (24-band bark-scale EQ over the bundle-LOCAL
+// barkgraphiceq.cc + orfanidis_eq.h + bark_freq_grid.h). All five carry
+// meter/bar OUTPUT ports (declared in out_ports, parked on TU-local scratch
+// by the factories — graphiceq precedent; NEVER params). NO gx_mbclipper
+// exists in the tree; gx_mbreverb.lv2/mbreverb~old.cc is a dead file not
+// built upstream (faust-generated/mbreverb.cc = Phase 2 per fx2plan).
+// Utility orphans: balance, gx_outputlevel (NOT the _ladspa variant — that
+// one is only referenced by src/ladspa/ladspa_guitarix.cpp; the LV2/v1-era
+// tree uses gx_outputlevel.cc), gx_ampout (same rule), and gx_ampmodul
+// ("Postamp", fx2plan's utility assignment; amplitude-modulation-adjacent
+// tube postamp with dry/wet feedback paths). gx_ampmodul rides the AMPS TU
+// because it #includes valve.h (6V6 tables) — valve.h's table symbols are
+// non-static globals already defined in gxfx_dsp_amps.cpp, and a second TU
+// including valve.h would be a duplicate-symbol link error.
+// The closing enumeration audit (ls of trunk/src/LV2/ + the faust-generated
+// orphans, cross-checked against the manifest) found exactly ONE real
+// working insert the plan lists had missed: gx_bmp (GxBigMuffPi) — shipped
+// here. Everything else still unshipped is deliberately left: Phase 2
+// (convolver/FFT: gx_cabinet, gx_redeye+chumps, gxmetal_amp/head, gx_detune,
+// gxtuner, impulseresponse.cc orphan), Phase 3 (gx_livelooper), Phase 4
+// (gx_jcm800pre(_st), Eigen), plan-default composite skips (gx_fuzz =
+// bmfp+lowpass_up+lowpass_down+noiser chain, gxbooster = bassbooster+
+// highbooster — shipped as its parts, gxtilttone = tone+noiser chain),
+// optional-skips (biquad, gx_distortion, gx_feedback orphans; gxfeed is not
+// in the plan's enumeration either), wrapper companions (noiser/
+// stereo_noiser, low_high_cut, uniBar), duplicates of shipped variants
+// (gx_outputlevel_ladspa/gx_ampout_ladspa LADSPA builds, gxampN_stereo,
+// tonestack mono variants, colbwah/jenbasswah/rolwah outside wah.h's 7-model
+// set, flanger_mono, faust autowah.cc superseded by the bundle's
+// dunwahauto), dead/unreferenced files (gx_mbreverb.lv2/mbreverb~old.cc not
+// built upstream; faust mbreverb.cc referenced only by it), gx_preamp.cc
+// (references gx_head engine headers), gx_amp_stereo (wrapper-only over the
+// canonical mono gxamp).
 // ---------------------------------------------------------------------------
 const MANIFEST = [
     // --- v1 eleven (ids 0..10) — pinned data, canonical default chain ---
@@ -340,6 +377,36 @@ const MANIFEST = [
     { key: 'studiopre', menuName: 'Studio Pre', category: 'amp', ttl: 'gx_studiopre_st.lv2/gx_studiopre_st.ttl' },
     { key: 'alembic', menuName: 'Alembic Pre', category: 'amp', ttl: 'gx_alembic.lv2/gx_alembic.ttl' },
     { key: 'w20', menuName: 'W20 Pre', category: 'amp', ttl: 'gx_w20.lv2/gx_w20.ttl' },
+
+    // --- Phase 1-h: multiband family (gxfx_mb.cpp) ---
+    // The gx_mb* bundles wrap the faust mbc/mbdel/mbd/mbe classes; ttl port
+    // space = the wrapper enums from the gx_mb*.h headers. Meter OUTPUT
+    // ports (V*) land in out_ports; the factories park them on TU-local
+    // scratch (unconditional #define-deref in compute — graphiceq
+    // precedent). barkgraphiceq's DSP is bundle-LOCAL (barkgraphiceq.cc +
+    // orfanidis_eq.h + bark_freq_grid.h) like vibe/duck_delay.
+    { key: 'mbcompressor', menuName: 'MB Compressor', category: 'multiband', ttl: 'gx_mbcompressor.lv2/gx_mbcompressor.ttl' },
+    { key: 'mbdelay', menuName: 'MB Delay', category: 'multiband', ttl: 'gx_mbdelay.lv2/gx_mbdelay.ttl' },
+    { key: 'mbdistortion', menuName: 'MB Distortion', category: 'multiband', ttl: 'gx_mbdistortion.lv2/gx_mbdistortion.ttl' },
+    { key: 'mbecho', menuName: 'MB Echo', category: 'multiband', ttl: 'gx_mbecho.lv2/gx_mbecho.ttl' },
+    { key: 'barkgraphiceq', menuName: 'Bark Graphic EQ', category: 'multiband', ttl: 'gx_barkgraphiceq.lv2/gx_barkgraphiceq.ttl' },
+
+    // gx_bmp ("GxBigMuffPi") — found by the Phase 1-h closing enumeration
+    // audit: a real, working, plain-class insert the plan's own lists never
+    // enumerate (distinct from gx_muff: the Big Muff PI circuit with the
+    // extra SUSTAIN stage; NOT the gx_fuzz composite's bmfp part). Menu
+    // category drive; DSP rides gxfx_mb.cpp.
+    { key: 'bigmuffpi', menuName: 'Big Muff Pi', category: 'drive', ttl: 'gx_bmp.lv2/gx_bmp.ttl' },
+
+    // --- Phase 1-h: utility family ---
+    // Orphan classes; balance/gx_outputlevel are natively 2-in/2-out
+    // (stereo_audio only) so `stereo: true` overrides the orphan default;
+    // gx_ampout is mono (dual-mono host). gx_ampmodul's DSP rides
+    // gxfx_dsp_amps.cpp (valve.h table sharing — see the manifest header).
+    { key: 'balance', menuName: 'Balance', category: 'utility', orphan: 'balance.cc', stereo: true },
+    { key: 'outputlevel', menuName: 'Output Level', category: 'utility', orphan: 'gx_outputlevel.cc', stereo: true },
+    { key: 'ampout', menuName: 'Amp Out', category: 'utility', orphan: 'gx_ampout.cc' },
+    { key: 'ampmodul', menuName: 'Postamp', category: 'utility', orphan: 'gx_ampmodul.cc', stereo: true },
 
 ];
 
@@ -618,6 +685,39 @@ const LABEL_OVERRIDES = {
     // gx_studiopre_st.ttl port 12 carries upstream's name typo "master_L"
     // on the R-channel master — key the symbol, not the name.
     master_r: 'Master R',
+    // --- Phase 1-h multiband + utility family (keys chosen to NOT collide
+    // with any symbol/name of effects 0..65 — regeneration keeps those
+    // byte-identical; deliberately NO G1..G24 overrides: graphiceq id 28
+    // pins "G1".."G11" band labels and bark stays consistent with it;
+    // WET_DRY/HIGHGAIN/LEVEL reuse existing overrides/titleCase) ---
+    // gx_mbcompressor (digit-suffixed ttl symbols titleCase to "Mode1" etc.)
+    MODE1: 'Mode 1', MODE2: 'Mode 2', MODE3: 'Mode 3', MODE4: 'Mode 4', MODE5: 'Mode 5',
+    MAKEUP1: 'Makeup 1', MAKEUP2: 'Makeup 2', MAKEUP3: 'Makeup 3', MAKEUP4: 'Makeup 4', MAKEUP5: 'Makeup 5',
+    MAKEUPTHRESHOLD1: 'Makeup Thresh 1', MAKEUPTHRESHOLD2: 'Makeup Thresh 2',
+    MAKEUPTHRESHOLD3: 'Makeup Thresh 3', MAKEUPTHRESHOLD4: 'Makeup Thresh 4',
+    MAKEUPTHRESHOLD5: 'Makeup Thresh 5',
+    RATIO1: 'Ratio 1', RATIO2: 'Ratio 2', RATIO3: 'Ratio 3', RATIO4: 'Ratio 4', RATIO5: 'Ratio 5',
+    ATTACK1: 'Attack 1', ATTACK2: 'Attack 2', ATTACK3: 'Attack 3', ATTACK4: 'Attack 4', ATTACK5: 'Attack 5',
+    RELEASE1: 'Release 1', RELEASE2: 'Release 2', RELEASE3: 'Release 3', RELEASE4: 'Release 4', RELEASE5: 'Release 5',
+    // gx_mbdelay
+    DELAY1: 'Delay 1', DELAY2: 'Delay 2', DELAY3: 'Delay 3', DELAY4: 'Delay 4', DELAY5: 'Delay 5',
+    FEEDBACK1: 'Feedback 1', FEEDBACK2: 'Feedback 2', FEEDBACK3: 'Feedback 3', FEEDBACK4: 'Feedback 4', FEEDBACK5: 'Feedback 5',
+    GAIN1: 'Gain 1', GAIN2: 'Gain 2', GAIN3: 'Gain 3', GAIN4: 'Gain 4', GAIN5: 'Gain 5',
+    // gx_mbdistortion
+    DRIVE1: 'Drive 1', DRIVE2: 'Drive 2', DRIVE3: 'Drive 3', DRIVE4: 'Drive 4', DRIVE5: 'Drive 5',
+    OFFSET1: 'Offset 1', OFFSET2: 'Offset 2', OFFSET3: 'Offset 3', OFFSET4: 'Offset 4', OFFSET5: 'Offset 5',
+    // gx_mbecho (PERCENTn = per-band wet share — cf. classic_echo 'Wet %')
+    PERCENT1: 'Wet 1', PERCENT2: 'Wet 2', PERCENT3: 'Wet 3', PERCENT4: 'Wet 4', PERCENT5: 'Wet 5',
+    TIME1: 'Time 1', TIME2: 'Time 2', TIME3: 'Time 3', TIME4: 'Time 4', TIME5: 'Time 5',
+    // shared crossover ports (ttl names are the misleading "LOW SHELF")
+    CROSSOVER_B1_B2: 'Crossover B1/B2', CROSSOVER_B2_B3: 'Crossover B2/B3',
+    CROSSOVER_B3_B4: 'Crossover B3/B4', CROSSOVER_B4_B5: 'Crossover B4/B5',
+    // utility orphans
+    OUT_MASTER: 'Level',   // gx_outputlevel
+    OUT_AMP: 'Level',      // gx_ampout
+    FEEDBAC: 'Dry Feedback', // gx_ampmodul dry-path feedback (fback in the .dsp)
+    TUBE1: 'Tube 1',       // gx_ampmodul stage1 preamp tube (dB)
+    TUBE2: 'Tube 2',       // gx_ampmodul stage2 tube (dB)
 };
 
 function titleCase(s) {
