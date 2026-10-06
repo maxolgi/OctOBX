@@ -538,14 +538,18 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 34) return `effect_count=${mod._fx_effect_count()}, want 34 (11 v1 + 17 drive/dynamics + 6 eq)`;
+    if (mod._fx_effect_count() !== 38) return `effect_count=${mod._fx_effect_count()}, want 38 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
     if (mod._fx_param_count(11) !== 2) return `param_count(11)=${mod._fx_param_count(11)}, want 2 (fuzzface)`;
     if (mod._fx_param_count(28) !== 11) return `param_count(28)=${mod._fx_param_count(28)}, want 11 (graphiceq)`;
     if (mod._fx_param_count(29) !== 30) return `param_count(29)=${mod._fx_param_count(29)}, want 30 (selecteq)`;
-    if (mod._fx_param_count(34) !== -1) return `param_count(34)=${mod._fx_param_count(34)}, want -1 (out of range)`;
+    if (mod._fx_param_count(34) !== 5) return `param_count(34)=${mod._fx_param_count(34)}, want 5 (wahmodel aggregate)`;
+    if (mod._fx_param_count(35) !== 3) return `param_count(35)=${mod._fx_param_count(35)}, want 3 (crybaby)`;
+    if (mod._fx_param_count(36) !== 0) return `param_count(36)=${mod._fx_param_count(36)}, want 0 (autowah — paramless envelope variant)`;
+    if (mod._fx_param_count(37) !== 1) return `param_count(37)=${mod._fx_param_count(37)}, want 1 (dunwah WAH)`;
+    if (mod._fx_param_count(38) !== -1) return `param_count(38)=${mod._fx_param_count(38)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -556,7 +560,9 @@ async function main() {
     if (mod._fx_default(17, 1) !== -7) return `default(17,1)=${mod._fx_default(17, 1)}, want -7 (rat LEVEL, ttl)`;
     if (mod._fx_default(28, 3) !== 0) return `default(28,3)=${mod._fx_default(28, 3)}, want 0 (graphiceq G4)`;
     if (mod._fx_default(31, 1) !== 3000) return `default(31,1)=${mod._fx_default(31, 1)}, want 3000 (moog FR)`;
-    if (mod._fx_default(34, 0) !== 0) return `default(34,0)=${mod._fx_default(34, 0)}, want 0 (invalid fx)`;
+    if (mod._fx_default(34, 3) !== 0) return `default(34,3)=${mod._fx_default(34, 3)}, want 0 (wahmodel MODEL)`;
+    if (mod._fx_default(37, 0) !== 0) return `default(37,0)=${mod._fx_default(37, 0)}, want 0 (dunwah WAH)`;
+    if (mod._fx_default(38, 0) !== 0) return `default(38,0)=${mod._fx_default(38, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
     for (let s = 0; s < 11; s++) {
@@ -574,7 +580,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 34);
+    mod._fx_set_slot(0, 0, 38); // FX_COUNT == 38 since Phase 1-c
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -917,6 +923,104 @@ async function main() {
     if (!(boost.rms > cut.rms * 1.15)) {
       return `gain knobs do not reach the DSP: rms(-18dB)=${cut.rms.toExponential(4)} rms(+12dB)=${boost.rms.toExponential(4)} (ratio ${(boost.rms / cut.rms).toFixed(3)}, want > 1.15)`;
     }
+  });
+
+  // (u) Wah family spot check (Phase 1-c) -----------------------------------
+  // Exercises the first host-side aggregate (WahModelDsp, id 34): params
+  // round-trip through the mirror, a WAH sweep through model 0 vs model 6
+  // produces measurably different audio (the two circuits peak at different
+  // frequencies — an unwired MODEL param would leave the ratio at ~1.00),
+  // and swapping MODEL mid-render stays finite (hot-swap path: create new,
+  // connect params, destroy old). Also proves the paramless autowah (id 36)
+  // renders — the 0-param connect loop must be a clean no-op.
+  expect('u. wah family: WahModel aggregate model 0 vs 6 differ on a sweep; mid-render swap stays finite', () => {
+    const renderSweepRms = (model) => {
+      mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
+      mod._fx_set_slot(0, 0, 34); // -> wahmodel aggregate
+      if (mod._fx_get_slot(0, 0) !== 34) return { err: `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 34 (wahmodel)` };
+      mod._fx_set_param(0, 0, 2, 0); // MODE = manual (ttl port 4, ordinal 2)
+      mod._fx_set_param(0, 0, 4, 100); // WET_DRY = full wet (ordinal 4)
+      mod._fx_set_param(0, 0, 3, model); // MODEL (ordinal 3, ttl port 5)
+      if (mod._fx_get_param(0, 0, 3) !== model) return { err: `MODEL round-trip=${mod._fx_get_param(0, 0, 3)}, want ${model}` };
+      mod._fx_set_enabled(0, 0, 1);
+      mod._obxd_midi_in(0, 0x90, 60, 100);
+      let s = 0;
+      let finite = true;
+      const QUANTA = 40, SKIP = 10;
+      for (let q = 0; q < QUANTA; q++) {
+        mod._fx_set_param(0, 0, 0, q / (QUANTA - 1)); // sweep WAH 0 -> 1
+        if (mod._fx_get_param(0, 0, 0) !== f32(q / (QUANTA - 1))) return { err: `WAH round-trip at q=${q}` };
+        mod._obxd_render(128);
+        if (q < SKIP) continue; // let the note settle
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+          s += l[i] * l[i] + r[i] * r[i];
+        }
+      }
+      mod._obxd_midi_in(0, 0x80, 60, 0);
+      mod._obxd_panic(0);
+      if (!finite) return { err: `non-finite sample through wahmodel ${model}` };
+      return { rms: Math.sqrt(s / ((QUANTA - SKIP) * 256)) };
+    };
+    const m0 = renderSweepRms(0); // Colorsound Wah
+    if (m0.err) return m0.err;
+    const m6 = renderSweepRms(6); // Vox Wah V847
+    if (m6.err) return m6.err;
+    if (!(m0.rms > 0) || !(m6.rms > 0)) return `wahmodel output silent: m0=${m0.rms.toExponential(3)} m6=${m6.rms.toExponential(3)}`;
+    const rel = Math.abs(m6.rms - m0.rms) / Math.max(m0.rms, m6.rms);
+    if (!(rel > 0.05)) {
+      return `MODEL param does not reach the DSP: rms(model0)=${m0.rms.toExponential(4)} rms(model6)=${m6.rms.toExponential(4)} (rel diff ${(rel * 100).toFixed(2)}%, want > 5%)`;
+    }
+    // Mid-render hot swap: model 0 for a while, flip to 6 inside the note,
+    // keep rendering — output must stay finite and audible.
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 34);
+    mod._fx_set_param(0, 0, 4, 100);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._obxd_midi_in(0, 0x90, 60, 100);
+    let swapFinite = true;
+    let swapSq = 0;
+    for (let q = 0; q < 24; q++) {
+      if (q === 10) mod._fx_set_param(0, 0, 3, 6); // hot swap mid-note
+      if (q === 16) mod._fx_set_param(0, 0, 3, 2); // and back to Foxx
+      mod._obxd_render(128);
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      for (let i = 0; i < 128; i++) {
+        if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) swapFinite = false;
+        swapSq += l[i] * l[i] + r[i] * r[i];
+      }
+    }
+    mod._obxd_midi_in(0, 0x80, 60, 0);
+    mod._obxd_panic(0);
+    if (!swapFinite) return 'non-finite sample after mid-render MODEL swaps';
+    if (!(swapSq > 0)) return `output silent across MODEL swaps (sumSq=${swapSq})`;
+    // Paramless autowah: 0 params -> connect loop is a no-op; envelope
+    // follower must still render finite, non-zero audio on its own input.
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 36); // -> autowah
+    if (mod._fx_get_param(0, 0, 0) !== 0.0) return `autowah param(0,0,0)=${mod._fx_get_param(0, 0, 0)}, want 0.0 (no params)`;
+    mod._fx_set_param(0, 0, 0, 0.7); // must be rejected: out of range
+    if (mod._fx_get_param(0, 0, 0) !== 0.0) return `autowah accepted a param write (${mod._fx_get_param(0, 0, 0)})`;
+    mod._fx_set_enabled(0, 0, 1);
+    mod._obxd_midi_in(0, 0x90, 60, 100);
+    let awFinite = true;
+    let awSq = 0;
+    for (let q = 0; q < 24; q++) {
+      mod._obxd_render(128);
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      for (let i = 0; i < 128; i++) {
+        if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) awFinite = false;
+        awSq += l[i] * l[i] + r[i] * r[i];
+      }
+    }
+    mod._obxd_midi_in(0, 0x80, 60, 0);
+    mod._obxd_panic(0);
+    if (!awFinite) return 'non-finite sample through paramless autowah';
+    if (!(awSq > 0)) return `autowah output silent (sumSq=${awSq})`;
   });
 
   // --- summary -------------------------------------------------------------

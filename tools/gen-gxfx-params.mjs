@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ===========================================================================
 // gen-gxfx-params.mjs — generates every consumable artifact of the guitarix
-// FX param spec (fx2plan.md Phase 1-a/1-b: manifest-driven, ttl-parsing).
+// FX param spec (fx2plan.md Phase 1-a/1-b/1-c: manifest-driven, ttl-parsing).
 //
 // SOURCE OF TRUTH for param DATA, per effect kind:
 //   - v1 eleven (wah..reverb, ids 0..10): PINNED in
@@ -14,9 +14,13 @@
 //   - NEW effects: parsed straight from the pinned guitarix submodule —
 //     bundle ttl files (`ttl:` manifest entries: port symbols / ranges /
 //     defaults from third_party/guitarix/trunk/src/LV2/gx_*.lv2/*.ttl,
-//     labels humanized to Title Case) or orphan faust classes (`orphan:`
+//     labels humanized to Title Case), orphan faust classes (`orphan:`
 //     entries: param metadata from the .cc connect_ports comments
-//     `// , default, min, max, step` in faust-generated/).
+//     `// , default, min, max, step` in faust-generated/), or hand-authored
+//     param rows (`params:` entries: for DSP with no parseable ttl — e.g.
+//     gxautowah.lv2 lists TWO plugins in one ttl so the first-block parser
+//     cannot reach the second, and its auto variant has no control params
+//     at all; inline entries are the ONLY kind allowed zero params).
 //
 // MANIFEST: the effect catalog below is the single id-order list — effect
 // ids are the manifest index (existing 0..10 stable, new appended in
@@ -135,6 +139,18 @@ const V1_KEYS = Object.keys(V1_CATEGORY_BY_KEY);
 // eq enumeration; add with the amp family if wanted). No `gx_eq` 10-band
 // bundle exists in the pinned submodule — graphiceq is the tree's only
 // standalone graphic EQ.
+// Phase 1-c ships the wah family: the first HOST-SIDE AGGREGATE ("Wah
+// Model" — gx_colwah.lv2's 7 wah model classes behind one MODEL param; the
+// ttl describes the full aggregate surface so it parses like any bundle,
+// while gxfx_dsp_wah.cpp's WahModelDsp hot-swaps the underlying instance),
+// the crybaby orphan, and both gxautowah.lv2 variants from the bundle-local
+// dunwahauto.cc (envelope-driven auto + manual; inline params — see the
+// header "SOURCE OF TRUTH"). Also present in faust-generated/ but NOT
+// shipped: colbwah / jenbasswah / rolwah (not in wah.h's 7-model set nor in
+// the fx2plan orphan enumeration) and the faust autowah.cc orphan (superseded
+// by the bundle's circuit-modelled dunwahauto, per fx2plan "use gxautowah
+// bundle's local dunwahauto.cc"). low_high_cut.cc is a wrapper companion
+// (skip per fx2plan).
 // ---------------------------------------------------------------------------
 const MANIFEST = [
     // --- v1 eleven (ids 0..10) — pinned data, canonical default chain ---
@@ -168,6 +184,12 @@ const MANIFEST = [
     { key: 'moog', menuName: 'Moog Filter', category: 'eq', orphan: 'moog.cc', stereo: true },
     { key: 'low_high_pass', menuName: 'Low/High Filter', category: 'eq', orphan: 'low_high_pass.cc' },
     { key: 'noise_shaper', menuName: 'Noise Shaper', category: 'eq', orphan: 'noise_shaper.cc' },
+
+    // --- Phase 1-c: wah family ---
+    { key: 'wahmodel', menuName: 'Wah Model', category: 'wah', ttl: 'gx_colwah.lv2/gx_colwah.ttl' },
+    { key: 'crybaby', menuName: 'Crybaby', category: 'wah', orphan: 'crybaby.cc' },
+    { key: 'autowah', menuName: 'Auto Wah', category: 'wah', params: [] },
+    { key: 'dunwah', menuName: 'Classic Wah', category: 'wah', params: [{ port: 3, symbol: 'WAH', name: 'Wah', default: 0, min: 0, max: 1, step: 0.01 }] },
 ];
 
 const FX_COUNT = MANIFEST.length;
@@ -268,7 +290,10 @@ function orphanEffect(entry) {
     if (!em) throw new Error(`${entry.orphan}: no trailing PortIndex enum comment`);
     const symbols = em[1].split(',').map((s) => s.trim()).filter(Boolean);
     const params = [];
-    const caseRe = /case\s+(\w+)\s*:\s*\n\s*\w+\s*=\s*\(float\*\)data;\s*\/\/\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)/g;
+    // `f`-suffix tolerance: some .cc files carry C float literals in the
+    // comments (crybaby: `// , 0.1f, 0.0f, 1.0f, 0.01f`), others plain
+    // decimals (softclip: `// , 0.0, 0.0, 1.99, 0.01`).
+    const caseRe = /case\s+(\w+)\s*:\s*\n\s*\w+\s*=\s*\(float\*\)data;\s*\/\/\s*,\s*([-\d.eE+]+)f?\s*,\s*([-\d.eE+]+)f?\s*,\s*([-\d.eE+]+)f?\s*,\s*([-\d.eE+]+)f?/g;
     let cm;
     while ((cm = caseRe.exec(text)) !== null) {
         const port = symbols.indexOf(cm[1]);
@@ -288,6 +313,33 @@ function orphanEffect(entry) {
     if (params.length === 0) throw new Error(`${entry.orphan}: no connect_ports param comments`);
     params.sort((a, b) => a.port - b.port);
     return { stereo: false, out_ports: [], params };
+}
+
+// ---------------------------------------------------------------------------
+// inline params (hand-authored manifest rows — DSP with no parseable ttl)
+// ---------------------------------------------------------------------------
+
+/** Build an effect from hand-authored param rows. Validation (port bounds,
+ * ascending order, min<max, default in range, step>0) is the shared
+ * invariant loop in normalize(); inline is the ONLY source kind allowed
+ * zero params (an envelope-driven effect with no controls at all). */
+function inlineEffect(entry) {
+    if (!Array.isArray(entry.params)) throw new Error('inline entry needs a params array');
+    return {
+        stereo: false,
+        out_ports: [],
+        params: entry.params.map((p) => ({
+            port: p.port,
+            symbol: p.symbol,
+            name: p.name || p.symbol,
+            default: p.default,
+            min: p.min,
+            max: p.max,
+            step: p.step,
+            toggled: false,
+            integer: !!p.integer,
+        })),
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -431,7 +483,9 @@ function normalize(raw, problems) {
             if (!CATEGORY_VOCAB.has(entry.category)) problems.push(`manifest entry "${entry.key}": category "${entry.category}" not in the frozen vocabulary`);
             let parsed;
             try {
-                parsed = entry.ttl ? ttlEffect(entry) : orphanEffect(entry);
+                parsed = entry.ttl ? ttlEffect(entry)
+                    : entry.orphan ? orphanEffect(entry)
+                    : inlineEffect(entry);
             } catch (err) {
                 problems.push(`manifest entry "${entry.key}": ${err.message}`);
                 parsed = { stereo: false, params: [] };
@@ -447,8 +501,9 @@ function normalize(raw, problems) {
                 params: parsed.params,
             };
         }
-        // Shared invariants (both sources).
-        if (fx.params.length === 0) problems.push(`effects[${i}] "${fx.key}": no params`);
+        // Shared invariants (both sources). Empty param lists are legal ONLY
+        // for hand-authored inline entries (envelope-driven effects).
+        if (fx.params.length === 0 && !Array.isArray(entry.params)) problems.push(`effects[${i}] "${fx.key}": no params`);
         if (fx.params.length > FX_SLOT_PARAMS) problems.push(`effects[${i}] "${fx.key}": ${fx.params.length} params > FX_SLOT_PARAMS ${FX_SLOT_PARAMS}`);
         let prevPort = -1;
         fx.params.forEach((p, j) => {

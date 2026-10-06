@@ -33,8 +33,11 @@ TARGET = ../build/obxd_wasm
 # is the Phase 1-a drive + dynamics family (fuzzes/boosters/expander/susta;
 # pulls trany.h + its tube tables at global scope, include-once).
 # gxfx_dsp_eq.cpp is the Phase 1-b eq family (graphiceq + the selecteq/
-# tonecontroll/moog/low_high_pass/noise_shaper orphans).
-SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_eq.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
+# tonecontroll/moog/low_high_pass/noise_shaper orphans). gxfx_dsp_wah.cpp is
+# the Phase 1-c wah family (the 7 gx_colwah.lv2 wah models behind the
+# host-side WahModelDsp aggregate + the crybaby orphan + both gxautowah.lv2
+# variants from the bundle-local dunwahauto.cc).
+SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_eq.cpp gxfx_dsp_wah.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
 
 # Header dependencies — most of the engine lives in headers (Voice.h,
 # Motherboard.h, OscillatorBlock.h, Filter.h, Utils.h, ...) #include'd by the
@@ -46,7 +49,7 @@ SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_e
 # param_table.h is NOT listed — it doesn't exist on a fresh clone before
 # build.sh synth generates it; its staleness is gated separately by
 # gen-param-table.mjs --check in build.sh.)
-HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h gxfx_prelude.h ../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h ../../third_party/guitarix/trunk/src/LV2/DSP/trany.h ../../third_party/guitarix/trunk/src/LV2/DSP/tube_tables/*.cc ../../third_party/guitarix/trunk/src/LV2/faust-generated/*.cc ../../third_party/guitarix/trunk/src/LV2/faust/*.h ../../third_party/guitarix/trunk/src/LV2/faust/clipt*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/gx_resampler.* ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0/zita-resampler/*.h)
+HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h gxfx_prelude.h ../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h ../../third_party/guitarix/trunk/src/LV2/DSP/trany.h ../../third_party/guitarix/trunk/src/LV2/DSP/tube_tables/*.cc ../../third_party/guitarix/trunk/src/LV2/gxautowah.lv2/dunwahauto.cc ../../third_party/guitarix/trunk/src/LV2/faust-generated/*.cc ../../third_party/guitarix/trunk/src/LV2/faust/*.h ../../third_party/guitarix/trunk/src/LV2/faust/clipt*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/gx_resampler.* ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0/zita-resampler/*.h)
 
 # OB-Xf include paths. The engine sources are consumed STRAIGHT from the
 # fork tree at ../../third_party/OB-Xf/src (the maxolgi/OB-Xf fork main,

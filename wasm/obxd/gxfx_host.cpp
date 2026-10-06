@@ -56,6 +56,13 @@ PluginLV2* gxfx_create_tonecontroll();
 PluginLV2* gxfx_create_moog();
 PluginLV2* gxfx_create_low_high_pass();
 PluginLV2* gxfx_create_noise_shaper();
+// wah family (gxfx_dsp_wah.cpp, Phase 1-c — incl. the first host-side
+// aggregate: WahModelDsp hot-swaps gx_colwah.lv2's 7 wah model classes on
+// its MODEL param)
+PluginLV2* gxfx_create_wahmodel();
+PluginLV2* gxfx_create_crybaby();
+PluginLV2* gxfx_create_autowah();
+PluginLV2* gxfx_create_dunwah();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -92,7 +99,11 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_tonecontroll,
     gxfx_create_moog,
     gxfx_create_low_high_pass,
-    gxfx_create_noise_shaper
+    gxfx_create_noise_shaper,
+    gxfx_create_wahmodel,
+    gxfx_create_crybaby,
+    gxfx_create_autowah,
+    gxfx_create_dunwah
 };
 
 // Generator↔host drift guard: the factory registry above must list every

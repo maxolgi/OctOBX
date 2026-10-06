@@ -25,7 +25,7 @@
 #ifndef GXFX_DEFAULTS_H
 #define GXFX_DEFAULTS_H
 
-#define GXFX_EFFECT_COUNT 34
+#define GXFX_EFFECT_COUNT 38
 #define GXFX_PORTS_ROW 30
 
 static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
@@ -335,11 +335,47 @@ static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
     },
+    /* 34: wahmodel — 5 params + 43 pad */
+    {
+            0.0f,   24.0f,    0.0f,    0.0f,   50.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 35: crybaby — 3 params + 45 pad */
+    {
+            0.1f,    0.0f,  100.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 36: autowah — 0 params + 48 pad */
+    {
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 37: dunwah — 1 params + 47 pad */
+    {
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
 };
 
-static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2, 11, 30, 5, 2, 6, 1 };
+static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2, 11, 30, 5, 2, 6, 1, 5, 3, 0, 1 };
 
-static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0 };
+static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0 };
 
 static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     /*  0: wah */
@@ -410,6 +446,14 @@ static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     { 0,1,2,3,4,5 },
     /* 33: noise_shaper */
     { 0 },
+    /* 34: wahmodel */
+    { 2,3,4,5,6 },
+    /* 35: crybaby */
+    { 0,1,2 },
+    /* 36: autowah */
+    {  },
+    /* 37: dunwah */
+    { 3 },
 };
 
 #endif /* GXFX_DEFAULTS_H */

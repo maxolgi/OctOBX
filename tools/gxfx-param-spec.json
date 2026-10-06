@@ -2014,6 +2014,148 @@
           "integer": false
         }
       ]
+    },
+    {
+      "id": 34,
+      "key": "wahmodel",
+      "label": "Wah Model",
+      "dsp": "wahmodel",
+      "stereo": false,
+      "category": "wah",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 2,
+          "symbol": "WAH",
+          "name": "Wah",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "FREQ",
+          "name": "Freq",
+          "default": 24,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "MODE",
+          "name": "Mode",
+          "default": 0,
+          "min": 0,
+          "max": 2,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 5,
+          "symbol": "MODEL",
+          "name": "Model",
+          "default": 0,
+          "min": 0,
+          "max": 6,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 6,
+          "symbol": "WET_DRY",
+          "name": "Dry/Wet",
+          "default": 50,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "key": "crybaby",
+      "label": "Crybaby",
+      "dsp": "crybaby",
+      "stereo": false,
+      "category": "wah",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "LEVEL",
+          "name": "Level",
+          "default": 0.1,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "WAH",
+          "name": "Wah",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "WET_DRY",
+          "name": "Dry/Wet",
+          "default": 100,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 36,
+      "key": "autowah",
+      "label": "Auto Wah",
+      "dsp": "autowah",
+      "stereo": false,
+      "category": "wah",
+      "out_ports": [],
+      "params": []
+    },
+    {
+      "id": 37,
+      "key": "dunwah",
+      "label": "Classic Wah",
+      "dsp": "dunwah",
+      "stereo": false,
+      "category": "wah",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 3,
+          "symbol": "WAH",
+          "name": "Wah",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        }
+      ]
     }
   ]
 }

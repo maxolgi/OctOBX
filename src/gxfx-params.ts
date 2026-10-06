@@ -13,7 +13,7 @@
  * Freshness check:    node tools/gen-gxfx-params.mjs --check   (CI gate)
  */
 
-export const FX_COUNT = 34;
+export const FX_COUNT = 38;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
 export const FX_SLOT_PARAMS = 48;
@@ -40,7 +40,7 @@ export interface FxEffectDef {
     label: string;
     category: FxCategory;
     stereo: boolean;
-    offset: number;    // cumulative param offset into the flat 142-slot mirror
+    offset: number;    // cumulative param offset into the flat 151-slot mirror
     params: FxParamDef[];
 }
 
@@ -48,7 +48,7 @@ export interface FxEffectDef {
  * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →
  * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the
  * Phase-1 additions selectable per slot.
- * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141. */
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150. */
 export const FX_EFFECTS: FxEffectDef[] = [
     {
         id: 0, key: "wah", label: "Wah", category: "wah", stereo: false, offset: 0,
@@ -362,9 +362,38 @@ export const FX_EFFECTS: FxEffectDef[] = [
             { port: 0, symbol: "SHARPER", name: "Sharper", default: 1, min: 1, max: 10, step: 1 },
         ],
     },
+    {
+        id: 34, key: "wahmodel", label: "Wah Model", category: "wah", stereo: false, offset: 142,
+        params: [
+            { port: 2, symbol: "WAH", name: "Wah", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "FREQ", name: "Freq", default: 24, min: 24, max: 360, step: 10 },
+            { port: 4, symbol: "MODE", name: "Mode", default: 0, min: 0, max: 2, step: 1, integer: true },
+            { port: 5, symbol: "MODEL", name: "Model", default: 0, min: 0, max: 6, step: 1, integer: true },
+            { port: 6, symbol: "WET_DRY", name: "Dry/Wet", default: 50, min: 0, max: 100, step: 1 },
+        ],
+    },
+    {
+        id: 35, key: "crybaby", label: "Crybaby", category: "wah", stereo: false, offset: 147,
+        params: [
+            { port: 0, symbol: "LEVEL", name: "Level", default: 0.1, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "WAH", name: "Wah", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "WET_DRY", name: "Dry/Wet", default: 100, min: 0, max: 100, step: 1 },
+        ],
+    },
+    {
+        id: 36, key: "autowah", label: "Auto Wah", category: "wah", stereo: false, offset: 150,
+        params: [
+        ],
+    },
+    {
+        id: 37, key: "dunwah", label: "Classic Wah", category: "wah", stereo: false, offset: 150,
+        params: [
+            { port: 3, symbol: "WAH", name: "Wah", default: 0, min: 0, max: 1, step: 0.01 },
+        ],
+    },
 ];
 
-export const FX_TOTAL_PARAMS = 142;
+export const FX_TOTAL_PARAMS = 151;
 
 // --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
 

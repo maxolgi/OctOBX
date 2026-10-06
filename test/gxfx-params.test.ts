@@ -64,15 +64,19 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(34);
+        expect(FX_COUNT).toBe(38);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
 
-    it("ids are 0..FX_COUNT-1 in manifest order and every effect has ≥1 param", () => {
+    it("ids are 0..FX_COUNT-1 in manifest order; every effect has ≥1 param except the paramless autowah", () => {
         for (let i = 0; i < FX_EFFECTS.length; i++) {
             expect(FX_EFFECTS[i].id).toBe(i);
-            expect(FX_EFFECTS[i].params.length).toBeGreaterThanOrEqual(1);
+            if (FX_EFFECTS[i].key === "autowah") {
+                expect(FX_EFFECTS[i].params).toHaveLength(0); // envelope-driven, no controls
+            } else {
+                expect(FX_EFFECTS[i].params.length).toBeGreaterThanOrEqual(1);
+            }
         }
     });
 
@@ -95,6 +99,8 @@ describe("gxfx-params — layout invariants", () => {
             "dynamics", "dynamics",         // expander, susta
             // Phase 1-b eq family (28..33)
             "eq", "eq", "eq", "eq", "eq", "eq", // graphiceq, selecteq, tonecontroll, moog, low_high_pass, noise_shaper
+            // Phase 1-c wah family (34..37)
+            "wah", "wah", "wah", "wah",      // wahmodel, crybaby, autowah, dunwah
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -102,14 +108,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 142", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 151", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(142);
-        expect(FX_TOTAL_PARAMS).toBe(142);
+        expect(running).toBe(151);
+        expect(FX_TOTAL_PARAMS).toBe(151);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -179,16 +185,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..33", () => {
-        for (let i = 0; i < 34; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..37", () => {
+        for (let i = 0; i < 38; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(34)).toBe(false);
+        expect(isFxId(38)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(34, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(38, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -325,5 +331,49 @@ describe("gxfx-params — Phase 1-b eq family additions", () => {
         expect(ns.key).toBe("noise_shaper");
         expect(ns.params).toHaveLength(1);
         expect(ns.params[0]).toMatchObject({ port: 0, symbol: "SHARPER", default: 1, min: 1, max: 10, step: 1 });
+    });
+});
+
+describe("gxfx-params — Phase 1-c wah family additions", () => {
+    it("wahmodel (ttl-parsed aggregate): WAH/FREQ/MODE/MODEL/WET_DRY at ttl ports, MODEL integer 0..6", () => {
+        const fx = FX_EFFECTS[34];
+        expect(fx.key).toBe("wahmodel");
+        expect(fx.label).toBe("Wah Model");
+        expect(fx.category).toBe("wah");
+        expect(fx.stereo).toBe(false); // mono aggregate -> host runs dual-mono
+        expect(fx.params.map((p) => p.symbol)).toEqual(["WAH", "FREQ", "MODE", "MODEL", "WET_DRY"]);
+        expect(fx.params.map((p) => p.port)).toEqual([2, 3, 4, 5, 6]);
+        expect(fx.params.map((p) => p.name)).toEqual(["Wah", "Freq", "Mode", "Model", "Dry/Wet"]);
+        expect(fx.params[0]).toMatchObject({ default: 0, min: 0, max: 1 });
+        expect(fx.params[1]).toMatchObject({ default: 24, min: 24, max: 360 });
+        expect(fx.params[2]).toMatchObject({ default: 0, min: 0, max: 2, step: 1, integer: true });
+        const model = fx.params[3];
+        expect(model).toMatchObject({ default: 0, min: 0, max: 6, step: 1, integer: true });
+        expect(fxParamFrom01(34, 3, 1)).toBe(6); // MODEL knob endpoint
+        expect(fx.params[4]).toMatchObject({ default: 50, min: 0, max: 100 });
+    });
+
+    it("crybaby orphan: connect-comment metadata incl. the f-suffixed literals", () => {
+        const fx = FX_EFFECTS[35];
+        expect(fx.key).toBe("crybaby");
+        expect(fx.stereo).toBe(false);
+        expect(fx.params.map((p) => p.symbol)).toEqual(["LEVEL", "WAH", "WET_DRY"]);
+        expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2]);
+        expect(fx.params[0]).toMatchObject({ default: 0.1, min: 0, max: 1, step: 0.01 });
+        expect(fx.params[1]).toMatchObject({ default: 0, min: 0, max: 1, step: 0.01 });
+        expect(fx.params[2]).toMatchObject({ default: 100, min: 0, max: 100, step: 1 });
+    });
+
+    it("autowah is the paramless envelope variant; dunwah carries only WAH", () => {
+        const auto = FX_EFFECTS[36];
+        expect(auto.key).toBe("autowah");
+        expect(auto.label).toBe("Auto Wah");
+        expect(auto.params).toHaveLength(0); // inline empty params — no controls
+        expect(fxParamFrom01(36, 0, 0.5)).toBeNaN(); // nothing to look up
+        const manual = FX_EFFECTS[37];
+        expect(manual.key).toBe("dunwah");
+        expect(manual.label).toBe("Classic Wah");
+        expect(manual.params).toHaveLength(1);
+        expect(manual.params[0]).toMatchObject({ port: 3, symbol: "WAH", name: "Wah", default: 0, min: 0, max: 1, step: 0.01 });
     });
 });
