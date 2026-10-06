@@ -122,10 +122,16 @@ PluginLV2* gxfx_create_balance();
 PluginLV2* gxfx_create_outputlevel();
 PluginLV2* gxfx_create_ampout();
 PluginLV2* gxfx_create_ampmodul();
-// convolution family (gxfx_dsp_conv.cpp, Phase 2-a): the cabinet IR sim over
-// the self-written partitioned convolver (gxfx_convolver.h + vendored
-// kissfft; cab_data.cc IR tables baked with the bundle's Impf shelving)
+// convolution family (gxfx_dsp_conv.cpp, Phase 2-a/2-b): the cabinet IR sim
+// over the self-written partitioned convolver (gxfx_convolver.h + vendored
+// kissfft; cab_data.cc IR tables baked with the bundle's Impf shelving),
+// the redeye 3-chump aggregate (MODEL 0..2, each with its fixed speaker
+// IR), and the metal amp/head preamps (valve.h classes from
+// gxfx_dsp_amps.cpp) + fixed 4x12 cab convolution
 PluginLV2* gxfx_create_cabinet();
+PluginLV2* gxfx_create_redeye();
+PluginLV2* gxfx_create_metalamp();
+PluginLV2* gxfx_create_metalhead();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -205,7 +211,10 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_outputlevel,
     gxfx_create_ampout,
     gxfx_create_ampmodul,
-    gxfx_create_cabinet
+    gxfx_create_cabinet,
+    gxfx_create_redeye,
+    gxfx_create_metalamp,
+    gxfx_create_metalhead
 };
 
 // Generator↔host drift guard: the factory registry above must list every

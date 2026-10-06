@@ -538,7 +538,7 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 77) return `effect_count=${mod._fx_effect_count()}, want 77 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi + Phase 2-a cabinet)`;
+    if (mod._fx_effect_count() !== 80) return `effect_count=${mod._fx_effect_count()}, want 80 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi + Phase 2-a cabinet + Phase 2-b redeye + metal amp/head)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
@@ -583,7 +583,10 @@ async function main() {
     if (mod._fx_param_count(74) !== 1) return `param_count(74)=${mod._fx_param_count(74)}, want 1 (ampout)`;
     if (mod._fx_param_count(75) !== 7) return `param_count(75)=${mod._fx_param_count(75)}, want 7 (ampmodul)`;
     if (mod._fx_param_count(76) !== 4) return `param_count(76)=${mod._fx_param_count(76)}, want 4 (cabinet: CLevel/CBass/CTreble/c_model)`;
-    if (mod._fx_param_count(77) !== -1) return `param_count(77)=${mod._fx_param_count(77)}, want -1 (out of range)`;
+    if (mod._fx_param_count(77) !== 9) return `param_count(77)=${mod._fx_param_count(77)}, want 9 (redeye: 8 wrapper params + MODEL)`;
+    if (mod._fx_param_count(78) !== 4) return `param_count(78)=${mod._fx_param_count(78)}, want 4 (metalamp: TONE/DRIVE/PREGAIN/GAIN1)`;
+    if (mod._fx_param_count(79) !== 4) return `param_count(79)=${mod._fx_param_count(79)}, want 4 (metalhead: TONE/DRIVE/PREGAIN/GAIN1)`;
+    if (mod._fx_param_count(80) !== -1) return `param_count(80)=${mod._fx_param_count(80)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -613,6 +616,9 @@ async function main() {
     if (mod._fx_is_stereo(74) !== 0) return `is_stereo(74)=${mod._fx_is_stereo(74)}, want 0 (ampout, dual-mono)`;
     if (mod._fx_is_stereo(75) !== 1) return `is_stereo(75)=${mod._fx_is_stereo(75)}, want 1 (ampmodul, native stereo)`;
     if (mod._fx_is_stereo(76) !== 0) return `is_stereo(76)=${mod._fx_is_stereo(76)}, want 0 (cabinet, dual-mono convolver)`;
+    if (mod._fx_is_stereo(77) !== 0) return `is_stereo(77)=${mod._fx_is_stereo(77)}, want 0 (redeye, dual-mono convolver)`;
+    if (mod._fx_is_stereo(78) !== 0) return `is_stereo(78)=${mod._fx_is_stereo(78)}, want 0 (metalamp, dual-mono convolver)`;
+    if (mod._fx_is_stereo(79) !== 0) return `is_stereo(79)=${mod._fx_is_stereo(79)}, want 0 (metalhead, dual-mono convolver)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
@@ -658,6 +664,9 @@ async function main() {
     if (mod._fx_default(76, 1) !== 0) return `default(76,1)=${mod._fx_default(76, 1)}, want 0 (cabinet CBass)`;
     if (mod._fx_default(76, 2) !== 0) return `default(76,2)=${mod._fx_default(76, 2)}, want 0 (cabinet CTreble)`;
     if (mod._fx_default(76, 3) !== 0) return `default(76,3)=${mod._fx_default(76, 3)}, want 0 (cabinet c_model)`;
+    if (mod._fx_default(77, 8) !== 0) return `default(77,8)=${mod._fx_default(77, 8)}, want 0 (redeye MODEL)`;
+    if (mod._fx_default(78, 1) !== 10.5) return `default(78,1)=${mod._fx_default(78, 1)}, want 10.5 (metalamp DRIVE)`;
+    if (mod._fx_default(79, 1) !== f32(0.32)) return `default(79,1)=${mod._fx_default(79, 1)}, want ${f32(0.32)} (metalhead DRIVE)`;
     if (mod._fx_default(61, 0) !== 0) return `default(61,0)=${mod._fx_default(61, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
@@ -676,7 +685,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 77); // FX_COUNT == 77 since Phase 2-a
+    mod._fx_set_slot(0, 0, 80); // FX_COUNT == 80 since Phase 2-b
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -1670,6 +1679,132 @@ async function main() {
     if (!walkFinite) return 'non-finite sample during the cabinet model walk';
     if (!(Math.sqrt(walkSq / (19 * 6 * 256)) > 1e-4)) return 'cabinet model walk silent';
     console.log(`    cabinet IR selectivity: CAB 0↔5 rms ${r0.rms.toExponential(4)} vs ${r5.rms.toExponential(4)} (${(rel * 100).toFixed(1)}% delta); CLevel 0.5→5.0 scales ${levelRatio.toFixed(2)}x; 19-model walk finite`);
+  });
+
+  // (z2) Phase 2-b convolver family: redeye aggregate + metal amp/head ------
+  // Redeye (id 77) folds gx_redeye.lv2's three descriptors (chump/bigchump/
+  // vibrochump preamps, each with its FIXED speaker IR: 1x8 / 2x12 / 2x12,
+  // scaled ×0.01 per upstream's Impf(1.0)) into MODEL 0..2. Checked: param
+  // round-trip incl. MODEL, MODEL 0 vs 2 produce different RMS on a burst
+  // (different preamp AND cab), mid-render model swaps stay finite/alive.
+  // Metal amp (id 78) wraps the faust preamp + FIXED 4x12 cab (no cab param
+  // upstream — the cabinet effect's c_model check covers IR switching):
+  // params round-trip, the wet (enabled) vs bypassed (disabled) RMS delta
+  // proves the preamp+IR chain is in the audio path, and the DRIVE knob
+  // changes the output. Metal head (id 79) gets the surface round-trip.
+  expect('z2. conv family: redeye MODEL 0 vs 2 differ; model swaps finite; metal amp wet/DRIVE respond; params round-trip', () => {
+    // param round-trips
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 77);
+    for (const [p, v] of [[0, 0.7], [3, 1], [5, 7.5], [8, 2]]) {
+      mod._fx_set_param(0, 0, p, v);
+      if (mod._fx_get_param(0, 0, p) !== f32(v)) return `redeye param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
+    }
+    mod._fx_set_slot(0, 0, 78);
+    for (const [p, v] of [[0, 0.8], [1, 15], [2, -6], [3, 4]]) {
+      mod._fx_set_param(0, 0, p, v);
+      if (mod._fx_get_param(0, 0, p) !== f32(v)) return `metalamp param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
+    }
+    mod._fx_set_slot(0, 0, 79);
+    for (const [p, v] of [[0, 0.3], [1, 0.9], [2, 12], [3, -3]]) {
+      mod._fx_set_param(0, 0, p, v);
+      if (mod._fx_get_param(0, 0, p) !== f32(v)) return `metalhead param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
+    }
+    // burst RMS helper (cabinet-check shape; the redeye IR rides upstream's
+    // ×0.01 Impf scale, so its floor is 1e-6, not the cabinet's 1e-4)
+    const burstRms = (fx, param, value) => {
+      mod._obxd_init(48000);
+      mod._obxd_set_factory_patch(0, 6); // "Acoustic Bass" — init-stable
+      mod._fx_set_slot(0, 0, fx);
+      mod._fx_set_enabled(0, 0, 1);
+      if (param >= 0) mod._fx_set_param(0, 0, param, value);
+      mod._obxd_midi_in(0, 0x90, 48, 127);
+      let s = 0;
+      let finite = true;
+      for (let q = 0; q < 40; q++) {
+        mod._obxd_render(128);
+        if (q < 25) continue;
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+          s += l[i] * l[i] + r[i] * r[i];
+        }
+      }
+      mod._obxd_midi_in(0, 0x80, 48, 0);
+      mod._obxd_panic(0);
+      if (!finite) return { err: `non-finite sample (fx ${fx})` };
+      return { rms: Math.sqrt(s / (15 * 256)) };
+    };
+    // redeye MODEL 0 (chump + 1x8) vs 2 (vibrochump + 2x12)
+    const rd0 = burstRms(77, 8, 0);
+    if (rd0.err) return rd0.err;
+    const rd2 = burstRms(77, 8, 2);
+    if (rd2.err) return rd2.err;
+    if (!(rd0.rms > 1e-6)) return `redeye MODEL=0 too quiet to test (rms=${rd0.rms.toExponential(3)})`;
+    const rdRel = Math.abs(rd0.rms - rd2.rms) / Math.max(rd0.rms, rd2.rms);
+    if (!(rdRel > 0.25)) {
+      return `redeye MODEL 0↔2 changed RMS by only ${(rdRel * 100).toFixed(1)}% (${rd0.rms.toExponential(4)} vs ${rd2.rms.toExponential(4)}) — MODEL not reaching the aggregate`;
+    }
+    // redeye mid-render model swaps (preamp swap + cab IR re-push per quantum)
+    mod._obxd_init(48000);
+    mod._obxd_set_factory_patch(0, 6);
+    mod._fx_set_slot(0, 0, 77);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._obxd_midi_in(0, 0x90, 48, 127);
+    let rdSq = 0;
+    let rdFinite = true;
+    for (const m of [0, 1, 2, 0]) {
+      mod._fx_set_param(0, 0, 8, m);
+      for (let k = 0; k < 6; k++) {
+        mod._obxd_render(128);
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) rdFinite = false;
+          rdSq += l[i] * l[i] + r[i] * r[i];
+        }
+      }
+    }
+    mod._obxd_midi_in(0, 0x80, 48, 0);
+    mod._obxd_panic(0);
+    if (!rdFinite) return 'non-finite sample during the redeye model swap walk';
+    if (!(Math.sqrt(rdSq / (4 * 6 * 256)) > 1e-6)) return 'redeye model swap walk silent';
+    // metal amp: wet (enabled) vs bypassed proves the preamp+4x12 IR chain
+    // is in the audio path; DRIVE 1 vs 20 proves the params reach the DSP
+    const mwet = burstRms(78, -1, 0);
+    if (mwet.err) return mwet.err;
+    const mdry = (() => {
+      mod._obxd_init(48000);
+      mod._obxd_set_factory_patch(0, 6);
+      mod._fx_set_slot(0, 0, 78); // assigned but NOT enabled → dry
+      mod._obxd_midi_in(0, 0x90, 48, 127);
+      let s = 0;
+      for (let q = 0; q < 40; q++) {
+        mod._obxd_render(128);
+        if (q < 25) continue;
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) s += l[i] * l[i] + r[i] * r[i];
+      }
+      mod._obxd_midi_in(0, 0x80, 48, 0);
+      mod._obxd_panic(0);
+      return Math.sqrt(s / (15 * 256));
+    })();
+    if (!(mwet.rms > 1e-6)) return `metal amp wet output too quiet to test (rms=${mwet.rms.toExponential(3)})`;
+    const mRel = Math.abs(mwet.rms - mdry) / Math.max(mwet.rms, mdry);
+    if (!(mRel > 0.25)) {
+      return `metal amp wet vs bypassed changed RMS by only ${(mRel * 100).toFixed(1)}% (${mwet.rms.toExponential(4)} vs ${mdry.toExponential(4)}) — preamp/IR chain not in the path`;
+    }
+    const mDriveLo = burstRms(78, 1, 1);
+    if (mDriveLo.err) return mDriveLo.err;
+    const mDriveHi = burstRms(78, 1, 20);
+    if (mDriveHi.err) return mDriveHi.err;
+    const dRel = Math.abs(mDriveLo.rms - mDriveHi.rms) / Math.max(mDriveLo.rms, mDriveHi.rms);
+    if (!(dRel > 0.25)) {
+      return `metal amp DRIVE 1↔20 changed RMS by only ${(dRel * 100).toFixed(1)}% (${mDriveLo.rms.toExponential(4)} vs ${mDriveHi.rms.toExponential(4)}) — DRIVE not reaching the preamp`;
+    }
+    console.log(`    redeye selectivity: MODEL 0↔2 rms ${rd0.rms.toExponential(4)} vs ${rd2.rms.toExponential(4)} (${(rdRel * 100).toFixed(1)}% delta); swap walk finite; metal amp wet/bypassed ${(mRel * 100).toFixed(1)}% delta, DRIVE 1↔20 ${(dRel * 100).toFixed(1)}% delta`);
   });
 
   // --- summary -------------------------------------------------------------

@@ -683,8 +683,37 @@ typedef enum { FEEDBAC, FEEDBACK, LEVEL, HIGHGAIN, TUBE1, TUBE2, WET_DRY } PortI
 #include "../../third_party/guitarix/trunk/src/LV2/faust-generated/gx_ampmodul.cc"
 }
 
+// gxmetal_amp / gxmetal_head (Phase 2-b metal preamps): the faust classes
+// behind the gxmetal_*.lv2 wrappers. They also #include "valve.h" (vestigial
+// — the classes reference none of its symbols; dsp2cc artifact), so they ride
+// THIS TU exactly like gx_ampmodul above: the global-scope valve.h include
+// neuters their own, tables stay single-copy. The wrapper-level cab stage
+// (fixed 4x12 IR convolution) is NOT here — gxfx_dsp_conv.cpp wraps these
+// factories with the self-written convolver (fx2plan Phase 2). PortIndex =
+// the bundles' gxmetal_{amp,head}.h = the ttl indexes (HIGHGAIN at 6 is
+// notOnGUI → never connected; the class default 0 holds).
+namespace gxfx_metalamp {
+typedef enum {
+    TONE, DRIVE, PREGAIN, GAIN1,
+    EFFECTS_OUTPUT, EFFECTS_INPUT,
+    HIGHGAIN,
+} PortIndex;
+#include "../../third_party/guitarix/trunk/src/LV2/faust-generated/gxmetal_amp.cc"
+}
+
+namespace gxfx_metalhead {
+typedef enum {
+    TONE, DRIVE, PREGAIN, GAIN1,
+    EFFECTS_OUTPUT, EFFECTS_INPUT,
+    HIGHGAIN,
+} PortIndex;
+#include "../../third_party/guitarix/trunk/src/LV2/faust-generated/gxmetal_head.cc"
+}
+
 // namespace paths: gxfx_ampmodel::create() etc. Factory order MUST match the
 // generator manifest order (ids 61..65 + the Phase 1-h ampmodul at 74).
+// gxfx_ampsdsp_metalamp/metalhead are NOT host factories — the Phase 2-b
+// wrappers in gxfx_dsp_conv.cpp call them for their preamp stage.
 typedef PluginLV2* (*gxfx_factory)();
 PluginLV2* gxfx_create_ampmodel() { return gxfx_ampmodel::create(); }
 PluginLV2* gxfx_create_tonemodel() { return gxfx_tonemodel::create(); }
@@ -692,3 +721,5 @@ PluginLV2* gxfx_create_studiopre() { return gxfx_studiopre_st::gx_studiopre_st::
 PluginLV2* gxfx_create_alembic() { return gxfx_alembic::gx_alembic::plugin(); }
 PluginLV2* gxfx_create_w20() { return gxfx_w20::gx_w20::plugin(); }
 PluginLV2* gxfx_create_ampmodul() { return gxfx_ampmodul::gx_ampmodul::plugin(); }
+PluginLV2* gxfx_ampsdsp_metalamp() { return gxfx_metalamp::gxmetal_amp::plugin(); }
+PluginLV2* gxfx_ampsdsp_metalhead() { return gxfx_metalhead::gxmetal_head::plugin(); }

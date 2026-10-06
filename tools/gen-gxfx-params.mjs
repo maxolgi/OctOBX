@@ -416,12 +416,46 @@ const MANIFEST = [
     // SCHEDULE (notOnGUI output — declared in out_ports like ampmodel's)
     // and the atom ports are filtered by the standard policy. One audio
     // input → mono → dual-mono host. c_model 18 "Off" = dry passthrough in
-    // the OctOBX wrapper. Still NOT shipped from the convolver family:
-    // gx_redeye + the chump preamps (fixed-IR aggregate — later Phase 2),
-    // gxmetal_amp/gxmetal_head (cab_data convolution), gx_detune (fftw
-    // complex shim), gxtuner (R2HC shim + host timer), the
+    // the OctOBX wrapper. Phase 2-b ships the rest of the redeye/metal
+    // convolver family below. Still NOT shipped from the convolver family:
+    // gx_detune (fftw complex shim), gxtuner (R2HC shim + host timer), the
     // impulseresponse.cc orphan (optional per plan).
     { key: 'cabinet', menuName: 'Cabinet', category: 'amp', ttl: 'gx_cabinet.lv2/gx_cabinet.ttl' },
+
+    // --- Phase 2-b: redeye + metal convolver family ---
+    // redeye: HOST-SIDE AGGREGATE (gxfx_dsp_conv.cpp RedeyeDsp) folding
+    // gx_redeye.lv2's THREE LV2 descriptors (#chump/#bigchump/#vibrochump
+    // over DSP/gx_redeye.h's amp_model[]) into ONE menu entry with a MODEL
+    // param 0..2; each model also carries its FIXED speaker IR (chump →
+    // 1x8, bigchump/vibrochump → 2x12) on the self-written convolver. The
+    // ttl's port space is per-descriptor with differing notOnGUI marks
+    // (chump hides the vibe knobs, vibrochump shows them) and no MODEL port
+    // at all (upstream selects the model by descriptor URI) — so the
+    // surface is INLINE: the union of the three descriptors' control ports
+    // at the shared gxredeye.h wrapper indexes (GAIN..SINEWAVE = 0..7,
+    // AMP_OUTPUT/AMP_INPUT = 8/9) + MODEL at port 10 (tonestack precedent).
+    // Defaults follow descriptor 0 (chump): Volume 0.5 (bigchump/
+    // vibrochump ship 0.3), Intensity 0 (vibrochump 3.0).
+    { key: 'redeye', menuName: 'Redeye', category: 'amp', params: [
+        { port: 0, symbol: 'Gain', name: 'Gain', default: 0.5, min: 0, max: 1, step: 0.01 },
+        { port: 1, symbol: 'Tone', name: 'Tone', default: 0.5, min: 0, max: 1, step: 0.01 },
+        { port: 2, symbol: 'Volume', name: 'Volume', default: 0.5, min: 0, max: 1, step: 0.01 },
+        { port: 3, symbol: 'Feedback', name: 'Feedback', default: 0, min: 0, max: 1, step: 1, integer: true },
+        { port: 4, symbol: 'Vibe', name: 'Vibe', default: 0, min: 0, max: 1, step: 1, integer: true },
+        { port: 5, symbol: 'Speed', name: 'Speed', default: 5, min: 0.1, max: 10, step: 0.1 },
+        { port: 6, symbol: 'Intensity', name: 'Intensity', default: 0, min: 0, max: 10, step: 0.1 },
+        { port: 7, symbol: 'Sinewave', name: 'Sinewave', default: 0, min: 0, max: 1, step: 1, integer: true },
+        { port: 10, symbol: 'Model', name: 'Model', default: 0, min: 0, max: 2, step: 1, integer: true },
+    ] },
+    // metal amp / metal head: the gxmetal_*.lv2 wrappers over the faust
+    // gxmetal_{amp,head}.cc preamps (DSP rides gxfx_dsp_amps.cpp — the .cc
+    // files #include valve.h) + a FIXED cab_data_4x12 convolution stage in
+    // gxfx_dsp_conv.cpp. ttl parses directly (TONE/DRIVE/PREGAIN/GAIN1);
+    // HIGHGAIN (notOnGUI) is filtered. The bundles' gx_metalamp.cc is a
+    // DEAD file (not built upstream) — the live wrapper is gxmetal_amp.cpp.
+    // The two differ in preamp class + DRIVE range (amp 1..20, head 0..1).
+    { key: 'metalamp', menuName: 'Metal Amp', category: 'amp', ttl: 'gxmetal_amp.lv2/gxmetal_amp.ttl' },
+    { key: 'metalhead', menuName: 'Metal Head', category: 'amp', ttl: 'gxmetal_head.lv2/gxmetal_head.ttl' },
 
 ];
 
@@ -697,6 +731,10 @@ const LABEL_OVERRIDES = {
     MasterGain: 'Master Gain',
     PreGain: 'Pre Gain',
     HIGHGAIN: 'High Gain',
+    // --- Phase 2-b metal convolver family (keys chosen to NOT collide with
+    // any symbol/name of effects 0..76 — GAIN1/TONE/DRIVE deliberately left
+    // alone: GAIN1 already rides ampmodel id 61 as "Gain1") ---
+    PREGAIN: 'Pre Gain',    // gxmetal_*.ttl (cf. ampmodel's camel PreGain)
     // gx_studiopre_st.ttl port 12 carries upstream's name typo "master_L"
     // on the R-channel master — key the symbol, not the name.
     master_r: 'Master R',

@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(77);
+        expect(FX_COUNT).toBe(80);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -123,6 +123,9 @@ describe("gxfx-params — layout invariants", () => {
             "utility", "utility", "utility", "utility", // balance, outputlevel, ampout, ampmodul
             // Phase 2-a convolution family (76)
             "amp",                                         // cabinet (kissfft convolver)
+            // Phase 2-b redeye + metal convolver family (77..79)
+            "amp",                                         // redeye (3-chump aggregate)
+            "amp", "amp",                                  // metalamp, metalhead (4x12 cab IR)
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -130,14 +133,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 452", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 469", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(452);
-        expect(FX_TOTAL_PARAMS).toBe(452);
+        expect(running).toBe(469);
+        expect(FX_TOTAL_PARAMS).toBe(469);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -207,16 +210,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..76", () => {
-        for (let i = 0; i < 77; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..79", () => {
+        for (let i = 0; i < 80; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(77)).toBe(false);
+        expect(isFxId(80)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(77, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(80, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -903,5 +906,47 @@ describe("gxfx-params — Phase 2-a convolution family additions", () => {
         // ampmodel's — never in the param mirror.
         expect(spec.effects[76].out_ports.map((p) => p.symbol)).toEqual(["SCHEDULE"]);
         expect(fx.params.some((p) => p.symbol === "SCHEDULE")).toBe(false);
+    });
+});
+
+describe("gxfx-params — Phase 2-b redeye + metal convolver family additions", () => {
+    it("redeye (inline aggregate): union of the 3 gx_redeye.ttl descriptors at gxredeye.h ports + MODEL 0..2", () => {
+        const fx = FX_EFFECTS[77];
+        expect(fx.key).toBe("redeye");
+        expect(fx.label).toBe("Redeye");
+        expect(fx.category).toBe("amp");
+        expect(fx.stereo).toBe(false); // mono wrapper — dual-mono host
+        expect(fx.params.map((p) => p.symbol)).toEqual([
+            "Gain", "Tone", "Volume", "Feedback", "Vibe", "Speed", "Intensity", "Sinewave", "Model",
+        ]);
+        expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 10]);
+        expect(fx.params[0]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.01 });
+        expect(fx.params[3]).toMatchObject({ default: 0, min: 0, max: 1, step: 1, integer: true }); // Feedback toggle
+        expect(fx.params[5]).toMatchObject({ default: 5, min: 0.1, max: 10, step: 0.1 }); // Speed
+        expect(fx.params[6]).toMatchObject({ default: 0, min: 0, max: 10, step: 0.1 }); // Intensity (chump default)
+        const model = fx.params[8];
+        expect(model).toMatchObject({ default: 0, min: 0, max: 2, step: 1, integer: true });
+        expect(fxParamFrom01(77, 8, 1)).toBe(2); // MODEL knob endpoint (2 = vibrochump)
+        expect(spec.effects[77].out_ports).toEqual([]);
+    });
+
+    it("metal amp / metal head (ttl-parsed): TONE/DRIVE/PREGAIN/GAIN1, HIGHGAIN notOnGUI-filtered, mono", () => {
+        const amp = FX_EFFECTS[78];
+        expect(amp.key).toBe("metalamp");
+        expect(amp.label).toBe("Metal Amp");
+        expect(amp.category).toBe("amp");
+        expect(amp.stereo).toBe(false);
+        expect(amp.params.map((p) => p.symbol)).toEqual(["TONE", "DRIVE", "PREGAIN", "GAIN1"]);
+        expect(amp.params.map((p) => p.port)).toEqual([0, 1, 2, 3]);
+        expect(amp.params.map((p) => p.name)).toEqual(["Tone", "Drive", "Pre Gain", "Gain 1"]);
+        expect(amp.params[1]).toMatchObject({ default: 10.5, min: 1, max: 20, step: 0.1 }); // metal amp DRIVE is a gain in dB
+        expect(amp.params[2]).toMatchObject({ default: 0, min: -20, max: 20, step: 1 });
+        expect(amp.params.some((p) => p.symbol === "HIGHGAIN")).toBe(false); // notOnGUI
+        const head = FX_EFFECTS[79];
+        expect(head.key).toBe("metalhead");
+        expect(head.label).toBe("Metal Head");
+        expect(head.stereo).toBe(false);
+        expect(head.params.map((p) => p.symbol)).toEqual(["TONE", "DRIVE", "PREGAIN", "GAIN1"]);
+        expect(head.params[1]).toMatchObject({ default: 0.32, min: 0, max: 1, step: 0.01 }); // head DRIVE is 0..1
     });
 });

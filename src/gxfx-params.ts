@@ -13,7 +13,7 @@
  * Freshness check:    node tools/gen-gxfx-params.mjs --check   (CI gate)
  */
 
-export const FX_COUNT = 77;
+export const FX_COUNT = 80;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
 export const FX_SLOT_PARAMS = 48;
@@ -40,7 +40,7 @@ export interface FxEffectDef {
     label: string;
     category: FxCategory;
     stereo: boolean;
-    offset: number;    // cumulative param offset into the flat 452-slot mirror
+    offset: number;    // cumulative param offset into the flat 469-slot mirror
     params: FxParamDef[];
 }
 
@@ -48,7 +48,7 @@ export interface FxEffectDef {
  * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →
  * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the
  * Phase-1 additions selectable per slot.
- * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2,11,3,5,12,6,4,12,5,2,34,19,15,14,24,3,1,1,1,7,4 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267,269,280,283,288,300,306,310,322,327,329,363,382,397,411,435,438,439,440,441,448. */
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2,11,3,5,12,6,4,12,5,2,34,19,15,14,24,3,1,1,1,7,4,9,4,4 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267,269,280,283,288,300,306,310,322,327,329,363,382,397,411,435,438,439,440,441,448,452,461,465. */
 export const FX_EFFECTS: FxEffectDef[] = [
     {
         id: 0, key: "wah", label: "Wah", category: "wah", stereo: false, offset: 0,
@@ -887,9 +887,41 @@ export const FX_EFFECTS: FxEffectDef[] = [
             { port: 3, symbol: "c_model", name: "Cab Model", default: 0, min: 0, max: 18, step: 1, integer: true },
         ],
     },
+    {
+        id: 77, key: "redeye", label: "Redeye", category: "amp", stereo: false, offset: 452,
+        params: [
+            { port: 0, symbol: "Gain", name: "Gain", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "Tone", name: "Tone", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "Volume", name: "Volume", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "Feedback", name: "Feedback", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 4, symbol: "Vibe", name: "Vibe", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 5, symbol: "Speed", name: "Speed", default: 5, min: 0.1, max: 10, step: 0.1 },
+            { port: 6, symbol: "Intensity", name: "Intensity", default: 0, min: 0, max: 10, step: 0.1 },
+            { port: 7, symbol: "Sinewave", name: "Sinewave", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 10, symbol: "Model", name: "Model", default: 0, min: 0, max: 2, step: 1, integer: true },
+        ],
+    },
+    {
+        id: 78, key: "metalamp", label: "Metal Amp", category: "amp", stereo: false, offset: 461,
+        params: [
+            { port: 0, symbol: "TONE", name: "Tone", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "DRIVE", name: "Drive", default: 10.5, min: 1, max: 20, step: 0.1 },
+            { port: 2, symbol: "PREGAIN", name: "Pre Gain", default: 0, min: -20, max: 20, step: 1 },
+            { port: 3, symbol: "GAIN1", name: "Gain 1", default: 0, min: -20, max: 20, step: 1 },
+        ],
+    },
+    {
+        id: 79, key: "metalhead", label: "Metal Head", category: "amp", stereo: false, offset: 465,
+        params: [
+            { port: 0, symbol: "TONE", name: "Tone", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "DRIVE", name: "Drive", default: 0.32, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "PREGAIN", name: "Pre Gain", default: 0, min: -20, max: 20, step: 1 },
+            { port: 3, symbol: "GAIN1", name: "Gain 1", default: 0, min: -20, max: 20, step: 1 },
+        ],
+    },
 ];
 
-export const FX_TOTAL_PARAMS = 452;
+export const FX_TOTAL_PARAMS = 469;
 
 // --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
 

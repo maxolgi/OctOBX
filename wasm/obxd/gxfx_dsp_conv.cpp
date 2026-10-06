@@ -1,6 +1,7 @@
-// OctOBX: Phase 2-a convolution family — the "Cabinet" effect (gx_cabinet)
-// over the self-written partitioned convolver (gxfx_convolver.h + kissfft).
-// Effect id 76 — same order as the generator manifest
+// OctOBX: Phase 2 convolution family — "Cabinet" (id 76, Phase 2-a) plus
+// the Phase 2-b convolver effects: "Redeye" (id 77, the gx_redeye.lv2
+// 3-chump aggregate) and "Metal Amp"/"Metal Head" (ids 78/79, the
+// gxmetal_*.lv2 preamps). Same order as the generator manifest
 // (tools/gen-gxfx-params.mjs) and the factory table in gxfx_host.cpp.
 //
 // Upstream gxcabinet.cpp is an LV2 worker-thread wrapper around
@@ -27,6 +28,8 @@
 //     -I wasm/obxd \
 //     -I wasm/obxd/kissfft \
 //     -I third_party/guitarix/trunk/src/LV2/DSP \
+//     -I third_party/guitarix/trunk/src/LV2/DSP/circuit_tables \
+//     -I third_party/guitarix/trunk/src/LV2/faust-generated \
 //     -I third_party/guitarix/trunk/src/zita-resampler-1.1.0 \
 //     -Wno-vla-cxx-extension \
 //     wasm/obxd/gxfx_dsp_conv.cpp
@@ -214,7 +217,313 @@ PluginLV2* create() { return new CabinetDsp(); }
 
 } // namespace gxfx_cabinet
 
+// ---------------------------------------------------------------------------
+// Phase 2-b: gx_redeye.lv2 — the Redeye aggregate (effect id 77)
+// ---------------------------------------------------------------------------
+// Upstream gxredeye.cpp is ONE wrapper exposing THREE LV2 descriptors
+// (#chump / #bigchump / #vibrochump): each picks a preamp model from
+// DSP/gx_redeye.h's amp_model[] AND a FIXED speaker cab (chump → 1x8 =
+// cab_table 17; bigchump/vibrochump → 2x12 = cab_table 1), runs the preamp
+// then convolves with that cab IR scaled by the DSP Impf impulse former at
+// value 1.0 (gain = 1.0² × 0.01 = 0.01 — the tabulated cab_data IR, NOT a
+// generated IR). OctOBX folds the three descriptors into ONE menu entry
+// with a MODEL param 0..2 (aggregate lifecycle per fx2plan — same shape as
+// gxfx_dsp_amps.cpp's AmpModelDsp): the preamp instance is hot-swapped on
+// MODEL and the model's cab IR re-pushed to the convolver. The wrapper's
+// noiser.cc denormal-breaker companion is skipped on SSE builds upstream
+// (#ifndef __SSE__) and per fx2plan research.
+//
+// PortIndex = gxredeye.h (the wrapper enum shared by all three preamp
+// classes = the ttl indexes); MODEL (port 10) is aggregate-only.
+//
+// All three .cc ride ONE enclosing namespace, mirroring upstream exactly
+// (gxredeye.cpp includes gx_redeye.h — and thereby the three classes —
+// inside namespace gx_redeye): the bigchump* circuit-table headers carry
+// INCLUDE GUARDS (_BIGCHUMPPRE_H_ etc.) and their #includes sit at the top
+// of the .cc files OUTSIDE the class namespaces, so they must land in ONE
+// shared scope for both gx_bigchump and gx_vibrochump to see them. The
+// redeye* tables (chump only) are guard-less but clash with nothing.
+namespace gxfx_redeye_dsp {
+typedef enum {
+    GAIN = 0, TONE = 1, VOLUME = 2, FEEDBACK = 3,
+    VIBE = 4, SPEED = 5, INTENSITY = 6, SINEWAVE = 7,
+    AMP_OUTPUT = 8, AMP_INPUT = 9,
+} PortIndex;
+#include "../../third_party/guitarix/trunk/src/LV2/faust-generated/gx_chump.cc"
+#include "../../third_party/guitarix/trunk/src/LV2/faust-generated/gx_bigchump.cc"
+#include "../../third_party/guitarix/trunk/src/LV2/faust-generated/gx_vibrochump.cc"
+}
+
+namespace gxfx_redeye {
+
+class RedeyeDsp : public PluginLV2 {
+private:
+    enum { MODEL_COUNT = 3 };
+    // per-model cab (cab_table indexes, from upstream set_amp_mono):
+    // chump → 17 (1x8), bigchump/vibrochump → 1 (2x12)
+    static const uint32_t MODEL_CAB[MODEL_COUNT];
+
+    uint32_t rate_;
+    gxfx_conv::PartitionedConvolver conv_;
+    bool active_;
+    int model_;          // current preamp model, -1 = none yet
+    PluginLV2* inst_;
+    // connected param pointers (host mirror floats), wrapper port space
+    float* params_[8];   // ports 0..7 (GAIN..SINEWAVE)
+    float* model_ptr_;   // port 10 (aggregate-only)
+    uint32_t ir_model_;  // cab index currently pushed to the convolver
+    uint32_t ir_rate_;   // engine rate the push happened at
+    std::vector<float> ir_work_;  // IR × 0.01 scratch
+
+    static PluginLV2* model_factory(int m) {
+        switch (m) {
+        case 0: return gxfx_redeye_dsp::gx_chump::plugin();
+        case 1: return gxfx_redeye_dsp::gx_bigchump::plugin();
+        default: return gxfx_redeye_dsp::gx_vibrochump::plugin();
+        }
+    }
+
+    void connect_model_params(PluginLV2* p) {
+        if (!p->connect_ports) return;
+        for (int i = 0; i < 8; ++i)
+            if (params_[i]) p->connect_ports((uint32_t)i, params_[i], p);
+    }
+    static void destroy_inst(PluginLV2* p) {
+        if (!p) return;
+        if (p->activate_plugin) p->activate_plugin(false, p);
+        if (p->delete_instance) p->delete_instance(p);
+    }
+    void ensure_model(int m) {
+        if (m == model_ && inst_) return;
+        PluginLV2* nu = model_factory(m);
+        if (!nu) return; // allocation failure: keep the old instance running
+        if (nu->set_samplerate) nu->set_samplerate(rate_, nu);
+        connect_model_params(nu);
+        if (active_ && nu->activate_plugin) nu->activate_plugin(true, nu);
+        PluginLV2* old = inst_;
+        inst_ = nu;
+        model_ = m;
+        destroy_inst(old); // destroy AFTER the swap
+    }
+    // Push the model's fixed cab IR (upstream: Impf value 1.0 → ×0.01) to
+    // the convolver; the convolver copies + resamples (cab tables carry
+    // their own ir_sr; ir_rate tells it so) and rebuilds on the next
+    // process().
+    void push_cab_ir(int m) {
+        const CabDesc& cab = *getCabEntry(MODEL_CAB[m]).data;
+        ir_work_.resize(cab.ir_count);
+        const float scale = 0.01f; // Impf(1.0): value² × 0.01
+        for (int32_t i = 0; i < cab.ir_count; ++i)
+            ir_work_[(size_t)i] = cab.ir_data[i] * scale;
+        conv_.set_ir(ir_work_.empty() ? 0 : &ir_work_[0], ir_work_.size(),
+                     (double)cab.ir_sr, (double)rate_);
+        ir_model_ = MODEL_CAB[m];
+        ir_rate_ = rate_;
+    }
+
+public:
+    RedeyeDsp()
+        : PluginLV2(), rate_(48000), conv_(), active_(false), model_(-1),
+          inst_(0), model_ptr_(0), ir_model_(0xffffffffu), ir_rate_(0),
+          ir_work_() {
+        for (int i = 0; i < 8; ++i) params_[i] = 0;
+        version = PLUGINLV2_VERSION;
+        id = "redeye";
+        name = N_("Redeye");
+        mono_audio = compute_static;
+        stereo_audio = 0;
+        set_samplerate = init_static;
+        activate_plugin = activate_static;
+        connect_ports = connect_static;
+        clear_state = clear_static;
+        delete_instance = del_instance;
+    }
+    ~RedeyeDsp() { destroy_inst(inst_); }
+
+    static void init_static(uint32_t rate, PluginLV2* p) {
+        RedeyeDsp* s = static_cast<RedeyeDsp*>(p);
+        s->rate_ = rate;
+        if (s->inst_) {
+            if (s->inst_->set_samplerate) s->inst_->set_samplerate(rate, s->inst_);
+        } else {
+            // eager-create the default model (0) at slot-assign time
+            s->ensure_model(0);
+        }
+        s->ir_rate_ = 0; // force cab IR re-push at the new rate
+    }
+    static void connect_static(uint32_t port, void* data, PluginLV2* p) {
+        RedeyeDsp* s = static_cast<RedeyeDsp*>(p);
+        float* f = static_cast<float*>(data);
+        // forward to the live instance too, so the host's post-move
+        // re-connect (fx_move_slot) re-points the underlying DSP as well
+        PluginLV2* inst = s->inst_;
+        if (port < 8) {
+            s->params_[port] = f;
+            if (inst && inst->connect_ports) inst->connect_ports(port, f, inst);
+        } else if (port == 10) {
+            s->model_ptr_ = f;
+        }
+    }
+    static int activate_static(bool start, PluginLV2* p) {
+        RedeyeDsp* s = static_cast<RedeyeDsp*>(p);
+        s->active_ = start;
+        if (s->inst_ && s->inst_->activate_plugin)
+            s->inst_->activate_plugin(start, s->inst_);
+        if (start) s->conv_.reset();  // fresh streaming state on enable
+        return 0;
+    }
+    static void clear_static(PluginLV2* p) {
+        RedeyeDsp* s = static_cast<RedeyeDsp*>(p);
+        if (s->inst_ && s->inst_->clear_state) s->inst_->clear_state(s->inst_);
+        s->conv_.reset();
+    }
+    static void compute_static(int count, float* input, float* output, PluginLV2* p) {
+        RedeyeDsp* s = static_cast<RedeyeDsp*>(p);
+        int m = 0;
+        if (s->model_ptr_) { // integer param; round + clamp defensively
+            m = (int)(*s->model_ptr_ + 0.5f);
+            if (m < 0) m = 0;
+            if (m > MODEL_COUNT - 1) m = MODEL_COUNT - 1;
+        }
+        if (m != s->model_ || !s->inst_) s->ensure_model(m);
+        // model or rate change re-pushes the model's cab IR (pending-rebuild
+        // policy: applied inside conv_.process below — bounded, same as
+        // Cabinet's maybe_rebuild)
+        if (s->ir_model_ != MODEL_CAB[m] || s->ir_rate_ != s->rate_)
+            s->push_cab_ir(m);
+        if (s->inst_ && s->inst_->mono_audio)
+            s->inst_->mono_audio(count, input, output, s->inst_);
+        else if (output != input)
+            memcpy(output, input, (size_t)count * sizeof(float)); // fail-open
+        s->conv_.process((size_t)count, output);
+    }
+    static void del_instance(PluginLV2* p) { delete static_cast<RedeyeDsp*>(p); }
+};
+
+const uint32_t RedeyeDsp::MODEL_CAB[RedeyeDsp::MODEL_COUNT] = { 17, 1, 1 };
+
+PluginLV2* create() { return new RedeyeDsp(); }
+
+} // namespace gxfx_redeye
+
+// ---------------------------------------------------------------------------
+// Phase 2-b: gxmetal_amp.lv2 / gxmetal_head.lv2 — Metal Amp / Metal Head
+// (effects ids 78/79)
+// ---------------------------------------------------------------------------
+// Upstream gxmetal_{amp,head}.cpp are wrappers over the faust preamp
+// classes (which live in gxfx_dsp_amps.cpp — they #include valve.h) + a
+// FIXED cab_data_4x12 convolution stage (cab_table 0). The wrapper's
+// `impf.compute(count, data, data, 10)` is an identity scaling (gain =
+// 10² × 0.01 = 1.0, applied in place on the global table upstream — a
+// quirk we do NOT replicate: the const table is handed to the convolver
+// unmodified). The IR is pushed once per rate at first render
+// (pending-rebuild policy). HIGHGAIN (port 6) is notOnGUI → never
+// connected, class default holds. PortIndex = gxmetal_{amp,head}.h = ttl.
+
+// gxmetal_{amp,head}.cc preamp factories live in gxfx_dsp_amps.cpp (the
+// valve.h TU — see the metal comment block above).
+PluginLV2* gxfx_ampsdsp_metalamp();
+PluginLV2* gxfx_ampsdsp_metalhead();
+
+namespace gxfx_metal {
+
+class MetalDsp : public PluginLV2 {
+private:
+    uint32_t rate_;
+    gxfx_conv::PartitionedConvolver conv_;
+    PluginLV2* preamp_;
+    bool have_ir_;      // IR pushed at this rate (pending until first render)
+    // HIGHGAIN (ttl port 6) is notOnGUI → filtered from the param mirror →
+    // the host never connects it. Upstream LV2 hosts still bind notOnGUI
+    // ports to a default-valued buffer; the faust ctors leave the f*_*
+    // pointers uninitialized, so we must do the same or compute() would
+    // dereference a wild pointer. Held at the ttl default 0 (highgain off).
+    float highgain_;
+
+public:
+    MetalDsp(PluginLV2* (*factory)(), const char* fx_id, const char* fx_name)
+        : PluginLV2(), rate_(48000), conv_(), preamp_(factory()),
+          have_ir_(false), highgain_(0.0f) {
+        version = PLUGINLV2_VERSION;
+        id = fx_id;
+        name = fx_name;
+        mono_audio = compute_static;
+        stereo_audio = 0;
+        set_samplerate = init_static;
+        activate_plugin = activate_static;
+        connect_ports = connect_static;
+        clear_state = clear_static;
+        delete_instance = del_instance;
+    }
+    ~MetalDsp() {
+        if (preamp_) {
+            if (preamp_->activate_plugin) preamp_->activate_plugin(false, preamp_);
+            if (preamp_->delete_instance) preamp_->delete_instance(preamp_);
+        }
+    }
+
+    static void init_static(uint32_t rate, PluginLV2* p) {
+        MetalDsp* s = static_cast<MetalDsp*>(p);
+        s->rate_ = rate;
+        if (s->preamp_ && s->preamp_->set_samplerate)
+            s->preamp_->set_samplerate(rate, s->preamp_);
+        if (s->preamp_ && s->preamp_->connect_ports)
+            s->preamp_->connect_ports(6 /* HIGHGAIN */, &s->highgain_, s->preamp_);
+        s->have_ir_ = false; // re-push the 4x12 IR at the new rate
+    }
+    static void connect_static(uint32_t port, void* data, PluginLV2* p) {
+        MetalDsp* s = static_cast<MetalDsp*>(p);
+        // TONE/DRIVE/PREGAIN/GAIN1 go straight to the preamp class (its
+        // connect() ignores audio ports + HIGHGAIN by default-case)
+        if (s->preamp_ && s->preamp_->connect_ports)
+            s->preamp_->connect_ports(port, data, s->preamp_);
+    }
+    static int activate_static(bool start, PluginLV2* p) {
+        MetalDsp* s = static_cast<MetalDsp*>(p);
+        if (s->preamp_ && s->preamp_->activate_plugin)
+            s->preamp_->activate_plugin(start, s->preamp_);
+        if (start) s->conv_.reset();
+        return 0;
+    }
+    static void clear_static(PluginLV2* p) {
+        MetalDsp* s = static_cast<MetalDsp*>(p);
+        if (s->preamp_ && s->preamp_->clear_state) s->preamp_->clear_state(s->preamp_);
+        s->conv_.reset();
+    }
+    static void compute_static(int count, float* input, float* output, PluginLV2* p) {
+        MetalDsp* s = static_cast<MetalDsp*>(p);
+        if (!s->have_ir_) {
+            // fixed 4x12 cab (cab_table 0), ×1.0 level — convolver resamples
+            // from the table's own rate (cab.ir_sr) and rebuilds on THIS
+            // render's process() call
+            const CabDesc& cab = *getCabEntry(0).data;
+            s->conv_.set_ir(cab.ir_data, (size_t)cab.ir_count,
+                            (double)cab.ir_sr, (double)s->rate_);
+            s->have_ir_ = true;
+        }
+        if (s->preamp_ && s->preamp_->mono_audio)
+            s->preamp_->mono_audio(count, input, output, s->preamp_);
+        else if (output != input)
+            memcpy(output, input, (size_t)count * sizeof(float)); // fail-open
+        s->conv_.process((size_t)count, output);
+    }
+    static void del_instance(PluginLV2* p) { delete static_cast<MetalDsp*>(p); }
+};
+
+PluginLV2* create_amp() {
+    return new MetalDsp(gxfx_ampsdsp_metalamp, "metalamp", N_("Metal Amp"));
+}
+PluginLV2* create_head() {
+    return new MetalDsp(gxfx_ampsdsp_metalhead, "metalhead", N_("Metal Head"));
+}
+
+} // namespace gxfx_metal
+
 // namespace path: gxfx_cabinet::create(). Factory order MUST match the
-// generator manifest order (id 76).
+// generator manifest order (id 76 cabinet + Phase 2-b: 77 redeye, 78 metal
+// amp, 79 metal head).
 typedef PluginLV2* (*gxfx_factory)();
 PluginLV2* gxfx_create_cabinet() { return gxfx_cabinet::create(); }
+PluginLV2* gxfx_create_redeye() { return gxfx_redeye::create(); }
+PluginLV2* gxfx_create_metalamp() { return gxfx_metal::create_amp(); }
+PluginLV2* gxfx_create_metalhead() { return gxfx_metal::create_head(); }
