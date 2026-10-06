@@ -538,7 +538,7 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 57) return `effect_count=${mod._fx_effect_count()}, want 57 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay)`;
+    if (mod._fx_effect_count() !== 61) return `effect_count=${mod._fx_effect_count()}, want 61 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
@@ -563,7 +563,11 @@ async function main() {
     if (mod._fx_param_count(54) !== 3) return `param_count(54)=${mod._fx_param_count(54)}, want 3 (oc_2)`;
     if (mod._fx_param_count(55) !== 2) return `param_count(55)=${mod._fx_param_count(55)}, want 2 (classic_delay)`;
     if (mod._fx_param_count(56) !== 2) return `param_count(56)=${mod._fx_param_count(56)}, want 2 (classic_echo)`;
-    if (mod._fx_param_count(57) !== -1) return `param_count(57)=${mod._fx_param_count(57)}, want -1 (out of range)`;
+    if (mod._fx_param_count(57) !== 11) return `param_count(57)=${mod._fx_param_count(57)}, want 11 (zita_rev1)`;
+    if (mod._fx_param_count(58) !== 3) return `param_count(58)=${mod._fx_param_count(58)}, want 3 (freeverb)`;
+    if (mod._fx_param_count(59) !== 5) return `param_count(59)=${mod._fx_param_count(59)}, want 5 (room_simulator)`;
+    if (mod._fx_param_count(60) !== 12) return `param_count(60)=${mod._fx_param_count(60)}, want 12 (shimmizita)`;
+    if (mod._fx_param_count(61) !== -1) return `param_count(61)=${mod._fx_param_count(61)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -576,6 +580,10 @@ async function main() {
     if (mod._fx_is_stereo(50) !== 1) return `is_stereo(50)=${mod._fx_is_stereo(50)}, want 1 (gxtape_st)`;
     if (mod._fx_is_stereo(45) !== 0) return `is_stereo(45)=${mod._fx_is_stereo(45)}, want 0 (duck_delay, dual-mono)`;
     if (mod._fx_is_stereo(53) !== 0) return `is_stereo(53)=${mod._fx_is_stereo(53)}, want 0 (ts9, dual-mono)`;
+    if (mod._fx_is_stereo(57) !== 1) return `is_stereo(57)=${mod._fx_is_stereo(57)}, want 1 (zita_rev1, native stereo)`;
+    if (mod._fx_is_stereo(60) !== 1) return `is_stereo(60)=${mod._fx_is_stereo(60)}, want 1 (shimmizita, native stereo)`;
+    if (mod._fx_is_stereo(58) !== 0) return `is_stereo(58)=${mod._fx_is_stereo(58)}, want 0 (freeverb, dual-mono)`;
+    if (mod._fx_is_stereo(59) !== 0) return `is_stereo(59)=${mod._fx_is_stereo(59)}, want 0 (room_simulator, dual-mono)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
@@ -597,7 +605,13 @@ async function main() {
     if (mod._fx_default(54, 1) !== f32(0.5)) return `default(54,1)=${mod._fx_default(54, 1)}, want ${f32(0.5)} (oc_2 OCTAVE1)`;
     if (mod._fx_default(55, 1) !== 0) return `default(55,1)=${mod._fx_default(55, 1)}, want 0 (classic_delay GAIN)`;
     if (mod._fx_default(56, 1) !== 1) return `default(56,1)=${mod._fx_default(56, 1)}, want 1 (classic_echo TIME)`;
-    if (mod._fx_default(57, 0) !== 0) return `default(57,0)=${mod._fx_default(57, 0)}, want 0 (invalid fx)`;
+    if (mod._fx_default(57, 4) !== 60) return `default(57,4)=${mod._fx_default(57, 4)}, want 60 (zita_rev1 IN_DELAY)`;
+    if (mod._fx_default(58, 2) !== 50) return `default(58,2)=${mod._fx_default(58, 2)}, want 50 (freeverb WET_DRY)`;
+    if (mod._fx_default(59, 0) !== f32(1.0)) return `default(59,0)=${mod._fx_default(59, 0)}, want 1 (room_simulator EFFECT on)`;
+    if (mod._fx_default(59, 1) !== 20) return `default(59,1)=${mod._fx_default(59, 1)}, want 20 (room_simulator PREDELAYMS)`;
+    if (mod._fx_default(60, 8) !== f32(0.0)) return `default(60,8)=${mod._fx_default(60, 8)}, want 0 (shimmizita SHIFT)`;
+    if (mod._fx_default(60, 10) !== f32(3.0)) return `default(60,10)=${mod._fx_default(60, 10)}, want 3 (shimmizita T60DS)`;
+    if (mod._fx_default(61, 0) !== 0) return `default(61,0)=${mod._fx_default(61, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
     for (let s = 0; s < 11; s++) {
@@ -615,7 +629,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 57); // FX_COUNT == 57 since Phase 1-e
+    mod._fx_set_slot(0, 0, 61); // FX_COUNT == 61 since Phase 1-f
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -1258,6 +1272,86 @@ async function main() {
     mod._obxd_panic(1);
     if (!(s > 0)) return `digital_delay silent after heap growth (sum=${s.toExponential(3)})`;
     console.log(`    digital_delay heap growth: ${(growth / 1048576).toFixed(1)} MB for 11 slots (~${(growth / 11 / 1048576).toFixed(2)} MB/slot incl. growth-granularity slack; class cost 8 MB/slot dual-mono)`);
+  });
+
+  // (x) Reverb family spot check (Phase 1-f) ---------------------------------
+  // Exercises every DSP shape of the family: the faust-generated zita_rev1
+  // (native stereo), the freeverb orphan (mono, dual-mono pair), and the
+  // bundle-LOCAL room_simulator (mono) + shimmizita (stereo) classes —
+  // plain faust classes per fx2plan, NOT convolver-based. Renders prove the
+  // wrapper-space PortIndex enums link; wet/dry sweeps on zita_rev1
+  // (DRY_WET_MIX) and room_simulator (DRYWET) prove the generated FX_PORTS
+  // rows reach the DSP. A sustained note through a full-wet room_simulator
+  // also proves the tail rings past note-off (reverb decay), the insert's
+  // tail-past-idle contract for the family.
+  expect('x. reverb family: zita/freeverb/room_simulator/shimmizita render; wet/dry sweeps reach the DSP; tail rings past note-off', () => {
+    const renderTrace = (fxId, setParams, quanta = 120, skip = 10) => {
+      mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
+      mod._fx_set_slot(0, 0, fxId);
+      if (mod._fx_get_slot(0, 0) !== fxId) return { err: `slot(0,0)=${mod._fx_get_slot(0, 0)}, want ${fxId}` };
+      setParams.forEach(([p, v]) => mod._fx_set_param(0, 0, p, v));
+      mod._fx_set_enabled(0, 0, 1);
+      mod._obxd_midi_in(0, 0x90, 60, 100);
+      let s = 0;
+      let finite = true;
+      const perQuantum = [];
+      for (let q = 0; q < quanta; q++) {
+        mod._obxd_render(128);
+        if (q === quanta - 60) mod._obxd_midi_in(0, 0x80, 60, 0); // note off 60 quanta in
+        if (q < skip) continue; // let the note settle
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        let qs = 0;
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+          qs += l[i] * l[i] + r[i] * r[i];
+        }
+        s += qs;
+        perQuantum.push(Math.sqrt(qs / 256));
+      }
+      mod._obxd_panic(0);
+      if (!finite) return { err: `non-finite sample through fx ${fxId}` };
+      return { rms: Math.sqrt(s / ((quanta - skip) * 256)), perQuantum };
+    };
+    // default passes — the point is: wrapper PortIndex links, delay lines
+    // link, output stays finite+alive
+    for (const [fxId, name] of [
+      [57, 'zita_rev1'], [58, 'freeverb'], [59, 'room_simulator'], [60, 'shimmizita'],
+    ]) {
+      const r = renderTrace(fxId, []);
+      if (r.err) return `${name}: ${r.err}`;
+      if (!(r.rms > 0)) return `${name} output silent (rms=${r.rms.toExponential(3)})`;
+    }
+    // zita_rev1 DRY_WET_MIX reach (param ordinal 9 = port 9, -1..1):
+    // full-wet vs full-dry energy over a sustained note must differ.
+    const zitaWet = renderTrace(57, [[9, 1]]);
+    if (zitaWet.err) return zitaWet.err;
+    const zitaDry = renderTrace(57, [[9, -1]]);
+    if (zitaDry.err) return zitaDry.err;
+    const wetR = zitaWet.rms / zitaDry.rms;
+    if (!(wetR < 0.8 || wetR > 1.25)) {
+      return `zita_rev1 DRY_WET_MIX does not reach the DSP: wet/dry rms ratio ${wetR.toFixed(3)} ~ 1`;
+    }
+    // room_simulator DRYWET reach (param ordinal 4 = port 6, 0..1):
+    // full-wet vs dry-only. With ROOMSIZE maxed the wet path is dense.
+    const roomWet = renderTrace(59, [[4, 1], [3, 1]]);
+    if (roomWet.err) return roomWet.err;
+    const roomDry = renderTrace(59, [[4, 0], [3, 1]]);
+    if (roomDry.err) return roomDry.err;
+    const roomR = roomWet.rms / roomDry.rms;
+    if (!(roomR < 0.8 || roomR > 1.25)) {
+      return `room_simulator DRYWET does not reach the DSP: wet/dry rms ratio ${roomR.toFixed(3)} ~ 1`;
+    }
+    // tail past note-off: with the note released 60 quanta before the end,
+    // the full-wet room_simulator output must still carry energy in the
+    // last quarter of the run (dry would be near-silent there).
+    const n = roomWet.perQuantum.length;
+    const tail = roomWet.perQuantum.slice(n - (n >> 2));
+    const tailEnergy = tail.reduce((x, y) => x + y * y, 0);
+    if (!(tailEnergy > 0)) {
+      return `room_simulator wet tail dead after note-off (tailEnergy=${tailEnergy.toExponential(3)})`;
+    }
+    console.log(`    reverb wet/dry rms ratios: zita_rev1 ${wetR.toFixed(3)}, room_simulator ${roomR.toFixed(3)} (both away from 1 — the mix ports reach the DSP)`);
   });
 
   // --- summary -------------------------------------------------------------

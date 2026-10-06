@@ -89,6 +89,13 @@ PluginLV2* gxfx_create_ts9();
 PluginLV2* gxfx_create_oc_2();
 PluginLV2* gxfx_create_classic_delay();
 PluginLV2* gxfx_create_classic_echo();
+// reverb family (gxfx_dsp_reverb.cpp, Phase 1-f — the standalone
+// gx_zita_rev1 stereo FDN + the freeverb orphan + the bundle-local
+// room_simulator + shimmizita classes; v1's id 10 stays stereoverb)
+PluginLV2* gxfx_create_zita_rev1();
+PluginLV2* gxfx_create_freeverb();
+PluginLV2* gxfx_create_room_simulator();
+PluginLV2* gxfx_create_shimmizita();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -148,7 +155,11 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_ts9,
     gxfx_create_oc_2,
     gxfx_create_classic_delay,
-    gxfx_create_classic_echo
+    gxfx_create_classic_echo,
+    gxfx_create_zita_rev1,
+    gxfx_create_freeverb,
+    gxfx_create_room_simulator,
+    gxfx_create_shimmizita
 };
 
 // Generator↔host drift guard: the factory registry above must list every

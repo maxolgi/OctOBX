@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ===========================================================================
 // gen-gxfx-params.mjs — generates every consumable artifact of the guitarix
-// FX param spec (fx2plan.md Phase 1-a..1-e: manifest-driven, ttl-parsing).
+// FX param spec (fx2plan.md Phase 1-a..1-f: manifest-driven, ttl-parsing).
 //
 // SOURCE OF TRUTH for param DATA, per effect kind:
 //   - v1 eleven (wah..reverb, ids 0..10): PINNED in
@@ -181,6 +181,20 @@ const V1_KEYS = Object.keys(V1_CATEGORY_BY_KEY);
 // tree (no other true delay/echo/tape bundles remain — gx_delay.lv2 and
 // gx_echo.lv2 are wrapper-only bundles over stereodelay.cc/stereoecho.cc =
 // v1 ids 8/9, and mbdelay/mbecho are the multiband family, later phase).
+// Phase 1-f ships the reverb family: the faust-generated gx_zita_rev1
+// (STANDALONE stereo class — nothing to do with v1's id 10 "Reverb", which
+// is the stereoverb.cc class behind the gx_reverb.lv2 wrapper-only bundle),
+// the freeverb orphan (mono classic Schroeder reverb), and the bundle-LOCAL
+// room_simulator.cc + shimmizita.cc (plain faust classes, NOT
+// convolver-based — fx2plan research). All four carry multi-MB static
+// delay-line double arrays as class members (shimmizita ~4.8 MB, zita
+// ~1.8 MB, room_simulator ~1.9 MB per object — allocated at CREATION like
+// digital_delay's fVec2, bounded per slot). Also present but NOT shipped:
+// gx_mbreverb.lv2/mbreverb~old.cc is a dead file (not built upstream) and
+// faust-generated/mbreverb.cc is the multiband family (later phase);
+// tonestack_ampeg_rev(.cc/_stereo.cc) are TONESTACK classes (amp family),
+// the "rev" is Ampeg's model name, not a reverb; impulseresponse.cc is the
+// Phase-2 convolver orphan.
 // ---------------------------------------------------------------------------
 const MANIFEST = [
     // --- v1 eleven (ids 0..10) — pinned data, canonical default chain ---
@@ -264,6 +278,17 @@ const MANIFEST = [
     // (stereoecho.cc)
     { key: 'classic_delay', menuName: 'Classic Delay', category: 'delay', orphan: 'delay.cc' },
     { key: 'classic_echo', menuName: 'Classic Echo', category: 'delay', orphan: 'echo.cc' },
+
+    // --- Phase 1-f: reverb family ---
+    // zita_rev1: named "Zita Reverb" to stay distinct from v1's id 10
+    // "Reverb" (stereoverb.cc via the wrapper-only gx_reverb.lv2 bundle).
+    // room_simulator + shimmizita are bundle-LOCAL dsp (their .lv2 dirs
+    // ship the .cc); ttl port space = the wrapper enums from the gx_*.h
+    // headers. freeverb is the classic mono faust orphan.
+    { key: 'zita_rev1', menuName: 'Zita Reverb', category: 'reverb', ttl: 'gx_zita_rev1.lv2/gx_zita_rev1.ttl' },
+    { key: 'freeverb', menuName: 'Freeverb', category: 'reverb', orphan: 'freeverb.cc' },
+    { key: 'room_simulator', menuName: 'Room Simulator', category: 'reverb', ttl: 'gx_room_simulator.lv2/gx_room_simulator.ttl' },
+    { key: 'shimmizita', menuName: 'Shimmizita', category: 'reverb', ttl: 'gx_shimmizita.lv2/gx_shimmizita.ttl' },
 ];
 
 const FX_COUNT = MANIFEST.length;
@@ -500,6 +525,36 @@ const LABEL_OVERRIDES = {
     OCTAVE2: 'Octave 2',
     // classic echo orphan (PERCENT = wet share)
     PERCENT: 'Wet %',
+    // --- Phase 1-f reverb family (keys chosen to NOT collide with any
+    // symbol/name of effects 0..56 — regeneration keeps those
+    // byte-identical; e.g. there are deliberately NO 'LEVEL'/'EFFECT'/
+    // 'DEPTH'/'MODE'/'SPEED' overrides: gxechocat/gxtubedelay carry LEVEL,
+    // duck_delay_st EFFECT, vibe DEPTH, digital_delay MODE, gxtape speed) ---
+    // gx_zita_rev1 (ttl symbols; the ttl spells the level port "level")
+    EQ1_FREQ: 'EQ1 Freq',
+    EQ1_LEVEL: 'EQ1 Level',
+    EQ2_FREQ: 'EQ2 Freq',
+    EQ2_LEVEL: 'EQ2 Level',
+    IN_DELAY: 'Predelay',
+    LOW_RT60: 'Low RT60',
+    MID_RT60: 'Mid RT60',
+    LF_X: 'LF X',
+    HF_DAMPING: 'HF Damping',
+    DRY_WET_MIX: 'Dry/Wet Mix',
+    // gx_room_simulator (RT is the feedback decay multiplier in the dsp)
+    PREDELAYMS: 'Predelay Ms',
+    RT: 'Decay',
+    ROOMSIZE: 'Room Size',
+    DRYWET: 'Dry/Wet',
+    // gx_shimmizita (t60ds/t60m = decay at freq 0 / midrange per the .inc
+    // docs; CONTROL = envelope-follower-to-pitch-shifter influence)
+    PSDRYWET: 'Pitch Dry/Wet',
+    SHIFT: 'Pitch Shift',
+    T60DS: 'T60 Low',
+    T60M: 'T60 Mid',
+    CONTROL: 'Env Control',
+    // freeverb orphan
+    DAMP: 'Damping',
 };
 
 function titleCase(s) {

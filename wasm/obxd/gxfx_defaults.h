@@ -25,7 +25,7 @@
 #ifndef GXFX_DEFAULTS_H
 #define GXFX_DEFAULTS_H
 
-#define GXFX_EFFECT_COUNT 57
+#define GXFX_EFFECT_COUNT 61
 #define GXFX_PORTS_ROW 30
 
 static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
@@ -542,11 +542,47 @@ static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
     },
+    /* 57: zita_rev1 — 11 params + 37 pad */
+    {
+            0.0f, 1500.0f,    0.0f,  315.0f,   60.0f,    3.0f,  200.0f, 6000.0f,
+            2.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 58: freeverb — 3 params + 45 pad */
+    {
+            0.5f,    0.5f,   50.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 59: room_simulator — 5 params + 43 pad */
+    {
+            1.0f,   20.0f,    0.3f,    1.0f,    0.5f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 60: shimmizita — 12 params + 36 pad */
+    {
+            0.5f,    0.0f,    0.5f,    1.0f,  200.0f, 6000.0f,    0.0f,    0.5f,
+            0.0f,    0.1f,    3.0f,    2.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
 };
 
-static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2, 11, 30, 5, 2, 6, 1, 5, 3, 0, 1, 8, 5, 5, 8, 10, 7, 3, 5, 8, 8, 8, 10, 10, 8, 5, 3, 3, 2, 2 };
+static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2, 11, 30, 5, 2, 6, 1, 5, 3, 0, 1, 8, 5, 5, 8, 10, 7, 3, 5, 8, 8, 8, 10, 10, 8, 5, 3, 3, 2, 2, 11, 3, 5, 12 };
 
-static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,0,0,0,1,1,0,0,1,0,1,0,1,0,0,0,0,0,0 };
+static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,0,0,0,1,1,0,0,1,0,1,0,1,0,0,0,0,0,0,1,0,0,1 };
 
 static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     /*  0: wah */
@@ -663,6 +699,14 @@ static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     { 0,1 },
     /* 56: classic_echo */
     { 0,1 },
+    /* 57: zita_rev1 */
+    { 0,1,2,3,4,5,6,7,8,9,10 },
+    /* 58: freeverb */
+    { 0,1,2 },
+    /* 59: room_simulator */
+    { 2,3,4,5,6 },
+    /* 60: shimmizita */
+    { 4,5,6,7,8,9,10,11,12,13,14,15 },
 };
 
 #endif /* GXFX_DEFAULTS_H */

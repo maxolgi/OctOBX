@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(57);
+        expect(FX_COUNT).toBe(61);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -110,6 +110,8 @@ describe("gxfx-params — layout invariants", () => {
             "drive",                                   // ts9 (Tubescreamer — drive, not delay)
             "special",                                 // oc_2 (octave divider — special)
             "delay", "delay",                          // classic_delay, classic_echo
+            // Phase 1-f reverb family (57..60)
+            "reverb", "reverb", "reverb", "reverb",    // zita_rev1, freeverb, room_simulator, shimmizita
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -117,14 +119,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 269", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 300", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(269);
-        expect(FX_TOTAL_PARAMS).toBe(269);
+        expect(running).toBe(300);
+        expect(FX_TOTAL_PARAMS).toBe(300);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -194,16 +196,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..56", () => {
-        for (let i = 0; i < 57; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..60", () => {
+        for (let i = 0; i < 61; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(57)).toBe(false);
+        expect(isFxId(61)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(57, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(61, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -618,5 +620,76 @@ describe("gxfx-params — Phase 1-e time/delay family additions", () => {
         expect(FX_EFFECTS[8].stereo).toBe(true);
         expect(FX_EFFECTS[9].key).toBe("echo");
         expect(FX_EFFECTS[9].stereo).toBe(true);
+    });
+});
+
+describe("gxfx-params — Phase 1-f reverb family additions", () => {
+    it("zita_rev1 (ttl, STEREO): 11 params at ttl ports 0..10 — distinct from v1 id 10 stereoverb", () => {
+        const fx = FX_EFFECTS[57];
+        expect(fx.key).toBe("zita_rev1");
+        expect(fx.label).toBe("Zita Reverb");
+        expect(fx.category).toBe("reverb");
+        expect(fx.stereo).toBe(true);
+        expect(fx.params.map((p) => p.symbol)).toEqual([
+            "level", "EQ2_FREQ", "EQ1_LEVEL", "EQ1_FREQ", "IN_DELAY",
+            "LOW_RT60", "LF_X", "HF_DAMPING", "MID_RT60", "DRY_WET_MIX", "EQ2_LEVEL",
+        ]);
+        expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        expect(fx.params.map((p) => p.name)).toEqual([
+            "Level", "EQ2 Freq", "EQ1 Level", "EQ1 Freq", "Predelay",
+            "Low RT60", "LF X", "HF Damping", "Mid RT60", "Dry/Wet Mix", "EQ2 Level",
+        ]);
+        expect(fx.params[0]).toMatchObject({ default: 0, min: -60, max: 4, step: 1 });
+        expect(fx.params[4]).toMatchObject({ default: 60, min: 20, max: 100, step: 1 }); // IN_DELAY ms
+        expect(fx.params[9]).toMatchObject({ default: 0, min: -1, max: 1, step: 0.01 }); // DRY_WET_MIX
+        // v1 id 10 keeps its stereoverb identity ("Reverb", 5 ttl-pinned params)
+        expect(FX_EFFECTS[10].key).toBe("reverb");
+        expect(FX_EFFECTS[10].label).toBe("Reverb");
+        expect(FX_EFFECTS[10].params.length).toBe(5);
+    });
+
+    it("freeverb orphan: connect-comment metadata, WET_DRY shares the global Dry/Wet label", () => {
+        const fx = FX_EFFECTS[58];
+        expect(fx.key).toBe("freeverb");
+        expect(fx.label).toBe("Freeverb");
+        expect(fx.category).toBe("reverb");
+        expect(fx.stereo).toBe(false);
+        expect(fx.params.map((p) => p.symbol)).toEqual(["ROOMSIZE", "DAMP", "WET_DRY"]);
+        expect(fx.params.map((p) => p.name)).toEqual(["Room Size", "Damping", "Dry/Wet"]);
+        expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2]);
+        expect(fx.params[0]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.025 });
+        expect(fx.params[1]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.025 });
+        expect(fx.params[2]).toMatchObject({ default: 50, min: 0, max: 100, step: 1 });
+    });
+
+    it("room_simulator (bundle-local, mono): ttl ports 2..6; shimmizita (bundle-local, STEREO): ports 4..15", () => {
+        const room = FX_EFFECTS[59];
+        expect(room.key).toBe("room_simulator");
+        expect(room.label).toBe("Room Simulator");
+        expect(room.category).toBe("reverb");
+        expect(room.stereo).toBe(false);
+        expect(room.params.map((p) => p.symbol)).toEqual(["EFFECT", "PREDELAYMS", "RT", "ROOMSIZE", "DRYWET"]);
+        expect(room.params.map((p) => p.port)).toEqual([2, 3, 4, 5, 6]);
+        expect(room.params.map((p) => p.name)).toEqual(["Effect", "Predelay Ms", "Decay", "Room Size", "Dry/Wet"]);
+        expect(room.params[0]).toMatchObject({ default: 1, min: 0, max: 1, step: 0.01 }); // on/off checkbox
+        expect(room.params[1]).toMatchObject({ default: 20, min: 1, max: 200, step: 1 });
+        expect(room.params[3]).toMatchObject({ default: 1, min: 0, max: 3, step: 0.01 });
+        const shim = FX_EFFECTS[60];
+        expect(shim.key).toBe("shimmizita");
+        expect(shim.label).toBe("Shimmizita");
+        expect(shim.category).toBe("reverb");
+        expect(shim.stereo).toBe(true);
+        expect(shim.params.map((p) => p.symbol)).toEqual([
+            "CONTROL", "DEPTH", "DRYWET", "ENVELOPE", "F1", "F2",
+            "MODE", "PSDRYWET", "SHIFT", "SPEED", "T60DS", "T60M",
+        ]);
+        expect(shim.params.map((p) => p.port)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        expect(shim.params.map((p) => p.name)).toEqual([
+            "Env Control", "Depth", "Dry/Wet", "Envelope", "F1", "F2",
+            "Mode", "Pitch Dry/Wet", "Pitch Shift", "Speed", "T60 Low", "T60 Mid",
+        ]);
+        expect(shim.params[8]).toMatchObject({ default: 0, min: -6, max: 6, step: 0.1 }); // SHIFT semitones
+        expect(shim.params[10]).toMatchObject({ default: 3, min: 1, max: 8, step: 0.1 }); // T60DS sec
+        expect(shim.params[9]).toMatchObject({ default: 0.1, min: 0.1, max: 10, step: 0.1 }); // SPEED
     });
 });

@@ -13,7 +13,7 @@
  * Freshness check:    node tools/gen-gxfx-params.mjs --check   (CI gate)
  */
 
-export const FX_COUNT = 57;
+export const FX_COUNT = 61;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
 export const FX_SLOT_PARAMS = 48;
@@ -40,7 +40,7 @@ export interface FxEffectDef {
     label: string;
     category: FxCategory;
     stereo: boolean;
-    offset: number;    // cumulative param offset into the flat 269-slot mirror
+    offset: number;    // cumulative param offset into the flat 300-slot mirror
     params: FxParamDef[];
 }
 
@@ -48,7 +48,7 @@ export interface FxEffectDef {
  * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →
  * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the
  * Phase-1 additions selectable per slot.
- * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267. */
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2,11,3,5,12 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267,269,280,283,288. */
 export const FX_EFFECTS: FxEffectDef[] = [
     {
         id: 0, key: "wah", label: "Wah", category: "wah", stereo: false, offset: 0,
@@ -604,9 +604,60 @@ export const FX_EFFECTS: FxEffectDef[] = [
             { port: 1, symbol: "TIME", name: "Time", default: 1, min: 1, max: 2000, step: 1 },
         ],
     },
+    {
+        id: 57, key: "zita_rev1", label: "Zita Reverb", category: "reverb", stereo: true, offset: 269,
+        params: [
+            { port: 0, symbol: "level", name: "Level", default: 0, min: -60, max: 4, step: 1 },
+            { port: 1, symbol: "EQ2_FREQ", name: "EQ2 Freq", default: 1500, min: 160, max: 10000, step: 10 },
+            { port: 2, symbol: "EQ1_LEVEL", name: "EQ1 Level", default: 0, min: -15, max: 15, step: 0.1 },
+            { port: 3, symbol: "EQ1_FREQ", name: "EQ1 Freq", default: 315, min: 40, max: 2500, step: 10 },
+            { port: 4, symbol: "IN_DELAY", name: "Predelay", default: 60, min: 20, max: 100, step: 1 },
+            { port: 5, symbol: "LOW_RT60", name: "Low RT60", default: 3, min: 1, max: 8, step: 0.1 },
+            { port: 6, symbol: "LF_X", name: "LF X", default: 200, min: 50, max: 1000, step: 10 },
+            { port: 7, symbol: "HF_DAMPING", name: "HF Damping", default: 6000, min: 1500, max: 23520, step: 10 },
+            { port: 8, symbol: "MID_RT60", name: "Mid RT60", default: 2, min: 1, max: 8, step: 0.1 },
+            { port: 9, symbol: "DRY_WET_MIX", name: "Dry/Wet Mix", default: 0, min: -1, max: 1, step: 0.01 },
+            { port: 10, symbol: "EQ2_LEVEL", name: "EQ2 Level", default: 0, min: -15, max: 15, step: 0.1 },
+        ],
+    },
+    {
+        id: 58, key: "freeverb", label: "Freeverb", category: "reverb", stereo: false, offset: 280,
+        params: [
+            { port: 0, symbol: "ROOMSIZE", name: "Room Size", default: 0.5, min: 0, max: 1, step: 0.025 },
+            { port: 1, symbol: "DAMP", name: "Damping", default: 0.5, min: 0, max: 1, step: 0.025 },
+            { port: 2, symbol: "WET_DRY", name: "Dry/Wet", default: 50, min: 0, max: 100, step: 1 },
+        ],
+    },
+    {
+        id: 59, key: "room_simulator", label: "Room Simulator", category: "reverb", stereo: false, offset: 283,
+        params: [
+            { port: 2, symbol: "EFFECT", name: "Effect", default: 1, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "PREDELAYMS", name: "Predelay Ms", default: 20, min: 1, max: 200, step: 1 },
+            { port: 4, symbol: "RT", name: "Decay", default: 0.3, min: 0, max: 1, step: 0.01 },
+            { port: 5, symbol: "ROOMSIZE", name: "Room Size", default: 1, min: 0, max: 3, step: 0.01 },
+            { port: 6, symbol: "DRYWET", name: "Dry/Wet", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 60, key: "shimmizita", label: "Shimmizita", category: "reverb", stereo: true, offset: 288,
+        params: [
+            { port: 4, symbol: "CONTROL", name: "Env Control", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 5, symbol: "DEPTH", name: "Depth", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 6, symbol: "DRYWET", name: "Dry/Wet", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 7, symbol: "ENVELOPE", name: "Envelope", default: 1, min: 0.1, max: 3, step: 0.01 },
+            { port: 8, symbol: "F1", name: "F1", default: 200, min: 50, max: 1000, step: 10 },
+            { port: 9, symbol: "F2", name: "F2", default: 6000, min: 1500, max: 23520, step: 10 },
+            { port: 10, symbol: "MODE", name: "Mode", default: 0, min: -3, max: 3, step: 0.1 },
+            { port: 11, symbol: "PSDRYWET", name: "Pitch Dry/Wet", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 12, symbol: "SHIFT", name: "Pitch Shift", default: 0, min: -6, max: 6, step: 0.1 },
+            { port: 13, symbol: "SPEED", name: "Speed", default: 0.1, min: 0.1, max: 10, step: 0.1 },
+            { port: 14, symbol: "T60DS", name: "T60 Low", default: 3, min: 1, max: 8, step: 0.1 },
+            { port: 15, symbol: "T60M", name: "T60 Mid", default: 2, min: 1, max: 8, step: 0.1 },
+        ],
+    },
 ];
 
-export const FX_TOTAL_PARAMS = 269;
+export const FX_TOTAL_PARAMS = 300;
 
 // --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
 

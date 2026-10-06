@@ -3695,6 +3695,391 @@
           "integer": false
         }
       ]
+    },
+    {
+      "id": 57,
+      "key": "zita_rev1",
+      "label": "Zita Reverb",
+      "dsp": "zita_rev1",
+      "stereo": true,
+      "category": "reverb",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "level",
+          "name": "Level",
+          "default": 0,
+          "min": -60,
+          "max": 4,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "EQ2_FREQ",
+          "name": "EQ2 Freq",
+          "default": 1500,
+          "min": 160,
+          "max": 10000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "EQ1_LEVEL",
+          "name": "EQ1 Level",
+          "default": 0,
+          "min": -15,
+          "max": 15,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "EQ1_FREQ",
+          "name": "EQ1 Freq",
+          "default": 315,
+          "min": 40,
+          "max": 2500,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "IN_DELAY",
+          "name": "Predelay",
+          "default": 60,
+          "min": 20,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "LOW_RT60",
+          "name": "Low RT60",
+          "default": 3,
+          "min": 1,
+          "max": 8,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "LF_X",
+          "name": "LF X",
+          "default": 200,
+          "min": 50,
+          "max": 1000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "HF_DAMPING",
+          "name": "HF Damping",
+          "default": 6000,
+          "min": 1500,
+          "max": 23520,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "MID_RT60",
+          "name": "Mid RT60",
+          "default": 2,
+          "min": 1,
+          "max": 8,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "DRY_WET_MIX",
+          "name": "Dry/Wet Mix",
+          "default": 0,
+          "min": -1,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "EQ2_LEVEL",
+          "name": "EQ2 Level",
+          "default": 0,
+          "min": -15,
+          "max": 15,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 58,
+      "key": "freeverb",
+      "label": "Freeverb",
+      "dsp": "freeverb",
+      "stereo": false,
+      "category": "reverb",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "ROOMSIZE",
+          "name": "Room Size",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.025,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "DAMP",
+          "name": "Damping",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.025,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "WET_DRY",
+          "name": "Dry/Wet",
+          "default": 50,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 59,
+      "key": "room_simulator",
+      "label": "Room Simulator",
+      "dsp": "room_simulator",
+      "stereo": false,
+      "category": "reverb",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 2,
+          "symbol": "EFFECT",
+          "name": "Effect",
+          "default": 1,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "PREDELAYMS",
+          "name": "Predelay Ms",
+          "default": 20,
+          "min": 1,
+          "max": 200,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "RT",
+          "name": "Decay",
+          "default": 0.3,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "ROOMSIZE",
+          "name": "Room Size",
+          "default": 1,
+          "min": 0,
+          "max": 3,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "DRYWET",
+          "name": "Dry/Wet",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 60,
+      "key": "shimmizita",
+      "label": "Shimmizita",
+      "dsp": "shimmizita",
+      "stereo": true,
+      "category": "reverb",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 4,
+          "symbol": "CONTROL",
+          "name": "Env Control",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "DEPTH",
+          "name": "Depth",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "DRYWET",
+          "name": "Dry/Wet",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "ENVELOPE",
+          "name": "Envelope",
+          "default": 1,
+          "min": 0.1,
+          "max": 3,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "F1",
+          "name": "F1",
+          "default": 200,
+          "min": 50,
+          "max": 1000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "F2",
+          "name": "F2",
+          "default": 6000,
+          "min": 1500,
+          "max": 23520,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "MODE",
+          "name": "Mode",
+          "default": 0,
+          "min": -3,
+          "max": 3,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 11,
+          "symbol": "PSDRYWET",
+          "name": "Pitch Dry/Wet",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 12,
+          "symbol": "SHIFT",
+          "name": "Pitch Shift",
+          "default": 0,
+          "min": -6,
+          "max": 6,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 13,
+          "symbol": "SPEED",
+          "name": "Speed",
+          "default": 0.1,
+          "min": 0.1,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 14,
+          "symbol": "T60DS",
+          "name": "T60 Low",
+          "default": 3,
+          "min": 1,
+          "max": 8,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 15,
+          "symbol": "T60M",
+          "name": "T60 Mid",
+          "default": 2,
+          "min": 1,
+          "max": 8,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
     }
   ]
 }
