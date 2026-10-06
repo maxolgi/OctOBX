@@ -538,7 +538,7 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 80) return `effect_count=${mod._fx_effect_count()}, want 80 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi + Phase 2-a cabinet + Phase 2-b redeye + metal amp/head)`;
+    if (mod._fx_effect_count() !== 81) return `effect_count=${mod._fx_effect_count()}, want 81 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi + Phase 2-a cabinet + Phase 2-b redeye + metal amp/head + Phase 2-c detune)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
@@ -586,7 +586,8 @@ async function main() {
     if (mod._fx_param_count(77) !== 9) return `param_count(77)=${mod._fx_param_count(77)}, want 9 (redeye: 8 wrapper params + MODEL)`;
     if (mod._fx_param_count(78) !== 4) return `param_count(78)=${mod._fx_param_count(78)}, want 4 (metalamp: TONE/DRIVE/PREGAIN/GAIN1)`;
     if (mod._fx_param_count(79) !== 4) return `param_count(79)=${mod._fx_param_count(79)}, want 4 (metalhead: TONE/DRIVE/PREGAIN/GAIN1)`;
-    if (mod._fx_param_count(80) !== -1) return `param_count(80)=${mod._fx_param_count(80)}, want -1 (out of range)`;
+    if (mod._fx_param_count(80) !== 10) return `param_count(80)=${mod._fx_param_count(80)}, want 10 (detune: DETUNE..TREBLE; BYPASS filtered)`;
+    if (mod._fx_param_count(81) !== -1) return `param_count(81)=${mod._fx_param_count(81)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -619,6 +620,7 @@ async function main() {
     if (mod._fx_is_stereo(77) !== 0) return `is_stereo(77)=${mod._fx_is_stereo(77)}, want 0 (redeye, dual-mono convolver)`;
     if (mod._fx_is_stereo(78) !== 0) return `is_stereo(78)=${mod._fx_is_stereo(78)}, want 0 (metalamp, dual-mono convolver)`;
     if (mod._fx_is_stereo(79) !== 0) return `is_stereo(79)=${mod._fx_is_stereo(79)}, want 0 (metalhead, dual-mono convolver)`;
+    if (mod._fx_is_stereo(80) !== 0) return `is_stereo(80)=${mod._fx_is_stereo(80)}, want 0 (detune, dual-mono phase vocoder)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
@@ -667,6 +669,10 @@ async function main() {
     if (mod._fx_default(77, 8) !== 0) return `default(77,8)=${mod._fx_default(77, 8)}, want 0 (redeye MODEL)`;
     if (mod._fx_default(78, 1) !== 10.5) return `default(78,1)=${mod._fx_default(78, 1)}, want 10.5 (metalamp DRIVE)`;
     if (mod._fx_default(79, 1) !== f32(0.32)) return `default(79,1)=${mod._fx_default(79, 1)}, want ${f32(0.32)} (metalhead DRIVE)`;
+    if (mod._fx_default(80, 0) !== 0) return `default(80,0)=${mod._fx_default(80, 0)}, want 0 (detune DETUNE)`;
+    if (mod._fx_default(80, 4) !== 50) return `default(80,4)=${mod._fx_default(80, 4)}, want 50 (detune WET)`;
+    if (mod._fx_default(80, 6) !== 1) return `default(80,6)=${mod._fx_default(80, 6)}, want 1 (detune LOW)`;
+    if (mod._fx_default(81, 0) !== 0) return `default(81,0)=${mod._fx_default(81, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(61, 0) !== 0) return `default(61,0)=${mod._fx_default(61, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
@@ -685,7 +691,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 80); // FX_COUNT == 80 since Phase 2-b
+    mod._fx_set_slot(0, 0, 81); // FX_COUNT == 81 since Phase 2-c
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -1805,6 +1811,116 @@ async function main() {
       return `metal amp DRIVE 1↔20 changed RMS by only ${(dRel * 100).toFixed(1)}% (${mDriveLo.rms.toExponential(4)} vs ${mDriveHi.rms.toExponential(4)}) — DRIVE not reaching the preamp`;
     }
     console.log(`    redeye selectivity: MODEL 0↔2 rms ${rd0.rms.toExponential(4)} vs ${rd2.rms.toExponential(4)} (${(rdRel * 100).toFixed(1)}% delta); swap walk finite; metal amp wet/bypassed ${(mRel * 100).toFixed(1)}% delta, DRIVE 1↔20 ${(dRel * 100).toFixed(1)}% delta`);
+  });
+
+  // (z3) Phase 2-c: detune (id 80) — smbPitchShift over the fftw shim ------
+  // A sustained bass note (Acoustic Bass patch, MIDI 48 → 130.8 Hz; its
+  // spectrum is a full harmonic series on ~32.7 Hz), WET 100 / DRY 0,
+  // probed with a phase-independent single-bin DFT (correlate against cos
+  // AND sin at the probe frequency, magnitude = hypot). DETUNE=+5 st
+  // (ratio 2^(5/12) ≈ 1.335 — deliberately NOT an octave/fifth: the patch's
+  // harmonic series would map onto itself and fake residuals) must move
+  // f0's energy to F* = f0·ratio ≈ 174.6 Hz, which sits BETWEEN the input
+  // partials (163.5 / 196.2): base@F* is the noise floor, shifted@F*
+  // ~8.5× that, and f0 drops to ~15%. The ~0.4 s probe window dwarfs the
+  // vocoder latency (512-frame FIFO at the internal 12 k rate ≈ 37 ms) and
+  // its 2.5 Hz resolution separates the probe from the partial grid. Also:
+  // a LATENCY quality walk 0→2→1→0 mid-render exercises the INLINED
+  // plan-rebuild path (upstream's LV2 worker → change_latency: mem_free +
+  // mem_alloc) — every rebuild must stay finite and audible.
+  expect('z3. detune: +5 st moves a sustained tone (DFT probe f0 vs f0·2^(5/12)); LATENCY rebuild walk finite; params round-trip', () => {
+    // param round-trip: all 10 ordinals (DETUNE..TREBLE, ttl ports 2..11)
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 80);
+    if (mod._fx_get_slot(0, 0) !== 80) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 80 (detune)`;
+    for (const [p, v] of [[0, 5.5], [1, 2], [2, 1], [3, 1], [4, 100], [5, 0], [6, 1.5], [7, 0.25], [8, 1.75], [9, 0]]) {
+      mod._fx_set_param(0, 0, p, v);
+      if (mod._fx_get_param(0, 0, p) !== f32(v)) return `detune param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
+    }
+    const F0 = 130.81278265398093; // MIDI 48 at A4=440
+    const FS = F0 * Math.pow(2, 5 / 12); // ≈ 174.61 Hz — between input partials
+    const probe = (y, f) => {
+      let rc = 0, rs = 0;
+      const w = 2 * Math.PI * f / 48000;
+      for (let i = 0; i < y.length; i++) { rc += y[i] * Math.cos(w * i); rs += y[i] * Math.sin(w * i); }
+      return Math.sqrt(rc * rc + rs * rs) * (2 / y.length);
+    };
+    // One render per detune amount; mono-sum L+R (dual-mono detune chains).
+    const render = (detuneSt) => {
+      mod._obxd_init(48000);
+      mod._obxd_set_factory_patch(0, 6); // "Acoustic Bass" — init-stable
+      mod._fx_set_slot(0, 0, 80);
+      mod._fx_set_param(0, 0, 4, 100); // WET 100
+      mod._fx_set_param(0, 0, 5, 0);   // DRY 0
+      mod._fx_set_param(0, 0, 0, detuneSt);
+      mod._fx_set_enabled(0, 0, 1);
+      mod._obxd_midi_in(0, 0x90, 48, 127);
+      const y = [];
+      let finite = true;
+      let sq = 0;
+      for (let q = 0; q < 60 + 150; q++) {
+        mod._obxd_render(128);
+        if (q < 60) continue; // vocoder FIFO latency + note settle (~160 ms)
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+          const m = 0.5 * (l[i] + r[i]);
+          y.push(m);
+          sq += m * m;
+        }
+      }
+      mod._obxd_midi_in(0, 0x80, 48, 0);
+      mod._obxd_panic(0);
+      if (!finite) return { err: `non-finite sample through detune (+${detuneSt} st)` };
+      return { f0: probe(y, F0), fs: probe(y, FS), rms: Math.sqrt(sq / y.length) };
+    };
+    const base = render(0);
+    if (base.err) return base.err;
+    const shift = render(5);
+    if (shift.err) return shift.err;
+    if (!(base.rms > 1e-4)) return `detune +0 output too quiet to test (rms=${base.rms.toExponential(3)})`;
+    if (!(shift.rms > 1e-4)) return `detune +5 output too quiet to test (rms=${shift.rms.toExponential(3)})`;
+    if (!(base.f0 > 1e-2)) return `unshifted f0 probe too weak (${base.f0.toExponential(3)}) — patch/note changed?`;
+    // Energy LEFT f0 (falls to ~15% measured; < 50% with margin) and
+    // APPEARED at F* (> 30% of f0's original level, measured ~40-55%;
+    // ratio=1 or a wrong shift amount leaves F* at the ~6e-3 noise floor).
+    // Noisy ratio assertion vs the F* floor deliberately avoided: the
+    // floor varies ~1.5x across inits and flaked a fixed >4x gate.
+    if (!(shift.f0 < 0.5 * base.f0)) {
+      return `+5 st left f0 at ${(shift.f0 / base.f0 * 100).toFixed(1)}% of its level (${base.f0.toExponential(3)} → ${shift.f0.toExponential(3)}) — no shift`;
+    }
+    if (!(shift.fs > 0.3 * base.f0)) {
+      return `+5 st did not move energy to ${FS.toFixed(1)} Hz: floor ${base.fs.toExponential(3)} → ${shift.fs.toExponential(3)}, want > 0.3*f0 (${(0.3 * base.f0).toExponential(3)}) — DETUNE not reaching the vocoder`;
+    }
+    // LATENCY quality walk mid-render: every inline plan rebuild must stay
+    // finite and audible (upstream's worker path, now on the audio thread).
+    mod._obxd_init(48000);
+    mod._obxd_set_factory_patch(0, 6);
+    mod._fx_set_slot(0, 0, 80);
+    mod._fx_set_param(0, 0, 4, 100);
+    mod._fx_set_param(0, 0, 5, 0);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._obxd_midi_in(0, 0x90, 48, 127);
+    let walkSq = 0;
+    let walkFinite = true;
+    for (const quality of [0, 2, 1, 0]) {
+      mod._fx_set_param(0, 0, 3, quality); // LATENCY (rebuild trigger)
+      for (let k = 0; k < 8; k++) {
+        mod._obxd_render(128);
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) walkFinite = false;
+          walkSq += l[i] * l[i] + r[i] * r[i];
+        }
+      }
+    }
+    mod._obxd_midi_in(0, 0x80, 48, 0);
+    mod._obxd_panic(0);
+    if (!walkFinite) return 'non-finite sample during the detune LATENCY rebuild walk';
+    if (!(Math.sqrt(walkSq / (4 * 8 * 256)) > 1e-4)) return 'detune LATENCY rebuild walk silent';
+    console.log(`    detune shift: +5 st moves f0 → F* ${FS.toFixed(1)} Hz (${base.fs.toExponential(3)} → ${shift.fs.toExponential(3)}, ${(shift.fs / Math.max(base.fs, 1e-12)).toFixed(1)}x); f0 falls to ${(shift.f0 / base.f0 * 100).toFixed(1)}%; LATENCY rebuild walk finite`);
   });
 
   // --- summary -------------------------------------------------------------

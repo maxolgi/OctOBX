@@ -418,8 +418,8 @@ const MANIFEST = [
     // input → mono → dual-mono host. c_model 18 "Off" = dry passthrough in
     // the OctOBX wrapper. Phase 2-b ships the rest of the redeye/metal
     // convolver family below. Still NOT shipped from the convolver family:
-    // gx_detune (fftw complex shim), gxtuner (R2HC shim + host timer), the
-    // impulseresponse.cc orphan (optional per plan).
+    // gxtuner (R2HC shim + host timer), the impulseresponse.cc orphan
+    // (optional per plan).
     { key: 'cabinet', menuName: 'Cabinet', category: 'amp', ttl: 'gx_cabinet.lv2/gx_cabinet.ttl' },
 
     // --- Phase 2-b: redeye + metal convolver family ---
@@ -456,6 +456,20 @@ const MANIFEST = [
     // The two differ in preamp class + DRIVE range (amp 1..20, head 0..1).
     { key: 'metalamp', menuName: 'Metal Amp', category: 'amp', ttl: 'gxmetal_amp.lv2/gxmetal_amp.ttl' },
     { key: 'metalhead', menuName: 'Metal Head', category: 'amp', ttl: 'gxmetal_head.lv2/gxmetal_head.ttl' },
+
+    // --- Phase 2-c: detune (fftw-over-kissfft shim) ---
+    // detune: gx_detune.lv2's bundle-LOCAL smbPitchShift phase vocoder
+    // (Bernsee/guitarix) over the fftw3.h include-order shim
+    // (wasm/obxd/gxfx_shims/ — the complex-DFT subset on vendored kissfft;
+    // the LV2 wrapper's plan-rebuild worker is inlined in
+    // gxfx_dsp_detune.cpp). The ttl parses directly (DETUNE/OCTAVE/
+    // COMPENSATE/LATENCY/WET/DRY/LOW/MIDDLELOW/MIDDLETREBLE/TREBLE); BYPASS
+    // (enabled designation) is filtered, and the latency OUTPUT port lands
+    // in out_ports (parked on TU-local scratch by the wrapper — never a
+    // param). One audio input → mono → dual-mono host. Each smbPitchShift
+    // object embeds fixed MAX_FRAME_LENGTH(8096) frame arrays (~420 KB) —
+    // ~840 KB per slot dual-mono (digital_delay-class footprint).
+    { key: 'detune', menuName: 'Detune', category: 'special', ttl: 'gx_detune.lv2/gx_detune.ttl' },
 
 ];
 
@@ -738,6 +752,12 @@ const LABEL_OVERRIDES = {
     // gx_studiopre_st.ttl port 12 carries upstream's name typo "master_L"
     // on the R-channel master — key the symbol, not the name.
     master_r: 'Master R',
+    // --- Phase 2-c detune (keys chosen to NOT collide with any symbol/name
+    // of effects 0..79 — regeneration keeps those byte-identical; the other
+    // detune symbols titleCase cleanly: WET→Wet, DRY→Dry, LOW→Low,
+    // TREBLE→Treble, MIDDLELOW/MIDDLETREBLE are dsp2cc word-mashes) ---
+    MIDDLELOW: 'Middle Low',    // gx_detune.ttl
+    MIDDLETREBLE: 'Mid Treble', // gx_detune.ttl
     // --- Phase 1-h multiband + utility family (keys chosen to NOT collide
     // with any symbol/name of effects 0..65 — regeneration keeps those
     // byte-identical; deliberately NO G1..G24 overrides: graphiceq id 28

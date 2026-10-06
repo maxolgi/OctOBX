@@ -132,6 +132,11 @@ PluginLV2* gxfx_create_cabinet();
 PluginLV2* gxfx_create_redeye();
 PluginLV2* gxfx_create_metalamp();
 PluginLV2* gxfx_create_metalhead();
+// detune (gxfx_dsp_detune.cpp, Phase 2-c): gx_detune.lv2's bundle-local
+// smbPitchShift phase vocoder over the fftw3.h include-order shim
+// (gxfx_shims/, complex-DFT subset on vendored kissfft); the LV2 wrapper's
+// plan-rebuild worker is inlined on the LATENCY param-change path
+PluginLV2* gxfx_create_detune();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -214,7 +219,8 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_cabinet,
     gxfx_create_redeye,
     gxfx_create_metalamp,
-    gxfx_create_metalhead
+    gxfx_create_metalhead,
+    gxfx_create_detune
 };
 
 // Generator↔host drift guard: the factory registry above must list every

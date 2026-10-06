@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(80);
+        expect(FX_COUNT).toBe(81);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -126,6 +126,8 @@ describe("gxfx-params — layout invariants", () => {
             // Phase 2-b redeye + metal convolver family (77..79)
             "amp",                                         // redeye (3-chump aggregate)
             "amp", "amp",                                  // metalamp, metalhead (4x12 cab IR)
+            // Phase 2-c detune (80)
+            "special",                                     // detune (smbPitchShift over the fftw shim)
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -133,14 +135,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 469", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 479", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(469);
-        expect(FX_TOTAL_PARAMS).toBe(469);
+        expect(running).toBe(479);
+        expect(FX_TOTAL_PARAMS).toBe(479);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -210,16 +212,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..79", () => {
-        for (let i = 0; i < 80; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..80", () => {
+        for (let i = 0; i < 81; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(80)).toBe(false);
+        expect(isFxId(81)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(80, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(81, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -948,5 +950,36 @@ describe("gxfx-params — Phase 2-b redeye + metal convolver family additions", 
         expect(head.stereo).toBe(false);
         expect(head.params.map((p) => p.symbol)).toEqual(["TONE", "DRIVE", "PREGAIN", "GAIN1"]);
         expect(head.params[1]).toMatchObject({ default: 0.32, min: 0, max: 1, step: 0.01 }); // head DRIVE is 0..1
+    });
+});
+
+describe("gxfx-params — Phase 2-c detune additions", () => {
+    it("detune (ttl-parsed): 10 params at ttl ports 2..11, enums integer, mono dual-mono, latency out port", () => {
+        const fx = FX_EFFECTS[80];
+        expect(fx.key).toBe("detune");
+        expect(fx.label).toBe("Detune");
+        expect(fx.category).toBe("special");
+        expect(fx.stereo).toBe(false); // one ttl audio input — dual-mono host
+        expect(fx.params.map((p) => p.symbol)).toEqual([
+            "DETUNE", "OCTAVE", "COMPENSATE", "LATENCY", "WET", "DRY",
+            "LOW", "MIDDLELOW", "MIDDLETREBLE", "TREBLE",
+        ]);
+        expect(fx.params.map((p) => p.port)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        expect(fx.params.map((p) => p.name)).toEqual([
+            "Detune", "Octave", "Compensate", "Latency", "Wet", "Dry",
+            "Low", "Middle Low", "Mid Treble", "Treble",
+        ]);
+        expect(fx.params[0]).toMatchObject({ default: 0, min: -12, max: 12, step: 0.1 }); // semitones
+        expect(fx.params[1]).toMatchObject({ default: 0, min: 0, max: 2, step: 1, integer: true }); // normal/up/down
+        expect(fx.params[2]).toMatchObject({ default: 0, min: 0, max: 1, step: 1, integer: true }); // latency/compensate
+        expect(fx.params[3]).toMatchObject({ default: 0, min: 0, max: 2, step: 1, integer: true }); // quality (rebuild trigger)
+        expect(fx.params[4]).toMatchObject({ default: 50, min: 0, max: 100, step: 1 }); // WET %
+        expect(fx.params[6]).toMatchObject({ default: 1, min: 0, max: 2, step: 0.01 }); // LOW band gain
+        expect(fxParamFrom01(80, 0, 1)).toBe(12); // DETUNE knob endpoint
+        // BYPASS (enabled designation) filtered; the latency OUTPUT port
+        // lands in out_ports (parked on TU-local scratch by the wrapper) —
+        // never in the param mirror.
+        expect(spec.effects[80].out_ports.map((p) => p.symbol)).toEqual(["latency"]);
+        expect(fx.params.some((p) => p.symbol === "BYPASS" || p.symbol === "latency")).toBe(false);
     });
 });
