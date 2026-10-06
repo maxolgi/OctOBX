@@ -650,4 +650,75 @@ double fx_test_slot_rms(int inst, int slot) {
     return sqrt(sum / (double)cnt);
 }
 
+// Test surface (verify-obxd-wasm only — frequency-discrimination sibling
+// of fx_test_slot_rms above; same pattern: Makefile EXPORTS entry, no
+// worklet message case). Feeds a deterministic fixed-phase sine at feed_hz
+// (amplitude 0.5, phase continuous across ALL blocks — the sample counter
+// never resets, so warmup and measurement see one continuous tone) through
+// the REAL slot runtime (inst,slot) and returns the LOCK-IN AMPLITUDE of
+// the slot's L output at probe_hz.
+//
+// Lock-in math: with y[n] the measured output, wp = 2*pi*probe_hz/fs and
+//   Sc = sum(y[n]*cos(wp*n)),  Ss = sum(y[n]*sin(wp*n)),
+// a component y = a*cos(wp*n + phi) of ANY phase phi contributes
+// hypot(Sc, Ss) = (cnt/2)*a — the cos/sin pair absorbs the phase — so the
+// return value 2*hypot(Sc,Ss)/cnt is that component's amplitude. Energy at
+// other frequencies contributes only rectangular-window (Dirichlet)
+// leakage, ~|sin(pi*dbins)/(pi*dbins)| of its amplitude at dbins bins away
+// (dbins = |f' - probe_hz| * cnt / fs): the 6144-sample window (7.8125 Hz
+// bins at 48 kHz) puts a 440 Hz carrier 18.9 bins from a 587.33 Hz probe,
+// i.e. ~0.7% leakage. The first WARMUP=48 of BLOCKS=96 x 128-sample blocks
+// are skipped so stateful slots settle (the detune vocoder's FIFO latency
+// is ~37 ms; 48 blocks = 128 ms) — by measurement time the slot is in the
+// steady state the deterministic input dictates, independent of whatever
+// ran before, so consecutive calls are run-exact. A disabled / empty slot
+// returns the DRY tone's lock-in amplitude, mirroring the chain bypass.
+// Exists for the same reason as fx_test_slot_rms: a synth-fed frequency
+// probe (render, DFT, compare across renders) flakes because per-init
+// juce::Random slop parks harmonics of the note in the probe bin (see
+// z3's history — f0 energy ROSE under a +5 st shift on CI).
+EMSCRIPTEN_KEEPALIVE
+double fx_test_slot_tone_probe(int inst, int slot, double feed_hz, double probe_hz) {
+    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return -1.0;
+    if (slot < 0 || slot >= FX_SLOTS) return -1.0;
+    const double nyq = 0.5 * (double)g_fx_sample_rate;
+    if (!(feed_hz > 0.0) || !(feed_hz < nyq)) return -1.0;
+    if (!(probe_hz > 0.0) || !(probe_hz < nyq)) return -1.0;
+    enum { BLOCKS = 96, WARMUP = 48, N = 128 };
+    float l[N], r[N];
+    FxRuntime& rt = g_fx_rt[inst][slot];
+    const bool run = g_fx_enabled[inst][slot] && g_fx_slot[inst][slot] >= 0;
+    if (run) fx_ensure_active(inst, slot);
+    const double wf = 6.28318530717958647692 * feed_hz / (double)g_fx_sample_rate;
+    const double wp = 6.28318530717958647692 * probe_hz / (double)g_fx_sample_rate;
+    double sc = 0.0, ss = 0.0;
+    unsigned cnt = 0;
+    for (int b = 0; b < BLOCKS; ++b) {
+        for (int i = 0; i < N; ++i) {
+            const double n = (double)((b * N) + i);
+            const float s = (float)(0.5 * sin(wf * n));
+            l[i] = s;
+            r[i] = s;
+        }
+        if (run && rt.dsp) {
+            int fx = g_fx_slot[inst][slot];
+            if (FX_STEREO[fx]) {
+                if (rt.dsp->stereo_audio)
+                    rt.dsp->stereo_audio(N, l, r, l, r, rt.dsp);
+            } else {
+                if (rt.dsp->mono_audio)
+                    rt.dsp->mono_audio(N, l, l, rt.dsp);
+            }
+        }
+        if (b < WARMUP) continue;
+        for (int i = 0; i < N; ++i) {
+            const double n = (double)((b * N) + i);
+            sc += (double)l[i] * cos(wp * n);
+            ss += (double)l[i] * sin(wp * n);
+            ++cnt;
+        }
+    }
+    return 2.0 * sqrt(sc * sc + ss * ss) / (double)cnt;
+}
+
 }

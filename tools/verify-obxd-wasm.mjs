@@ -981,98 +981,118 @@ async function main() {
 
   // (s) Drive family spot check (Phase 1-a) ---------------------------------
   // Loads a NEW effect (fuzzface, id 11) into a slot, round-trips params
-  // through the mirror, and proves the generated FX_PORTS row actually
-  // feeds the DSP connect_ports: a held note's RMS at FUZZ=1.0 is ~30%
-  // above FUZZ=0.05 (measured; repeats stable to ±0.5%), so a 15% margin
-  // cleanly separates "param wired" from "param dropped on the floor"
-  // (an unconnected port would leave the ratio at 1.00 ± 0.01). Rendering
-  // is not bit-deterministic across obxd_init (~0.3% RMS run-to-run) —
-  // RMS-level comparison absorbs that noise.
+  // through the mirror, proves the slot sits finite + audible in the chain
+  // with ONE synth render (weak gates only), and proves the generated
+  // FX_PORTS row actually feeds the DSP connect_ports via the
+  // DETERMINISTIC ramp (fx_test_slot_rms — run-exact: FUZZ 0 → 2.577e-1,
+  // FUZZ 1 → 2.961e-1, a 14.9% delta; an unconnected port would leave the
+  // two at exactly 0% since the ramp input is identical). The old
+  // cross-render synth RMS ratio (two obxd_inits, gate 1.15x, measured
+  // 1.39..1.72 locally) is a per-init juce::Random slop exposure — same
+  // failure class as the z2 redeye flake — and is retired.
   expect('s. drive family: fuzzface slot renders + FUZZ knob changes the audio', () => {
-    const renderRms = (fuzz) => {
-      mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
-      mod._fx_set_slot(0, 0, 11); // -> fuzzface
-      if (mod._fx_get_slot(0, 0) !== 11) return { err: `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 11 (fuzzface)` };
-      if (mod._fx_param_count(11) !== 2) return { err: `param_count(11)=${mod._fx_param_count(11)}, want 2` };
-      mod._fx_set_param(0, 0, 0, fuzz); // FUZZ (ordinal 0, PortIndex 2)
-      if (mod._fx_get_param(0, 0, 0) !== f32(fuzz)) return { err: `FUZZ round-trip=${mod._fx_get_param(0, 0, 0)}, want ${f32(fuzz)}` };
-      mod._fx_set_param(0, 0, 1, 0.5); // LEVEL (ordinal 1, PortIndex 3)
-      if (mod._fx_get_param(0, 0, 1) !== f32(0.5)) return { err: `LEVEL round-trip=${mod._fx_get_param(0, 0, 1)}, want ${f32(0.5)}` };
-      mod._fx_set_enabled(0, 0, 1);
-      mod._obxd_midi_in(0, 0x90, 60, 100);
-      let s = 0;
-      let finite = true;
-      for (let q = 0; q < 30; q++) {
-        mod._obxd_render(128);
-        if (q < 20) continue; // let the note + si.smooth settle
-        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
-        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
-        for (let i = 0; i < 128; i++) {
-          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
-          s += l[i] * l[i] + r[i] * r[i];
-        }
+    mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
+    mod._fx_set_slot(0, 0, 11); // -> fuzzface
+    if (mod._fx_get_slot(0, 0) !== 11) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 11 (fuzzface)`;
+    if (mod._fx_param_count(11) !== 2) return `param_count(11)=${mod._fx_param_count(11)}, want 2`;
+    mod._fx_set_param(0, 0, 0, 1.0); // FUZZ (ordinal 0, PortIndex 2)
+    if (mod._fx_get_param(0, 0, 0) !== f32(1.0)) return `FUZZ round-trip=${mod._fx_get_param(0, 0, 0)}, want ${f32(1.0)}`;
+    mod._fx_set_param(0, 0, 1, 0.5); // LEVEL (ordinal 1, PortIndex 3)
+    if (mod._fx_get_param(0, 0, 1) !== f32(0.5)) return `LEVEL round-trip=${mod._fx_get_param(0, 0, 1)}, want ${f32(0.5)}`;
+    mod._fx_set_enabled(0, 0, 1);
+    // one synth-fed render: finite + audible through the real chain
+    mod._obxd_midi_in(0, 0x90, 60, 100);
+    let s = 0;
+    let finite = true;
+    for (let q = 0; q < 30; q++) {
+      mod._obxd_render(128);
+      if (q < 20) continue; // let the note + si.smooth settle
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      for (let i = 0; i < 128; i++) {
+        if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+        s += l[i] * l[i] + r[i] * r[i];
       }
-      mod._obxd_midi_in(0, 0x80, 60, 0);
-      mod._obxd_panic(0);
-      if (!finite) return { err: 'non-finite sample through fuzzface' };
-      return { rms: Math.sqrt(s / (10 * 256)) };
-    };
-    const low = renderRms(0.05);
-    if (low.err) return low.err;
-    const high = renderRms(1.0);
-    if (high.err) return high.err;
-    if (!(low.rms > 0)) return `fuzzface output silent at FUZZ=0.05 (rms=${low.rms.toExponential(3)})`;
-    if (!(high.rms > low.rms * 1.15)) {
-      return `FUZZ knob does not reach the DSP: rms(0.05)=${low.rms.toExponential(4)} rms(1.0)=${high.rms.toExponential(4)} (ratio ${(high.rms / low.rms).toFixed(3)}, want > 1.15)`;
     }
+    mod._obxd_midi_in(0, 0x80, 60, 0);
+    mod._obxd_panic(0);
+    if (!finite) return 'non-finite sample through fuzzface';
+    if (!(s > 0)) return `fuzzface output silent through the chain (sumSq=${s})`;
+    // FUZZ reach on the deterministic ramp (LEVEL fixed at 0.5). Fresh
+    // init PER PROBE: the fuzz circuit holds input-dependent bias state
+    // (the synth render above, or the FUZZ-0 probe itself) that the ramp
+    // warmup doesn't fully flush — on fresh slots both probes are
+    // run-exact and the delta sits at its full 13.0% (2.577e-1 → 2.961e-1).
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 11);
+    mod._fx_set_param(0, 0, 1, 0.5);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 0, 0);
+    const fz0 = mod._fx_test_slot_rms(0, 0);
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 11);
+    mod._fx_set_param(0, 0, 1, 0.5);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 0, 1);
+    const fz1 = mod._fx_test_slot_rms(0, 0);
+    const fzRel = Math.abs(fz1 - fz0) / Math.max(fz1, fz0);
+    if (!(fzRel > 0.07)) {
+      return `FUZZ knob does not reach the DSP: ramp rms(FUZZ 0)=${fz0.toExponential(4)} rms(FUZZ 1)=${fz1.toExponential(4)} (${(fzRel * 100).toFixed(1)}% delta, want > 7%)`;
+    }
+    console.log(`    fuzzface FUZZ selectivity (deterministic ramp): 0↔1 ${(fz0).toExponential(4)} → ${(fz1).toExponential(4)} (${(fzRel * 100).toFixed(1)}% delta)`);
   });
 
   // (t) EQ family spot check (Phase 1-b) ------------------------------------
-  // Loads graphiceq (id 28) into a slot and proves the generated FX_PORTS
-  // row feeds the DSP. graphiceq is a PARALLEL filter bank (fi.filterbank,
-  // bands summed coherently), so a single-band probe can cancel against its
-  // un-boosted neighbours — instead sweep ALL 11 gains uniformly: +12 dB vs
-  // -18 dB is a coherent ~30x gain change (db2linear), far beyond the 1.15
-  // margin, and only reaches the DSP if the ports wire. Also proves the
-  // V1..V11 meter pointers are parked (the faust compute() dereferences them
-  // unconditionally via #define — an unwired pointer would trap on render).
+  // Loads graphiceq (id 28) into a slot, proves the slot renders finite +
+  // audible through the real chain with ONE synth render, and proves the
+  // generated FX_PORTS row feeds the DSP connect_ports via the
+  // DETERMINISTIC ramp: sweep ALL 11 gains uniformly, +12 dB vs -18 dB —
+  // graphiceq is a PARALLEL filter bank (fi.filterbank, bands summed
+  // coherently), so a single-band probe can cancel against its un-boosted
+  // neighbours, but a uniform sweep is a coherent ~30 dB gain change
+  // (run-exact on the ramp: 2.263 vs 7.155e-2, a 31.6x ratio), and only
+  // reaches the DSP if the ports wire. Also proves the V1..V11 meter
+  // pointers are parked (the faust compute() dereferences them
+  // unconditionally via #define — an unwired pointer would trap on
+  // render). The old cross-render synth RMS ratio is retired (z2 slop
+  // class — measured 21..91x locally, but every synth render re-seeds).
   expect('t. eq family: graphiceq slot renders + uniform gain sweep reaches the DSP', () => {
-    const renderRms = (bandGainDb) => {
-      mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
-      mod._fx_set_slot(0, 0, 28); // -> graphiceq
-      if (mod._fx_get_slot(0, 0) !== 28) return { err: `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 28 (graphiceq)` };
-      if (mod._fx_param_count(28) !== 11) return { err: `param_count(28)=${mod._fx_param_count(28)}, want 11` };
-      for (let g = 0; g < 11; g++) {
-        mod._fx_set_param(0, 0, g, bandGainDb); // G1..G11 (ordinals = PortIndex 0..10)
-        if (mod._fx_get_param(0, 0, g) !== f32(bandGainDb)) return { err: `G${g + 1} round-trip=${mod._fx_get_param(0, 0, g)}, want ${f32(bandGainDb)}` };
-      }
-      mod._fx_set_enabled(0, 0, 1);
-      mod._obxd_midi_in(0, 0x90, 60, 100);
-      let s = 0;
-      let finite = true;
-      for (let q = 0; q < 30; q++) {
-        mod._obxd_render(128);
-        if (q < 20) continue; // let the note + si.smooth(0.999) settle
-        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
-        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
-        for (let i = 0; i < 128; i++) {
-          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
-          s += l[i] * l[i] + r[i] * r[i];
-        }
-      }
-      mod._obxd_midi_in(0, 0x80, 60, 0);
-      mod._obxd_panic(0);
-      if (!finite) return { err: 'non-finite sample through graphiceq' };
-      return { rms: Math.sqrt(s / (10 * 256)) };
-    };
-    const cut = renderRms(-18);
-    if (cut.err) return cut.err;
-    const boost = renderRms(12);
-    if (boost.err) return boost.err;
-    if (!(cut.rms > 0)) return `graphiceq output silent at -18 dB bands (rms=${cut.rms.toExponential(3)})`;
-    if (!(boost.rms > cut.rms * 1.15)) {
-      return `gain knobs do not reach the DSP: rms(-18dB)=${cut.rms.toExponential(4)} rms(+12dB)=${boost.rms.toExponential(4)} (ratio ${(boost.rms / cut.rms).toFixed(3)}, want > 1.15)`;
+    mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
+    mod._fx_set_slot(0, 0, 28); // -> graphiceq
+    if (mod._fx_get_slot(0, 0) !== 28) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 28 (graphiceq)`;
+    if (mod._fx_param_count(28) !== 11) return `param_count(28)=${mod._fx_param_count(28)}, want 11`;
+    for (let g = 0; g < 11; g++) {
+      mod._fx_set_param(0, 0, g, -18); // G1..G11 (ordinals = PortIndex 0..10)
+      if (mod._fx_get_param(0, 0, g) !== f32(-18)) return `G${g + 1} round-trip=${mod._fx_get_param(0, 0, g)}, want ${f32(-18)}`;
     }
+    mod._fx_set_enabled(0, 0, 1);
+    // one synth-fed render: finite + audible through the real chain
+    mod._obxd_midi_in(0, 0x90, 60, 100);
+    let s = 0;
+    let finite = true;
+    for (let q = 0; q < 30; q++) {
+      mod._obxd_render(128);
+      if (q < 20) continue; // let the note + si.smooth(0.999) settle
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      for (let i = 0; i < 128; i++) {
+        if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+        s += l[i] * l[i] + r[i] * r[i];
+      }
+    }
+    mod._obxd_midi_in(0, 0x80, 60, 0);
+    mod._obxd_panic(0);
+    if (!finite) return 'non-finite sample through graphiceq';
+    if (!(s > 0)) return `graphiceq output silent through the chain (sumSq=${s})`;
+    // uniform gain sweep on the deterministic ramp: -18 dB (set above) vs +12 dB
+    const cut = mod._fx_test_slot_rms(0, 0);
+    for (let g = 0; g < 11; g++) mod._fx_set_param(0, 0, g, 12);
+    const boost = mod._fx_test_slot_rms(0, 0);
+    if (!(cut > 0)) return `graphiceq ramp output silent at -18 dB bands (rms=${cut.toExponential(3)})`;
+    if (!(boost > cut * 5)) {
+      return `gain knobs do not reach the DSP: ramp rms(-18dB)=${cut.toExponential(4)} rms(+12dB)=${boost.toExponential(4)} (ratio ${(boost / cut).toFixed(2)}, want > 5)`;
+    }
+    console.log(`    graphiceq uniform sweep (deterministic ramp): -18dB → +12dB ${cut.toExponential(4)} → ${boost.toExponential(4)} (${(boost / cut).toFixed(1)}x)`);
   });
 
   // (u) Wah family spot check (Phase 1-c) -----------------------------------
@@ -1180,17 +1200,17 @@ async function main() {
   // vibe (id 38 — proves the wrapper-space PortIndex + plugin_stereo()
   // wiring: full-wet DEPTH sweep must stay finite and audible), the
   // 12ax7-table mono tube tremolo (id 39 — proves the circuit_tables
-  // per-namespace includes link and render; DEPTH 0 vs 1 at speed 10 Hz
-  // must change the RMS measurably, an unconnected DEPTH would leave the
-  // ratio at ~1.00), the classic stereo phaser orphan (id 42 — proves the
-  // stereo orphan path), and param round-trips through the slot mirror for
-  // switched_tremolo (id 41) + chorus_mono (id 44).
-  expect('v. modulation family: vibe/tube tremolo/classic phaser render; tube DEPTH modulates the envelope', () => {
-    // renderRms also collects the per-quantum RMS trace, so the tube
-    // tremolo can be probed via its AM ENVELOPE SPREAD ((max-min)/mean over
-    // the measured quanta) — a metric normalized by its own mean, immune to
-    // the run-to-run JUCE-Random synth variance that flakes absolute-RMS
-    // comparisons (see the u. check for that failure mode).
+  // per-namespace includes link and render; DEPTH 0 vs 1 at speed 5 Hz on
+  // the DETERMINISTIC ramp is a run-exact 30.2% windowed-RMS delta — the
+  // AM troughs carve the 128 ms window; the old two-render envelope-spread
+  // metric was self-normalized but profiling showed s1/s0 as low as 1.9
+  // against its own 2.0 gate — next-in-line flake, retired), the classic
+  // stereo phaser orphan (id 42 — proves the stereo orphan path), and
+  // param round-trips through the slot mirror for switched_tremolo
+  // (id 41) + chorus_mono (id 44).
+  expect('v. modulation family: vibe/tube tremolo/classic phaser render; tube DEPTH changes the ramp RMS', () => {
+    // renderRms drives ONE synth-fed render per effect: finite + audible
+    // weak gates only (variance-safe — no cross-render comparisons).
     const renderRms = (fxId, setParams, quanta = 40, skip = 10) => {
       mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
       mod._fx_set_slot(0, 0, fxId);
@@ -1200,47 +1220,40 @@ async function main() {
       mod._obxd_midi_in(0, 0x90, 60, 100);
       let s = 0;
       let finite = true;
-      const perQuantum = [];
       for (let q = 0; q < quanta; q++) {
         mod._obxd_render(128);
         if (q < skip) continue; // let the note settle
         const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
         const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
-        let qs = 0;
         for (let i = 0; i < 128; i++) {
           if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
-          qs += l[i] * l[i] + r[i] * r[i];
+          s += l[i] * l[i] + r[i] * r[i];
         }
-        s += qs;
-        perQuantum.push(Math.sqrt(qs / 256));
       }
       mod._obxd_midi_in(0, 0x80, 60, 0);
       mod._obxd_panic(0);
       if (!finite) return { err: `non-finite sample through fx ${fxId}` };
-      return { rms: Math.sqrt(s / ((quanta - skip) * 256)), perQuantum };
+      return { rms: Math.sqrt(s / ((quanta - skip) * 256)) };
     };
     // vibe: full wet, generous depth — finite + audible
     const vb = renderRms(38, [[2, 1], [1, 1], [4, 5]]); // WETDRY=1, DEPTH=1, TEMPO=5
     if (vb.err) return vb.err;
     if (!(vb.rms > 0)) return `vibe output silent (rms=${vb.rms.toExponential(3)})`;
-    // tube tremolo: envelope spread at DEPTH 1 vs DEPTH 0 (speed 5 Hz — the
-    // 200 ms LFO period across the ~80 ms measured window guarantees a crest
-    // AND a trough in the per-quantum RMS trace)
-    const spread = (r) => {
-      const max = Math.max(...r.perQuantum);
-      const min = Math.min(...r.perQuantum);
-      const mean = r.perQuantum.reduce((a, b) => a + b, 0) / r.perQuantum.length;
-      return (max - min) / mean;
-    };
-    const tt0 = renderRms(39, [[1, 0], [2, 5]]); // depth=0, speed=5Hz
-    if (tt0.err) return tt0.err;
-    const tt1 = renderRms(39, [[1, 1], [2, 5]]); // depth=1
-    if (tt1.err) return tt1.err;
-    if (!(tt0.rms > 0) || !(tt1.rms > 0)) return `tube tremolo silent: d0=${tt0.rms.toExponential(3)} d1=${tt1.rms.toExponential(3)}`;
-    const s0 = spread(tt0);
-    const s1 = spread(tt1);
-    if (!(s1 > s0 * 2 && s1 > 0.3)) {
-      return `tubetremolo DEPTH does not reach the DSP: envSpread(d0)=${s0.toFixed(3)} envSpread(d1)=${s1.toFixed(3)} (want d1 > 2*d0 and > 0.3)`;
+    // tube tremolo: one synth render for liveness, DEPTH reach on the ramp
+    const tt = renderRms(39, [[1, 1], [2, 5]]); // depth=1, speed=5Hz
+    if (tt.err) return tt.err;
+    if (!(tt.rms > 0)) return `tube tremolo silent (rms=${tt.rms.toExponential(3)})`;
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 39);
+    mod._fx_set_param(0, 0, 2, 5); // SPEED 5 Hz
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 1, 0); // DEPTH 0
+    const td0 = mod._fx_test_slot_rms(0, 0);
+    mod._fx_set_param(0, 0, 1, 1); // DEPTH 1
+    const td1 = mod._fx_test_slot_rms(0, 0);
+    const tdRel = (td0 - td1) / td0; // depth CARVES the windowed RMS (monotone: 0.5 sits between)
+    if (!(tdRel > 0.15)) {
+      return `tubetremolo DEPTH does not reach the DSP: ramp rms(d0)=${td0.toExponential(4)} rms(d1)=${td1.toExponential(4)} (${(tdRel * 100).toFixed(1)}% carve, want > 15%)`;
     }
     // classic stereo phaser orphan: full wet, moving notches — finite + audible
     const ph = renderRms(42, [[6, 1], [4, 2], [5, 0]]); // DEPTH=1, SPEED=2, VIBRATOMODE=0
@@ -1256,6 +1269,7 @@ async function main() {
     if (mod._fx_get_param(0, 0, 0) !== f32(7.5)) return `chorus_mono FREQ round-trip=${mod._fx_get_param(0, 0, 0)}, want ${f32(7.5)}`;
     const params = new Float32Array(mod.HEAPF32.buffer, mod._fx_get_params_ptr(), 10 * 11 * 48);
     if (params[(0 * 11 + 0) * 48 + 0] !== f32(7.5)) return `chorus_mono mirror=${params[(0 * 11 + 0) * 48 + 0]}, want ${f32(7.5)}`;
+    console.log(`    tubetremolo DEPTH selectivity (deterministic ramp): 0↔1 ${td0.toExponential(4)} → ${td1.toExponential(4)} (${(tdRel * 100).toFixed(1)}% carve)`);
   });
 
   // (w) Time/delay family spot check (Phase 1-e) ----------------------------
@@ -1438,15 +1452,21 @@ async function main() {
       if (r.err) return `${name}: ${r.err}`;
       if (!(r.rms > 0)) return `${name} output silent (rms=${r.rms.toExponential(3)})`;
     }
-    // zita_rev1 DRY_WET_MIX reach (param ordinal 9 = port 9, -1..1):
-    // full-wet vs full-dry energy over a sustained note must differ.
-    const zitaWet = renderTrace(57, [[9, 1]]);
-    if (zitaWet.err) return zitaWet.err;
-    const zitaDry = renderTrace(57, [[9, -1]]);
-    if (zitaDry.err) return zitaDry.err;
-    const wetR = zitaWet.rms / zitaDry.rms;
-    if (!(wetR < 0.8 || wetR > 1.25)) {
-      return `zita_rev1 DRY_WET_MIX does not reach the DSP: wet/dry rms ratio ${wetR.toFixed(3)} ~ 1`;
+    // zita_rev1 DRY_WET_MIX reach (param ordinal 9 = port 9, -1..1) on the
+    // DETERMINISTIC ramp (run-exact: full-wet 5.744e-1 vs full-dry
+    // 2.543e-1). The old whole-run synth wet/dry rms ratio was a
+    // cross-render comparison measured 0.34..0.69 locally against the 0.8
+    // gate (CI observed 0.865) — the thinnest margin in the suite, retired.
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 57);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 9, 1);
+    const zWet = mod._fx_test_slot_rms(0, 0);
+    mod._fx_set_param(0, 0, 9, -1);
+    const zDry = mod._fx_test_slot_rms(0, 0);
+    const zRel = Math.abs(zWet - zDry) / Math.max(zWet, zDry);
+    if (!(zRel > 0.25)) {
+      return `zita_rev1 DRY_WET_MIX does not reach the DSP: ramp wet/dry rms ${zWet.toExponential(4)} vs ${zDry.toExponential(4)} (${(zRel * 100).toFixed(1)}% delta, want > 25%)`;
     }
     // room_simulator DRYWET reach (param ordinal 4 = port 6, 0..1):
     // full-wet vs dry-only. The whole-run rms ratio flaked (the engine's
@@ -1474,20 +1494,21 @@ async function main() {
     if (!(wetTail > 0)) {
       return `room_simulator wet tail dead after note-off (tailEnergy=${wetTail.toExponential(3)})`;
     }
-    console.log(`    reverb wet/dry tail energy ratio: room_simulator ${(wetTail / dryTail).toFixed(2)} (well above 1 — the mix port reaches the DSP); zita_rev1 whole-run wet/dry rms ratio ${wetR.toFixed(3)}`);
+    console.log(`    reverb wet/dry: zita_rev1 ramp delta ${(zRel * 100).toFixed(1)}% (mix port reaches the DSP); room_simulator tail energy ratio ${(wetTail / dryTail).toFixed(2)} (well above 1)`);
   });
 
   // (y) Amp + tonestack family spot check (Phase 1-g) -------------------------
   // Exercises the two host-side aggregates (gxfx_dsp_amps.cpp): "Amp Model"
   // (id 61, 19 mono gxamp classes hot-swapped on MODEL param ordinal 4 =
   // port 9) and "Tone Stack" (id 62, 27 stereo classes on MODEL ordinal 3 =
-  // port 10), plus the studiopre STEREO / alembic / w20 preamps. Amp model
-  // differences are driven with the gains open (PreGain +12, Distortion 100,
-  // Drive 1) so two tube stages differ audibly on a sustained note; the
-  // tonestack comparison maxes the B/M/T knobs so two EQ curves differ.
-  // Mid-render MODEL swaps walk both aggregates' full model ranges inside
-  // ONE render pass — the hot-swap path (create + connect +
-  // activate-if-active + destroy old) must stay finite and alive.
+  // port 10), plus the studiopre STEREO / alembic / w20 preamps. MODEL
+  // selectivity rides the DETERMINISTIC ramp (fx_test_slot_rms — run-exact;
+  // the old cross-render per-quantum synth deltas were slope-inflated and
+  // would pass even with MODEL unwired), amp with the gains open (PreGain
+  // +12, Distortion 100, Drive 1), tonestack with B/M/T maxed. Mid-render
+  // MODEL swaps walk both aggregates' full model ranges inside ONE render
+  // pass — the hot-swap path (create + connect + activate-if-active +
+  // destroy old) must stay finite and alive.
   expect('y. amp family: aggregates + preamps render; MODEL selects change the sound; params round-trip; mid-render swaps finite', () => {
     const renderTrace = (fxId, setParams, quanta = 120, skip = 10, onQuantum) => {
       mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
@@ -1539,31 +1560,44 @@ async function main() {
         if (mod._fx_get_param(0, 0, p) !== 1.5) return `${name} param ${p} round-trip 1.5 failed (${mod._fx_get_param(0, 0, p)})`;
       }
     }
-    // amp MODEL 0 (12ax7) vs 16 (12AU7 push-pull 6V6) must differ with the
-    // gains open (params: PreGain +12 dB ordinal 1, Distortion 100 ordinal
-    // 2, Drive 1 ordinal 3, MODEL ordinal 4)
-    const ampOpen = [[1, 12], [2, 100], [3, 1]];
-    const ampA = renderTrace(61, [...ampOpen, [4, 0]]);
-    if (ampA.err) return `ampmodel m0: ${ampA.err}`;
-    const ampB = renderTrace(61, [...ampOpen, [4, 16]]);
-    if (ampB.err) return `ampmodel m16: ${ampB.err}`;
-    let ampDiff = 0;
-    for (let i = 0; i < ampA.perQuantum.length; i++)
-      ampDiff = Math.max(ampDiff, Math.abs(ampA.perQuantum[i] - ampB.perQuantum[i]));
-    if (!(ampDiff > 1e-4)) {
-      return `ampmodel MODEL 0 vs 16 identical on a transient sweep (max per-quantum rms delta ${ampDiff.toExponential(3)})`;
+    // amp MODEL selectivity on the DETERMINISTIC ramp (run-exact, gains
+    // open: PreGain +12 dB ordinal 1, Distortion 100 ordinal 2, Drive 1
+    // ordinal 3, MODEL ordinal 4): MODEL 3 vs 7 differ by 90.5% (5.892 vs
+    // 5.621e-1 across the 19-model scan; the old 0-vs-16 pair is only
+    // 0.54% on the ramp). The old cross-render per-quantum synth deltas
+    // were not just flake-exposed — per-init slop INFLATES them, so the
+    // 1e-4 gate would pass even with MODEL unwired. Retired.
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 61);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 1, 12);
+    mod._fx_set_param(0, 0, 2, 100);
+    mod._fx_set_param(0, 0, 3, 1);
+    mod._fx_set_param(0, 0, 4, 3);
+    const am3 = mod._fx_test_slot_rms(0, 0);
+    mod._fx_set_param(0, 0, 4, 7);
+    const am7 = mod._fx_test_slot_rms(0, 0);
+    if (!(am3 > 1e-4) || !(am7 > 1e-4)) return `ampmodel ramp output too quiet to test (m3=${am3.toExponential(3)}, m7=${am7.toExponential(3)})`;
+    const ampRel = Math.abs(am3 - am7) / Math.max(am3, am7);
+    if (!(ampRel > 0.25)) {
+      return `ampmodel MODEL 3↔7 changed ramp RMS by only ${(ampRel * 100).toFixed(1)}% (${am3.toExponential(4)} vs ${am7.toExponential(4)}) — MODEL not reaching the aggregate`;
     }
-    // tonestack MODEL 0 (default) vs 26 (engl) must differ with B/M/T maxed
-    const tsOpen = [[0, 1], [1, 1], [2, 1]];
-    const tsA = renderTrace(62, [...tsOpen, [3, 0]]);
-    if (tsA.err) return `tonestack m0: ${tsA.err}`;
-    const tsB = renderTrace(62, [...tsOpen, [3, 26]]);
-    if (tsB.err) return `tonestack m26: ${tsB.err}`;
-    let tsDiff = 0;
-    for (let i = 0; i < tsA.perQuantum.length; i++)
-      tsDiff = Math.max(tsDiff, Math.abs(tsA.perQuantum[i] - tsB.perQuantum[i]));
-    if (!(tsDiff > 1e-4)) {
-      return `tonestack MODEL 0 vs 26 identical (max per-quantum rms delta ${tsDiff.toExponential(3)})`;
+    // tonestack MODEL selectivity on the ramp (B/M/T maxed: ordinals 0..2;
+    // MODEL ordinal 3): MODEL 0 vs 26 differ by 69.4% (1.835 vs 5.618e-1)
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 62);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 0, 1);
+    mod._fx_set_param(0, 0, 1, 1);
+    mod._fx_set_param(0, 0, 2, 1);
+    mod._fx_set_param(0, 0, 3, 0);
+    const ts0 = mod._fx_test_slot_rms(0, 0);
+    mod._fx_set_param(0, 0, 3, 26);
+    const ts26 = mod._fx_test_slot_rms(0, 0);
+    if (!(ts0 > 1e-4) || !(ts26 > 1e-4)) return `tonestack ramp output too quiet to test (m0=${ts0.toExponential(3)}, m26=${ts26.toExponential(3)})`;
+    const tsRel = Math.abs(ts0 - ts26) / Math.max(ts0, ts26);
+    if (!(tsRel > 0.25)) {
+      return `tonestack MODEL 0↔26 changed ramp RMS by only ${(tsRel * 100).toFixed(1)}% (${ts0.toExponential(4)} vs ${ts26.toExponential(4)}) — MODEL not reaching the aggregate`;
     }
     // mid-render MODEL swaps: walk every model of both aggregates inside
     // one render pass; output must stay finite and alive throughout
@@ -1576,23 +1610,19 @@ async function main() {
       if (r.err) return `${name} mid-render swaps: ${r.err}`;
       if (!(r.rms > 0)) return `${name} silent across mid-render model swaps (rms=${r.rms.toExponential(3)})`;
     }
-    console.log(`    amp/tonestack MODEL selectivity: amp 0↔16 max rms delta ${ampDiff.toFixed(4)}, tonestack 0↔26 ${tsDiff.toFixed(4)}; both aggregates survive ${19 + 27} mid-render swaps`);
+    console.log(`    amp/tonestack MODEL selectivity (deterministic ramp): amp 3↔7 ${(ampRel * 100).toFixed(1)}% delta, tonestack 0↔26 ${(tsRel * 100).toFixed(1)}%; both aggregates survive ${19 + 27} mid-render swaps`);
   });
 
   // (z) Convolution family spot check (Phase 2-a) ---------------------------
   // Cabinet (id 76) over the self-written partitioned convolver: params
-  // round-trip through the mirror, a held note through CAB=0 (4x12,
-  // 1000-tap IR) vs CAB=5 (HighGain, 192-tap) produces measurably different
-  // output (~66% RMS delta measured; the two IRs filter very differently —
-  // an unwired c_model would leave the ratio at ~1.00), the CLevel knob
-  // (baked into the IR by the bundle's Impf impulse former, including its
-  // level-dependent makeup) audibly scales the output, model "Off" (18) is
-  // dry passthrough, and walking ALL 19 models mid-render (one pending
-  // rebuild per quantum — the bounded-alloc path) stays finite and alive.
-  // The default factory patch is a pad whose per-init LFO phase swings
-  // short-window RMS by tens of percent, which drowns the IR delta — so the
-  // comparison loads factory patch 6 ("Acoustic Bass"), measured stable to
-  // ~1-2% across inits (same reason check s/t use early settled windows).
+  // round-trip through the mirror, CAB=0 (4x12, 1000-tap IR) vs CAB=5
+  // (HighGain, 192-tap) and the CLevel knob produce measurably different
+  // output on the DETERMINISTIC ramp (fx_test_slot_rms — run-exact; the
+  // old cross-render synth cabRms rode the "stable" Acoustic Bass patch,
+  // run-exact locally but re-seeded differently on CI — the z2 redeye
+  // flake's exact shape), model "Off" (18) is dry passthrough, and walking
+  // ALL 19 models mid-render (one pending rebuild per quantum — the
+  // bounded-alloc path) stays finite and alive.
   expect('z. conv family: cabinet IR switch CAB=0 vs CAB=5 changes the response; CLevel scales; params round-trip; model walk finite', () => {
     // param round-trip: set/get over all 4 ordinals (CLevel/CBass/CTreble/c_model)
     mod._obxd_init(48000);
@@ -1602,55 +1632,35 @@ async function main() {
       mod._fx_set_param(0, 0, p, v);
       if (mod._fx_get_param(0, 0, p) !== f32(v)) return `param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
     }
-    // Sustained note through the convolver, stable patch, fresh init per
-    // measurement (fuzzface-check shape; ~1-2% cross-init drift).
-    const cabRms = (model, level = 1, note = 48, skip = 25, meas = 15) => {
-      mod._obxd_init(48000);
-      mod._obxd_set_factory_patch(0, 6); // "Acoustic Bass" — init-stable
-      mod._fx_set_slot(0, 0, 76);
-      mod._fx_set_param(0, 0, 0, level); // CLevel
-      mod._fx_set_param(0, 0, 3, model); // c_model
-      mod._fx_set_enabled(0, 0, 1);
-      mod._obxd_midi_in(0, 0x90, note, 127);
-      let s = 0;
-      let finite = true;
-      for (let q = 0; q < skip + meas; q++) {
-        mod._obxd_render(128);
-        if (q < skip) continue;
-        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
-        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
-        for (let i = 0; i < 128; i++) {
-          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
-          s += l[i] * l[i] + r[i] * r[i];
-        }
-      }
-      mod._obxd_midi_in(0, 0x80, note, 0);
-      mod._obxd_panic(0);
-      if (!finite) return { err: `non-finite sample through cabinet (model ${model})` };
-      return { rms: Math.sqrt(s / (meas * 256)) };
-    };
-    const r0 = cabRms(0);
-    if (r0.err) return r0.err;
-    const r5 = cabRms(5);
-    if (r5.err) return r5.err;
-    if (!(r0.rms > 1e-4)) return `cabinet CAB=0 output too quiet to test (rms=${r0.rms.toExponential(3)})`;
-    const rel = Math.abs(r0.rms - r5.rms) / Math.max(r0.rms, r5.rms);
-    if (!(rel > 0.25)) {
-      return `cabinet IR switch 0↔5 changed RMS by only ${(rel * 100).toFixed(1)}% (${r0.rms.toExponential(4)} vs ${r5.rms.toExponential(4)}) — c_model not reaching the convolver`;
+    // CAB selectivity on the deterministic ramp (CLevel 1): CAB 0 (4x12)
+    // vs CAB 5 (HighGain) filter the broadband ramp very differently
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 0, 1); // CLevel
+    mod._fx_set_param(0, 0, 3, 0); // c_model
+    const r0 = mod._fx_test_slot_rms(0, 0);
+    mod._fx_set_param(0, 0, 3, 5);
+    const r5 = mod._fx_test_slot_rms(0, 0);
+    if (!(r0 > 1e-4)) return `cabinet CAB=0 ramp output too quiet to test (rms=${r0.toExponential(3)})`;
+    const rel = Math.abs(r0 - r5) / Math.max(r0, r5);
+    if (!(rel > 0.15)) {
+      return `cabinet IR switch 0↔5 changed ramp RMS by only ${(rel * 100).toFixed(1)}% (${r0.toExponential(4)} vs ${r5.toExponential(4)}) — c_model not reaching the convolver`;
     }
-    // CLevel 0.5 vs 5.0 (model 0): Impf bakes level·10^(-0.1·level) into
-    // the IR — 0.397 vs 1.581 ≈ 4x amplitude. Assert a clear scaling with
-    // margin for the shared shelving.
-    const lo = cabRms(0, 0.5);
-    if (lo.err) return lo.err;
-    const hi = cabRms(0, 5.0);
-    if (hi.err) return hi.err;
-    const levelRatio = hi.rms / lo.rms;
+    // CLevel 0.5 vs 5.0 (model 0) on the ramp: Impf bakes level·10^(-0.1·level)
+    // into the IR — 0.397 vs 1.581 ≈ 4x amplitude. Assert a clear scaling
+    // with margin for the shared shelving.
+    mod._fx_set_param(0, 0, 3, 0);
+    mod._fx_set_param(0, 0, 0, 0.5);
+    const lo = mod._fx_test_slot_rms(0, 0);
+    mod._fx_set_param(0, 0, 0, 5.0);
+    const hi = mod._fx_test_slot_rms(0, 0);
+    const levelRatio = hi / lo;
     if (!(levelRatio > 1.5)) {
-      return `cabinet CLevel 0.5→5.0 scaled RMS by only ${levelRatio.toFixed(2)}x (${lo.rms.toExponential(4)} → ${hi.rms.toExponential(4)}) — CLevel not reaching the IR bake`;
+      return `cabinet CLevel 0.5→5.0 scaled ramp RMS by only ${levelRatio.toFixed(2)}x (${lo.toExponential(4)} → ${hi.toExponential(4)}) — CLevel not reaching the IR bake`;
     }
     // Model walk 0..18 inside one render: a pending rebuild per quantum
-    // (incl. Off at 18 — passthrough) must stay finite and audible.
+    // (incl. Off at 18 — passthrough) must stay finite and audible. One
+    // synth-fed render (stable Acoustic Bass patch) — finite + alive weak
+    // gates only.
     mod._obxd_init(48000);
     mod._obxd_set_factory_patch(0, 6);
     mod._fx_set_slot(0, 0, 76);
@@ -1674,7 +1684,7 @@ async function main() {
     mod._obxd_panic(0);
     if (!walkFinite) return 'non-finite sample during the cabinet model walk';
     if (!(Math.sqrt(walkSq / (19 * 6 * 256)) > 1e-4)) return 'cabinet model walk silent';
-    console.log(`    cabinet IR selectivity: CAB 0↔5 rms ${r0.rms.toExponential(4)} vs ${r5.rms.toExponential(4)} (${(rel * 100).toFixed(1)}% delta); CLevel 0.5→5.0 scales ${levelRatio.toFixed(2)}x; 19-model walk finite`);
+    console.log(`    cabinet IR selectivity (deterministic ramp): CAB 0↔5 rms ${r0.toExponential(4)} vs ${r5.toExponential(4)} (${(rel * 100).toFixed(1)}% delta); CLevel 0.5→5.0 scales ${levelRatio.toFixed(2)}x; 19-model walk finite`);
   });
 
   // (z2) Phase 2-b convolver family: redeye aggregate + metal amp/head ------
@@ -1775,21 +1785,22 @@ async function main() {
   });
 
   // (z3) Phase 2-c: detune (id 80) — smbPitchShift over the fftw shim ------
-  // A sustained bass note (Acoustic Bass patch, MIDI 48 → 130.8 Hz; its
-  // spectrum is a full harmonic series on ~32.7 Hz), WET 100 / DRY 0,
-  // probed with a phase-independent single-bin DFT (correlate against cos
-  // AND sin at the probe frequency, magnitude = hypot). DETUNE=+5 st
-  // (ratio 2^(5/12) ≈ 1.335 — deliberately NOT an octave/fifth: the patch's
-  // harmonic series would map onto itself and fake residuals) must move
-  // f0's energy to F* = f0·ratio ≈ 174.6 Hz, which sits BETWEEN the input
-  // partials (163.5 / 196.2): base@F* is the noise floor, shifted@F*
-  // ~8.5× that, and f0 drops to ~15%. The ~0.4 s probe window dwarfs the
-  // vocoder latency (512-frame FIFO at the internal 12 k rate ≈ 37 ms) and
-  // its 2.5 Hz resolution separates the probe from the partial grid. Also:
-  // a LATENCY quality walk 0→2→1→0 mid-render exercises the INLINED
+  // The +5 st discrimination rides the deterministic tone probe
+  // (fx_test_slot_tone_probe — verify-only export): a fixed-phase 440 Hz
+  // sine through the REAL slot runtime, lock-in amplitude at
+  // F* = 440·2^(5/12) ≈ 587.33 Hz (deliberately NOT an octave/fifth: the
+  // sine has no partials to alias onto itself). WET 100 / DRY 0 keeps the
+  // dry 440 out of the shifted run. Run-exact: unshifted F* sits at the
+  // 6.7e-3 vocoder-artifact floor, +5 st lifts it to 4.9e-1 (72x), and the
+  // feed bin drains to 0.3% of its unshifted level. The old synth-fed DFT
+  // probe (render per detune amount, correlate against cos/sin, compare
+  // across renders) flaked in CI: per-init juce::Random voice slop parked
+  // note harmonics in the f0 bin — "+5 st left f0 at 110.6% of its level"
+  // (f0 energy ROSE under pitch-up, proof it was slop, not routing).
+  // Also: a LATENCY quality walk 0→2→1→0 mid-render exercises the INLINED
   // plan-rebuild path (upstream's LV2 worker → change_latency: mem_free +
   // mem_alloc) — every rebuild must stay finite and audible.
-  expect('z3. detune: +5 st moves a sustained tone (DFT probe f0 vs f0·2^(5/12)); LATENCY rebuild walk finite; params round-trip', () => {
+  expect('z3. detune: +5 st moves a deterministic tone (tone-probe f vs f·2^(5/12)); LATENCY rebuild walk finite; params round-trip', () => {
     // param round-trip: all 10 ordinals (DETUNE..TREBLE, ttl ports 2..11)
     mod._obxd_init(48000);
     mod._fx_set_slot(0, 0, 80);
@@ -1798,61 +1809,26 @@ async function main() {
       mod._fx_set_param(0, 0, p, v);
       if (mod._fx_get_param(0, 0, p) !== f32(v)) return `detune param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
     }
-    const F0 = 130.81278265398093; // MIDI 48 at A4=440
-    const FS = F0 * Math.pow(2, 5 / 12); // ≈ 174.61 Hz — between input partials
-    const probe = (y, f) => {
-      let rc = 0, rs = 0;
-      const w = 2 * Math.PI * f / 48000;
-      for (let i = 0; i < y.length; i++) { rc += y[i] * Math.cos(w * i); rs += y[i] * Math.sin(w * i); }
-      return Math.sqrt(rc * rc + rs * rs) * (2 / y.length);
-    };
-    // One render per detune amount; mono-sum L+R (dual-mono detune chains).
-    const render = (detuneSt) => {
-      mod._obxd_init(48000);
-      mod._obxd_set_factory_patch(0, 6); // "Acoustic Bass" — init-stable
-      mod._fx_set_slot(0, 0, 80);
-      mod._fx_set_param(0, 0, 4, 100); // WET 100
-      mod._fx_set_param(0, 0, 5, 0);   // DRY 0
-      mod._fx_set_param(0, 0, 0, detuneSt);
-      mod._fx_set_enabled(0, 0, 1);
-      mod._obxd_midi_in(0, 0x90, 48, 127);
-      const y = [];
-      let finite = true;
-      let sq = 0;
-      for (let q = 0; q < 60 + 150; q++) {
-        mod._obxd_render(128);
-        if (q < 60) continue; // vocoder FIFO latency + note settle (~160 ms)
-        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
-        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
-        for (let i = 0; i < 128; i++) {
-          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
-          const m = 0.5 * (l[i] + r[i]);
-          y.push(m);
-          sq += m * m;
-        }
-      }
-      mod._obxd_midi_in(0, 0x80, 48, 0);
-      mod._obxd_panic(0);
-      if (!finite) return { err: `non-finite sample through detune (+${detuneSt} st)` };
-      return { f0: probe(y, F0), fs: probe(y, FS), rms: Math.sqrt(sq / y.length) };
-    };
-    const base = render(0);
-    if (base.err) return base.err;
-    const shift = render(5);
-    if (shift.err) return shift.err;
-    if (!(base.rms > 1e-4)) return `detune +0 output too quiet to test (rms=${base.rms.toExponential(3)})`;
-    if (!(shift.rms > 1e-4)) return `detune +5 output too quiet to test (rms=${shift.rms.toExponential(3)})`;
-    if (!(base.f0 > 1e-2)) return `unshifted f0 probe too weak (${base.f0.toExponential(3)}) — patch/note changed?`;
-    // Energy LEFT f0 (falls to ~15% measured; < 50% with margin) and
-    // APPEARED at F* (> 30% of f0's original level, measured ~40-55%;
-    // ratio=1 or a wrong shift amount leaves F* at the ~6e-3 noise floor).
-    // Noisy ratio assertion vs the F* floor deliberately avoided: the
-    // floor varies ~1.5x across inits and flaked a fixed >4x gate.
-    if (!(shift.f0 < 0.5 * base.f0)) {
-      return `+5 st left f0 at ${(shift.f0 / base.f0 * 100).toFixed(1)}% of its level (${base.f0.toExponential(3)} → ${shift.f0.toExponential(3)}) — no shift`;
+    const FEED = 440;
+    const FSHIFT = FEED * Math.pow(2, 5 / 12); // ≈ 587.33 Hz
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 80);
+    mod._fx_set_param(0, 0, 4, 100); // WET 100
+    mod._fx_set_param(0, 0, 5, 0);   // DRY 0
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 0, 0); // DETUNE 0
+    const floorAmp = mod._fx_test_slot_tone_probe(0, 0, FEED, FSHIFT);
+    const passAmp = mod._fx_test_slot_tone_probe(0, 0, FEED, FEED);
+    mod._fx_set_param(0, 0, 0, 5); // DETUNE +5 st
+    const shiftAmp = mod._fx_test_slot_tone_probe(0, 0, FEED, FSHIFT);
+    const residAmp = mod._fx_test_slot_tone_probe(0, 0, FEED, FEED);
+    if (!(floorAmp > 0)) return `tone probe returned ${floorAmp} — export/args broken?`;
+    if (!(shiftAmp > 0.05)) return `detune +5 shifted amplitude too weak to test (${shiftAmp.toExponential(3)})`;
+    if (!(shiftAmp > 10 * floorAmp)) {
+      return `+5 st did not move tone energy to ${FSHIFT.toFixed(1)} Hz: floor ${floorAmp.toExponential(3)} → ${shiftAmp.toExponential(3)} (${(shiftAmp / Math.max(floorAmp, 1e-12)).toFixed(1)}x, want > 10x) — DETUNE not reaching the vocoder`;
     }
-    if (!(shift.fs > 0.3 * base.f0)) {
-      return `+5 st did not move energy to ${FS.toFixed(1)} Hz: floor ${base.fs.toExponential(3)} → ${shift.fs.toExponential(3)}, want > 0.3*f0 (${(0.3 * base.f0).toExponential(3)}) — DETUNE not reaching the vocoder`;
+    if (!(residAmp < 0.25 * passAmp)) {
+      return `+5 st left the feed bin at ${((residAmp / passAmp) * 100).toFixed(1)}% of its unshifted level (${passAmp.toExponential(3)} → ${residAmp.toExponential(3)}) — no shift`;
     }
     // LATENCY quality walk mid-render: every inline plan rebuild must stay
     // finite and audible (upstream's worker path, now on the audio thread).
@@ -1881,7 +1857,7 @@ async function main() {
     mod._obxd_panic(0);
     if (!walkFinite) return 'non-finite sample during the detune LATENCY rebuild walk';
     if (!(Math.sqrt(walkSq / (4 * 8 * 256)) > 1e-4)) return 'detune LATENCY rebuild walk silent';
-    console.log(`    detune shift: +5 st moves f0 → F* ${FS.toFixed(1)} Hz (${base.fs.toExponential(3)} → ${shift.fs.toExponential(3)}, ${(shift.fs / Math.max(base.fs, 1e-12)).toFixed(1)}x); f0 falls to ${(shift.f0 / base.f0 * 100).toFixed(1)}%; LATENCY rebuild walk finite`);
+    console.log(`    detune shift (tone probe): +5 st lifts F* ${FSHIFT.toFixed(1)} Hz ${floorAmp.toExponential(3)} → ${shiftAmp.toExponential(3)} (${(shiftAmp / floorAmp).toFixed(1)}x); feed bin drains to ${((residAmp / passAmp) * 100).toFixed(1)}%; LATENCY rebuild walk finite`);
   });
 
   // (z4) Phase 2-d: tuner (id 81) — inline NSDF pitch tracker + the FIRST
