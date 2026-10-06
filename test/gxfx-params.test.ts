@@ -64,19 +64,19 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(11);
+        expect(FX_COUNT).toBe(28);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
 
-    it("ids are 0..10 in canonical order and every effect has ≥1 param", () => {
+    it("ids are 0..FX_COUNT-1 in manifest order and every effect has ≥1 param", () => {
         for (let i = 0; i < FX_EFFECTS.length; i++) {
             expect(FX_EFFECTS[i].id).toBe(i);
             expect(FX_EFFECTS[i].params.length).toBeGreaterThanOrEqual(1);
         }
     });
 
-    it("every effect carries its expected v2 category", () => {
+    it("every effect carries its expected category", () => {
         const expected = [
             "wah",                          // 0 wah
             "drive", "drive",               // 1 overdrive, 2 distortion
@@ -85,6 +85,14 @@ describe("gxfx-params — layout invariants", () => {
             "modulation", "modulation",     // 6 phaser, 7 tremolo
             "delay", "delay",               // 8 delay, 9 echo
             "reverb",                       // 10 reverb
+            // Phase 1-a drive family (11..25)
+            "drive", "drive", "drive",      // fuzzface, fuzzfacefm, fumaster
+            "drive", "drive", "drive",      // hornet, muff, cstb
+            "drive", "drive", "drive",      // aclipper, mxrdist, rangem
+            "drive", "drive", "drive",      // mole, hfb, hogsfoot
+            "drive", "drive", "drive",      // softclip, bassbooster, highbooster
+            // Phase 1-a dynamics family (26..27)
+            "dynamics", "dynamics",         // expander, susta
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -92,14 +100,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 47", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 87", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(47);
-        expect(FX_TOTAL_PARAMS).toBe(47);
+        expect(running).toBe(87);
+        expect(FX_TOTAL_PARAMS).toBe(87);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -169,19 +177,64 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..10", () => {
-        for (let i = 0; i < 11; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..27", () => {
+        for (let i = 0; i < 28; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(11)).toBe(false);
+        expect(isFxId(28)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(11, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(28, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
         expect(fxFlatIndex(99, 0)).toBe(-1);
+    });
+});
+
+describe("gxfx-params — Phase 1-a drive + dynamics additions", () => {
+    it("fuzzface (ttl-parsed): ports/labels/ranges from gx_fuzzface.ttl, BYPASS-free", () => {
+        const fx = FX_EFFECTS[11];
+        expect(fx.key).toBe("fuzzface");
+        expect(fx.label).toBe("Fuzz Face");
+        expect(fx.stereo).toBe(false);
+        expect(fx.params.map((p) => p.symbol)).toEqual(["FUZZ", "LEVEL"]);
+        expect(fx.params.map((p) => p.port)).toEqual([2, 3]);
+        expect(fx.params.map((p) => p.name)).toEqual(["Fuzz", "Level"]);
+        expect(fx.params[0].default).toBe(0.5);
+        expect(fx.params[0].min).toBe(0);
+        expect(fx.params[0].max).toBe(1);
+    });
+
+    it("aclipper skips the wrapper BYPASS port and keeps the ttl default", () => {
+        const fx = FX_EFFECTS[17];
+        expect(fx.key).toBe("aclipper");
+        expect(fx.params.map((p) => p.symbol)).toEqual(["DRIVE", "LEVEL", "TONE"]);
+        expect(fx.params[1].default).toBe(-7);
+        expect(fx.params[1].min).toBe(-20);
+        expect(fx.params[1].max).toBe(12);
+    });
+
+    it("orphans carry connect-comment metadata (softclip, bassbooster, highbooster)", () => {
+        const soft = FX_EFFECTS[23];
+        expect(soft.key).toBe("softclip");
+        expect(soft.params).toHaveLength(1);
+        expect(soft.params[0]).toMatchObject({ port: 0, symbol: "FUZZ", default: 0, min: 0, max: 1.99, step: 0.01 });
+        const bass = FX_EFFECTS[24];
+        expect(bass.params[0]).toMatchObject({ port: 0, symbol: "LEVEL", default: 10, min: 0.5, max: 20, step: 0.5 });
+        const high = FX_EFFECTS[25];
+        expect(high.params[0]).toMatchObject({ port: 0, symbol: "LEVEL", default: 0.5, min: 0, max: 20, step: 0.5 });
+    });
+
+    it("expander (dynamics): ttl ports at indices 0..4", () => {
+        const fx = FX_EFFECTS[26];
+        expect(fx.key).toBe("expander");
+        expect(fx.category).toBe("dynamics");
+        expect(fx.params.map((p) => p.symbol)).toEqual(["RATIO", "KNEE", "THRESHOLD", "RELEASE", "ATTACK"]);
+        expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4]);
+        expect(fx.params[0].default).toBe(2);
+        expect(fx.params[2].default).toBe(-40);
     });
 });

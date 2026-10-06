@@ -1,29 +1,54 @@
 #!/usr/bin/env node
 // ===========================================================================
 // gen-gxfx-params.mjs — generates every consumable artifact of the guitarix
-// FX param spec (fx2plan.md Phase 0: the current 11 effects).
+// FX param spec (fx2plan.md Phase 1-a: manifest-driven, ttl-parsing).
 //
-// SOURCE OF TRUTH for param DATA: tools/gxfx-param-spec.json — the ports,
-// symbols, labels, ranges and defaults were transcribed from the guitarix
-// ttl files and hand-verified when the 11-effect rack shipped (commit
-// eeb5793; note the labels are humanized vs the raw ttl "VOLUME"/"WAH"
-// strings, so the ttl cannot be re-parsed to reproduce them). The generator
-// owns everything STRUCTURAL: the effect key → menu category map, out_ports
-// (empty for all 11 in Phase 0), and the per-slot param array size (48).
+// SOURCE OF TRUTH for param DATA, per effect kind:
+//   - v1 eleven (wah..reverb, ids 0..10): PINNED in
+//     tools/gxfx-param-spec.json — the ports, symbols, labels, ranges and
+//     defaults were transcribed from the guitarix ttl files and hand-verified
+//     when the 11-effect rack shipped (commit eeb5793; the labels are
+//     humanized vs the raw ttl "VOLUME"/"WAH" strings, so the ttl cannot
+//     re-produce them). The generator reads the first 11 spec entries back
+//     verbatim — byte-identical labels/values, forever.
+//   - NEW effects: parsed straight from the pinned guitarix submodule —
+//     bundle ttl files (`ttl:` manifest entries: port symbols / ranges /
+//     defaults from third_party/guitarix/trunk/src/LV2/gx_*.lv2/*.ttl,
+//     labels humanized to Title Case) or orphan faust classes (`orphan:`
+//     entries: param metadata from the .cc connect_ports comments
+//     `// , default, min, max, step` in faust-generated/).
+//
+// MANIFEST: the effect catalog below is the single id-order list — effect
+// ids are the manifest index (existing 0..10 stable, new appended in
+// manifest order). The C host factory table mirrors this order and is
+// compile-time-guarded against the generated count (gxfx_defaults.h emits
+// GXFX_EFFECT_COUNT; gxfx_host.cpp static_asserts its factory table
+// against it).
+//
+// Port-exposure policy (both sources):
+//   - audio ports are never params; stereo := ttl audio-input count >= 2
+//   - control INPUT ports are params, EXCEPT `lv2:designation lv2:enabled`
+//     (wrapper-level BYPASS — the faust classes ignore it; matches v1, where
+//     bossds1's ttl BYPASS port is not exposed), `pprop:trigger` (tremolo
+//     reset style) and `pprop:notOnGUI` ports.
+//   - ttl carries no step: derived deterministically (1 for integer/toggled,
+//     else by range span: <=3 -> 0.01, <=30 -> 0.1, <=300 -> 1, else 10).
+//     Step is display metadata only — the 0..1<->engine transforms are linear.
 //
 // Emitted artifacts (all committed; deterministic, no timestamps):
-//   1. tools/gxfx-param-spec.json  rewritten to the v2 shape: everything v1
-//                                  had, PLUS per effect `category` and
-//                                  `out_ports` (name+range, for meters/tuner
-//                                  freq — Phase 2/3)
+//   1. tools/gxfx-param-spec.json  v2 shape: everything v1 had, PLUS per
+//                                  effect `category` and `out_ports`
+//                                  (name+range, for meters/tuner freq —
+//                                  Phase 2/3; empty for all current effects)
 //   2. src/gxfx-params.ts          GENERATED TS param tables — same public
 //                                  API the UI imports (FX_EFFECTS, the
-//                                  0..1↔engine transforms, flat-mirror
+//                                  0..1<->engine transforms, flat-mirror
 //                                  helpers) + `category` on each effect
-//   3. wasm/obxd/gxfx_defaults.h   C default tables (FX_DEFAULTS[11][48] +
-//                                  FX_PARAM_COUNTS[11]) for the slot-model
-//                                  C-engine rework — not yet in any Makefile
-//                                  HDRS list; consumed by a later task
+//   3. wasm/obxd/gxfx_defaults.h   C tables for the slot-model engine:
+//                                  GXFX_EFFECT_COUNT + FX_DEFAULTS[N][48] +
+//                                  FX_PARAM_COUNTS[N] + FX_STEREO[N] +
+//                                  FX_PORTS[N][GXFX_PORTS_ROW] — the host's
+//                                  whole per-effect data is generator-owned.
 //
 // Usage:
 //   node tools/gen-gxfx-params.mjs           # write all three outputs
@@ -31,10 +56,11 @@
 //                                            # committed files; exit 0 fresh,
 //                                            # exit 1 listing stale paths
 //
-// Deterministic by construction: effects in id order (0..10), params in
+// Deterministic by construction: effects in manifest (id) order, params in
 // port order, insertion-stable object construction — --check is
-// byte-stable across runs. Reading a v2 spec back in is idempotent
-// (stored category/out_ports are ignored and re-applied from here).
+// byte-stable across runs. Reading a v2 spec back in is idempotent (only
+// the first 11 entries are consumed; entries 11.. are re-derived from the
+// guitarix sources every run).
 // Node >= 20, no dependencies.
 // ===========================================================================
 
@@ -49,15 +75,23 @@ const OUT_JSON = 'tools/gxfx-param-spec.json';
 const OUT_TS = 'src/gxfx-params.ts';
 const OUT_H = 'wasm/obxd/gxfx_defaults.h';
 
-const FX_COUNT = 11;        // v1 effect catalog — Phase 0 keeps the current 11
+const GX_LV2 = 'third_party/guitarix/trunk/src/LV2';
+const GX_FAUST = `${GX_LV2}/faust-generated`;
+
 const FX_SLOTS = 11;
 const FX_INSTANCE_COUNT = 10;
 const FX_SLOT_PARAMS = 48;  // per-slot param array size (fx2plan.md: max params tree-wide = 39)
 
-// Effect key → menu category. Phase 0 assignments for the current 11; the
-// full v2 vocabulary (drive|wah|eq|filter|dynamics|modulation|delay|reverb|
-// amp|tonestack|multiband|special) is mirrored in src/gxfx-params.ts.
-const CATEGORY_BY_KEY = {
+// Frozen menu-category vocabulary (fx2plan.md Phase 0/1; mirrored in
+// src/gxfx-params.ts FxCategory and the mixer dropdown grouping).
+const CATEGORY_VOCAB = new Set([
+    'wah', 'drive', 'eq', 'filter', 'dynamics', 'modulation',
+    'delay', 'reverb', 'amp', 'tonestack', 'multiband', 'special', 'utility',
+]);
+
+// v1 effect keys in canonical id order 0..10 — their param data is pinned in
+// the committed spec JSON (see header). Category assignments kept from v1.
+const V1_CATEGORY_BY_KEY = {
     wah: 'wah',
     overdrive: 'drive',
     distortion: 'drive',
@@ -70,9 +104,192 @@ const CATEGORY_BY_KEY = {
     echo: 'delay',
     reverb: 'reverb',
 };
+const V1_KEYS = Object.keys(V1_CATEGORY_BY_KEY);
 
 // ---------------------------------------------------------------------------
-// Spec load + validation
+// MANIFEST — the effect catalog in id order (index = effect id).
+// v1 entries: { key, pin: true, category } — data from the spec JSON.
+// New entries: { key, menuName, category, ttl } parses the bundle ttl
+// relative to third_party/guitarix/trunk/src/LV2/, or
+// { key, menuName, category, orphan } parses the faust-generated .cc
+// connect_ports comments (classes with no .lv2 bundle).
+// Phase 1-a ships the drive family (fuzzes/distortions/boosters + the
+// softclip orphan + the booster halves of the gxbooster composite) and the
+// remaining dynamics bundles. Excluded per fx2plan.md: gx_fuzz (wrapper
+// composite: bmfp+lowpass_up+lowpass_down+noiser), gx_distortion / gx_feedback
+// orphans (plan defaults optional-skip), mbdistortion/mbcompressor (multiband
+// family, later phase), jcm800pre (Phase 4, needs Eigen).
+// ---------------------------------------------------------------------------
+const MANIFEST = [
+    // --- v1 eleven (ids 0..10) — pinned data, canonical default chain ---
+    ...V1_KEYS.map((key) => ({ key, pin: true, category: V1_CATEGORY_BY_KEY[key] })),
+
+    // --- Phase 1-a: drive family (fuzz / distortion / booster) ---
+    { key: 'fuzzface', menuName: 'Fuzz Face', category: 'drive', ttl: 'gx_fuzzface.lv2/gx_fuzzface.ttl' },
+    { key: 'fuzzfacefm', menuName: 'Fuzz Face FM', category: 'drive', ttl: 'gx_fuzzfacefm.lv2/gx_fuzzfacefm.ttl' },
+    { key: 'fumaster', menuName: 'Fuzz Master', category: 'drive', ttl: 'gx_fumaster.lv2/gx_fumaster.ttl' },
+    { key: 'hornet', menuName: 'Hornet', category: 'drive', ttl: 'gx_hornet.lv2/gx_hornet.ttl' },
+    { key: 'muff', menuName: 'Muff', category: 'drive', ttl: 'gx_muff.lv2/gx_muff.ttl' },
+    { key: 'cstb', menuName: 'Tone Bender', category: 'drive', ttl: 'gx_cstb.lv2/gx_cstb.ttl' },
+    { key: 'aclipper', menuName: 'Rat', category: 'drive', ttl: 'gx_aclipper.lv2/gx_aclipper.ttl' },
+    { key: 'mxrdist', menuName: 'MXR Distortion', category: 'drive', ttl: 'gx_mxrdist.lv2/gx_mxrdist.ttl' },
+    { key: 'rangem', menuName: 'Range Master', category: 'drive', ttl: 'gx_rangem.lv2/gx_rangem.ttl' },
+    { key: 'mole', menuName: 'Mole', category: 'drive', ttl: 'gx_mole.lv2/gx_mole.ttl' },
+    { key: 'hfb', menuName: 'HF Brightener', category: 'drive', ttl: 'gx_hfb.lv2/gx_hfb.ttl' },
+    { key: 'hogsfoot', menuName: 'Hogs Foot', category: 'drive', ttl: 'gx_hogsfoot.lv2/gx_hogsfoot.ttl' },
+    { key: 'softclip', menuName: 'Softclip', category: 'drive', orphan: 'softclip.cc' },
+    { key: 'bassbooster', menuName: 'Bass Booster', category: 'drive', orphan: 'bassbooster.cc' },
+    { key: 'highbooster', menuName: 'High Booster', category: 'drive', orphan: 'highbooster.cc' },
+
+    // --- Phase 1-a: dynamics family ---
+    { key: 'expander', menuName: 'Expander', category: 'dynamics', ttl: 'gx_expander.lv2/gx_expander.ttl' },
+    { key: 'susta', menuName: 'Sustainer', category: 'dynamics', ttl: 'gx_susta.lv2/gx_susta.ttl' },
+];
+
+const FX_COUNT = MANIFEST.length;
+
+// ---------------------------------------------------------------------------
+// ttl parsing (bundle .ttl — lv2:port blocks)
+// ---------------------------------------------------------------------------
+
+/** Parse the `lv2:port` list of a guitarix bundle ttl into typed ports. */
+function parseTtlPorts(rel) {
+    const text = readFileSync(join(ROOT, GX_LV2, rel), 'utf8');
+    const m = text.match(/lv2:port\s*\[([\s\S]*?)\]\s*\./);
+    if (!m) throw new Error(`${rel}: no lv2:port block found`);
+    return m[1].split(/\]\s*,\s*\[/).map((raw) => {
+        const port = { types: [], props: [], designation: [] };
+        for (const stmt of raw.split(';')) {
+            const s = stmt.trim().replace(/^-\s*/, '');
+            if (!s) continue;
+            const mm = s.match(/^([\w:]+)\s+([\s\S]*)$/);
+            if (!mm) continue;
+            const pred = mm[1];
+            const objs = mm[2].split(',').map((o) => o.trim().replace(/;$/, '')).filter(Boolean);
+            for (const obj of objs) {
+                if (pred === 'a') port.types.push(obj);
+                else if (pred.endsWith('index')) port.index = Number(obj);
+                else if (pred.endsWith('symbol')) port.symbol = obj.replace(/^"|"$/g, '');
+                else if (pred.endsWith('name')) port.name = obj.replace(/^"|"$/g, '');
+                else if (pred.endsWith('default')) port.def = Number(obj);
+                else if (pred.endsWith('minimum')) port.min = Number(obj);
+                else if (pred.endsWith('maximum')) port.max = Number(obj);
+                else if (pred.endsWith('portProperty')) port.props.push(obj);
+                else if (pred.endsWith('designation')) port.designation.push(obj);
+            }
+        }
+        return port;
+    });
+}
+
+function ttlEffect(entry) {
+    const ports = parseTtlPorts(entry.ttl);
+    const problems = [];
+    const isA = (p, suffix) => p.types.some((t) => t.endsWith(suffix));
+    for (const p of ports) {
+        if (!Number.isInteger(p.index)) problems.push(`port ${p.symbol ?? '?'}: missing lv2:index`);
+        if (!p.symbol) problems.push(`port index ${p.index}: missing lv2:symbol`);
+    }
+    const audioIns = ports.filter((p) => isA(p, 'AudioPort') && isA(p, 'InputPort'));
+    const paramPorts = ports.filter((p) =>
+        isA(p, 'ControlPort') && isA(p, 'InputPort')
+        && !p.designation.some((d) => d.endsWith('enabled'))
+        && !p.props.some((x) => x.endsWith('trigger') || x.endsWith('notOnGUI')));
+    paramPorts.sort((a, b) => a.index - b.index);
+    if (paramPorts.length === 0) problems.push('no param ports after filtering');
+    if (problems.length > 0) throw new Error(`${entry.ttl}: ${problems.join('; ')}`);
+
+    return {
+        stereo: audioIns.length >= 2,
+        params: paramPorts.map((p) => {
+            const toggled = p.props.some((x) => x.endsWith('toggled'));
+            const integer = p.props.some((x) => x.endsWith('integer'));
+            return {
+                port: p.index,
+                symbol: p.symbol,
+                name: humanLabel(p.name || p.symbol, p.symbol),
+                default: p.def,
+                min: p.min,
+                max: p.max,
+                step: stepFor(p.min, p.max, toggled, integer),
+                toggled,
+                integer,
+            };
+        }),
+    };
+}
+
+// ---------------------------------------------------------------------------
+// orphan parsing (faust-generated .cc — connect_ports comments + enum)
+// ---------------------------------------------------------------------------
+
+/** Parse an orphan faust class: param metadata from the connect_ports
+ * `// , default, min, max, step` comments, port index = position in the
+ * trailing `typedef enum {...} PortIndex` comment. */
+function orphanEffect(entry) {
+    const text = readFileSync(join(ROOT, GX_FAUST, entry.orphan), 'utf8');
+    const em = text.match(/\/\*\s*typedef\s+enum\s*\{([^}]*)\}\s*PortIndex\s*;?\s*\*\//);
+    if (!em) throw new Error(`${entry.orphan}: no trailing PortIndex enum comment`);
+    const symbols = em[1].split(',').map((s) => s.trim()).filter(Boolean);
+    const params = [];
+    const caseRe = /case\s+(\w+)\s*:\s*\n\s*\w+\s*=\s*\(float\*\)data;\s*\/\/\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)/g;
+    let cm;
+    while ((cm = caseRe.exec(text)) !== null) {
+        const port = symbols.indexOf(cm[1]);
+        if (port < 0) throw new Error(`${entry.orphan}: case ${cm[1]} not in PortIndex enum`);
+        params.push({
+            port,
+            symbol: cm[1],
+            name: humanLabel(cm[1], cm[1]),
+            default: Number(cm[2]),
+            min: Number(cm[3]),
+            max: Number(cm[4]),
+            step: Number(cm[5]),
+            toggled: false,
+            integer: false,
+        });
+    }
+    if (params.length === 0) throw new Error(`${entry.orphan}: no connect_ports param comments`);
+    params.sort((a, b) => a.port - b.port);
+    return { stereo: false, params };
+}
+
+// ---------------------------------------------------------------------------
+// label humanization + step derivation
+// ---------------------------------------------------------------------------
+
+// Symbols/names that get hand-v1-style names instead of plain Title Case.
+const LABEL_OVERRIDES = {
+    WET_DRY: 'Dry/Wet',
+    DRY_WET: 'Dry/Wet',
+    INPUT: 'Input',
+    AUDIO_IN: 'Input',
+};
+
+function titleCase(s) {
+    return s.replace(/_/g, ' ').split(/\s+/)
+        .map((w) => (w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
+        .join(' ');
+}
+
+function humanLabel(name, symbol) {
+    if (symbol in LABEL_OVERRIDES) return LABEL_OVERRIDES[symbol];
+    if (name in LABEL_OVERRIDES) return LABEL_OVERRIDES[name];
+    return titleCase(name || symbol);
+}
+
+/** Deterministic ttl step (ttl carries no step; display metadata only). */
+function stepFor(min, max, toggled, integer) {
+    if (toggled || integer) return 1;
+    const span = max - min;
+    if (span <= 3) return 0.01;
+    if (span <= 30) return 0.1;
+    if (span <= 300) return 1;
+    return 10;
+}
+
+// ---------------------------------------------------------------------------
+// Spec load + validation (v1 pinning)
 // ---------------------------------------------------------------------------
 
 function loadSpec() {
@@ -91,20 +308,20 @@ function loadSpec() {
         problems.push('effects must be an array');
         raw.effects = [];
     }
-    if (raw.effects.length !== FX_COUNT) {
-        problems.push(`expected ${FX_COUNT} effects, got ${raw.effects.length}`);
+    if (raw.effects.length < V1_KEYS.length) {
+        problems.push(`expected at least ${V1_KEYS.length} effects (v1 pin set), got ${raw.effects.length}`);
     }
-    const specKeys = new Set();
-    raw.effects.forEach((e, i) => {
+    // Only the v1 pin set is validated + consumed; entries beyond it are
+    // regenerated from the manifest sources on every run.
+    for (let i = 0; i < V1_KEYS.length && i < raw.effects.length; i++) {
+        const e = raw.effects[i];
         const where = `effects[${i}]`;
-        if (typeof e.key !== 'string' || !e.key) { problems.push(`${where}.key must be a non-empty string`); return; }
-        specKeys.add(e.key);
-        if (e.id !== i) problems.push(`${where}.id must be ${i} (effects sorted by id), got ${JSON.stringify(e.id)}`);
-        if (!(e.key in CATEGORY_BY_KEY)) problems.push(`${where}.key "${e.key}" has no category mapping`);
+        if (e.key !== V1_KEYS[i]) problems.push(`${where}.key must be "${V1_KEYS[i]}" (v1 pin order), got ${JSON.stringify(e.key)}`);
+        if (e.id !== i) problems.push(`${where}.id must be ${i}, got ${JSON.stringify(e.id)}`);
         if (typeof e.label !== 'string') problems.push(`${where}.label must be a string`);
         if (typeof e.dsp !== 'string') problems.push(`${where}.dsp must be a string`);
         if (typeof e.stereo !== 'boolean') problems.push(`${where}.stereo must be a boolean`);
-        if (!Array.isArray(e.params) || e.params.length === 0) { problems.push(`${where}.params must be a non-empty array`); return; }
+        if (!Array.isArray(e.params) || e.params.length === 0) { problems.push(`${where}.params must be a non-empty array`); continue; }
         let prevPort = -1;
         e.params.forEach((p, j) => {
             const pw = `${where}.params[${j}]`;
@@ -120,39 +337,76 @@ function loadSpec() {
             if (p.step <= 0) problems.push(`${pw}.step must be > 0`);
             if (typeof p.toggled !== 'boolean' || typeof p.integer !== 'boolean') problems.push(`${pw}.toggled/.integer must be booleans`);
         });
-    });
-    for (const key of Object.keys(CATEGORY_BY_KEY)) {
-        if (!specKeys.has(key)) problems.push(`category map key "${key}" missing from the spec`);
     }
     return { raw, problems };
 }
 
-// Normalize to the v2 shape — category/out_ports always re-applied from here
-// (idempotent on v2 input: same bytes in, same bytes out).
-function normalize(raw) {
+// Build the normalized effect list: v1 pinned entries + manifest-parsed new
+// entries, ids = manifest index. (Idempotent on v2 input: entries 11.. are
+// re-derived from the guitarix sources, never from the spec JSON.)
+function normalize(raw, problems) {
     let offset = 0;
-    const effects = raw.effects.map((e) => {
-        const fx = {
-            id: e.id,
-            key: e.key,
-            label: e.label,
-            dsp: e.dsp,
-            stereo: e.stereo,
-            category: CATEGORY_BY_KEY[e.key],
-            out_ports: [],
-            params: e.params.map((p) => ({
-                port: p.port,
-                symbol: p.symbol,
-                name: p.name,
-                default: p.default,
-                min: p.min,
-                max: p.max,
-                step: p.step,
-                toggled: p.toggled,
-                integer: p.integer,
-            })),
-            offset,
-        };
+    const effects = MANIFEST.map((entry, i) => {
+        let fx;
+        if (entry.pin) {
+            const e = raw.effects[i];
+            fx = {
+                id: i,
+                key: e.key,
+                label: e.label,
+                dsp: e.dsp,
+                stereo: e.stereo,
+                category: entry.category,
+                out_ports: [],
+                params: e.params.map((p) => ({
+                    port: p.port,
+                    symbol: p.symbol,
+                    name: p.name,
+                    default: p.default,
+                    min: p.min,
+                    max: p.max,
+                    step: p.step,
+                    toggled: p.toggled,
+                    integer: p.integer,
+                })),
+            };
+        } else {
+            if (!CATEGORY_VOCAB.has(entry.category)) problems.push(`manifest entry "${entry.key}": category "${entry.category}" not in the frozen vocabulary`);
+            let parsed;
+            try {
+                parsed = entry.ttl ? ttlEffect(entry) : orphanEffect(entry);
+            } catch (err) {
+                problems.push(`manifest entry "${entry.key}": ${err.message}`);
+                parsed = { stereo: false, params: [] };
+            }
+            fx = {
+                id: i,
+                key: entry.key,
+                label: entry.menuName,
+                dsp: entry.key,
+                stereo: parsed.stereo,
+                category: entry.category,
+                out_ports: [],
+                params: parsed.params,
+            };
+        }
+        // Shared invariants (both sources).
+        if (fx.params.length === 0) problems.push(`effects[${i}] "${fx.key}": no params`);
+        if (fx.params.length > FX_SLOT_PARAMS) problems.push(`effects[${i}] "${fx.key}": ${fx.params.length} params > FX_SLOT_PARAMS ${FX_SLOT_PARAMS}`);
+        let prevPort = -1;
+        fx.params.forEach((p, j) => {
+            const pw = `effects[${i}].params[${j}]`;
+            if (!Number.isInteger(p.port) || p.port < 0 || p.port >= FX_SLOT_PARAMS) problems.push(`${pw}.port must be in 0..${FX_SLOT_PARAMS - 1}`);
+            if (p.port <= prevPort) problems.push(`${pw}.port breaks ascending order`);
+            prevPort = p.port;
+            for (const f of ['default', 'min', 'max', 'step']) {
+                if (typeof p[f] !== 'number' || !Number.isFinite(p[f])) problems.push(`${pw}.${f} must be a finite number`);
+            }
+            if (p.min >= p.max) problems.push(`${pw}: min ${p.min} must be < max ${p.max}`);
+            if (p.default < p.min || p.default > p.max) problems.push(`${pw}: default ${p.default} outside [${p.min}, ${p.max}]`);
+            if (p.step <= 0) problems.push(`${pw}.step must be > 0`);
+        });
+        fx.offset = offset;
         offset += fx.params.length;
         return fx;
     });
@@ -213,8 +467,10 @@ function genTs({ effects, totalParams }) {
         ' * Guitarix FX param tables (OctOBX per-instance insert chains).',
         ' *',
         ' * AUTO-GENERATED by tools/gen-gxfx-params.mjs — DO NOT EDIT THIS FILE BY',
-        ' * HAND. Param data source: tools/gxfx-param-spec.json (verified against the',
-        " * guitarix ttl files); categories + emission live in the generator.",
+        ' * HAND. Param data sources: the v1 eleven are pinned in',
+        ' * tools/gxfx-param-spec.json (hand-verified labels/values); new effects',
+        ' * are parsed from the guitarix bundle ttl files + orphan .cc connect',
+        ' * comments (third_party/guitarix, pinned submodule).',
         ' * Cross-checked against the C engine by test/gxfx-params.test.ts +',
         ' * verify-obxd-wasm.mjs.',
         ' *',
@@ -238,14 +494,14 @@ function genTs({ effects, totalParams }) {
         '    integer?: boolean;',
         '}',
         '',
-        '/** Menu category (full fx v2 vocabulary — the current 11 effects use 6). */',
+        '/** Menu category (full fx v2 vocabulary). */',
         'export type FxCategory =',
         '    | "wah" | "drive" | "eq" | "filter" | "dynamics" | "modulation"',
-        '    | "delay" | "reverb" | "amp" | "tonestack" | "multiband" | "special";',
+        '    | "delay" | "reverb" | "amp" | "tonestack" | "multiband" | "special" | "utility";',
         '',
         'export interface FxEffectDef {',
         '    id: number;',
-        "    key: string;       // 'wah' | 'overdrive' | ... (canonical order = chain default order)",
+        "    key: string;       // 'wah' | 'overdrive' | ... (manifest order = generator id order)",
         '    label: string;',
         '    category: FxCategory;',
         '    stereo: boolean;',
@@ -253,8 +509,10 @@ function genTs({ effects, totalParams }) {
         '    params: FxParamDef[];',
         '}',
         '',
-        '/** Canonical chain order: wah → overdrive → distortion → compressor →',
-        ' * chorus → flanger → phaser → tremolo → delay → echo → reverb.',
+        '/** Effect catalog in id order (generator manifest). The canonical default',
+        ' * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →',
+        ` * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the`,
+        ' * Phase-1 additions selectable per slot.',
         ` * Param counts ${counts} → offsets ${offsets}. */`,
         'export const FX_EFFECTS: FxEffectDef[] = [',
     );
@@ -334,32 +592,42 @@ function genTs({ effects, totalParams }) {
 // ---------------------------------------------------------------------------
 
 function genHeader({ effects }) {
+    const portsRow = effects.reduce((m, fx) => Math.max(m, fx.params.length), 0);
     const L = [];
     const push = (...lines) => L.push(...lines);
 
     push(
         '/*',
-        ' * wasm/obxd/gxfx_defaults.h — GENERATED guitarix FX default tables.',
+        ' * wasm/obxd/gxfx_defaults.h — GENERATED guitarix FX tables.',
         ' *',
-        ' * AUTO-GENERATED by tools/gen-gxfx-params.mjs from tools/gxfx-param-spec.json',
-        ' * — DO NOT EDIT BY HAND; regenerate with:',
+        ' * AUTO-GENERATED by tools/gen-gxfx-params.mjs (manifest: ttl bundles +',
+        ' * orphan .cc classes in third_party/guitarix; v1 eleven pinned in',
+        ' * tools/gxfx-param-spec.json) — DO NOT EDIT BY HAND; regenerate with:',
         ' *     node tools/gen-gxfx-params.mjs          (write)',
         ' *     node tools/gen-gxfx-params.mjs --check  (freshness gate)',
         ' *',
+        ` * GXFX_EFFECT_COUNT — effect catalog size (manifest length).`,
+        ' * gxfx_host.cpp static_asserts its factory table against this so the',
+        ' * host registry and the generator manifest cannot drift.',
         ' * FX_DEFAULTS[effect][p] — per-effect param defaults in ENGINE units',
-        ' * (ttl ranges, NOT 0..1). Rows in effect-id order 0..10 (wah..reverb),',
-        ` * param order = port order, padded to ${FX_SLOT_PARAMS} entries per row with 0.0f.`,
-        ' * FX_PARAM_COUNTS[effect] — live params per effect; the rest of each row',
-        ' * is padding.',
+        ` * (ttl ranges, NOT 0..1). Rows in effect-id order, param order = port`,
+        ` * order, padded to ${FX_SLOT_PARAMS} entries per row with 0.0f.`,
+        ' * FX_PARAM_COUNTS[effect] — live params per effect; the rest of each',
+        ' * row is padding. FX_STEREO[effect] — 1 = native stereo path,',
+        ' * 0 = dual-mono. FX_PORTS[effect][i] — PortIndex of param ordinal i.',
         ' *',
         ' * Consumed by wasm/obxd/gxfx_host.cpp: fx_set_slot copies a row into the',
-        ' * slot\'s param array on every slot assign, fx_default() reads single',
-        ' * entries for the bulk state surface.',
+        " * slot's param array on every slot assign, fx_default() reads single",
+        ' * entries for the bulk state surface, fx_connect_params() maps param',
+        ' * ordinals to PortIndex values.',
         ' */',
         '#ifndef GXFX_DEFAULTS_H',
         '#define GXFX_DEFAULTS_H',
         '',
-        `static const float FX_DEFAULTS[${FX_COUNT}][${FX_SLOT_PARAMS}] = {`,
+        `#define GXFX_EFFECT_COUNT ${FX_COUNT}`,
+        `#define GXFX_PORTS_ROW ${portsRow}`,
+        '',
+        `static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][${FX_SLOT_PARAMS}] = {`,
     );
     effects.forEach((fx) => {
         const row = [];
@@ -376,7 +644,18 @@ function genHeader({ effects }) {
     push(
         '};',
         '',
-        `static const int FX_PARAM_COUNTS[${FX_COUNT}] = { ${effects.map((fx) => fx.params.length).join(', ')} };`,
+        `static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { ${effects.map((fx) => fx.params.length).join(', ')} };`,
+        '',
+        `static const int FX_STEREO[GXFX_EFFECT_COUNT] = { ${effects.map((fx) => (fx.stereo ? 1 : 0)).join(',')} };`,
+        '',
+        `static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {`,
+    );
+    effects.forEach((fx) => {
+        push(`    /* ${String(fx.id).padStart(2)}: ${fx.key} */`);
+        push(`    { ${fx.params.map((p) => p.port).join(',')} },`);
+    });
+    push(
+        '};',
         '',
         '#endif /* GXFX_DEFAULTS_H */',
         '',
@@ -391,12 +670,12 @@ function genHeader({ effects }) {
 
 function main() {
     const { raw, problems } = loadSpec();
+    const spec = normalize(raw, problems);
     if (problems.length > 0) {
-        console.error(`${SPEC_JSON} failed validation — refusing to generate:`);
+        console.error(`gxfx param spec failed validation — refusing to generate:`);
         for (const p of problems) console.error(`  - ${p}`);
         process.exit(2);
     }
-    const spec = normalize(raw);
 
     const outputs = [
         { rel: OUT_JSON, content: genJson(spec) },

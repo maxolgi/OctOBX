@@ -29,8 +29,10 @@ TARGET = ../build/obxd_wasm
 # Only .cpp files belong in SRCS; the OB-Xf .h files are pulled in via the
 # include chain; the generated param_table.h is #include'd by main_obxd.cpp.
 # gxfx_dsp.cpp + gxfx_host.cpp are the guitarix FX chain (see below) —
-# separate TUs that must NEVER include JUCE/OB-Xf headers.
-SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
+# separate TUs that must NEVER include JUCE/OB-Xf headers. gxfx_dsp_drive.cpp
+# is the Phase 1-a drive + dynamics family (fuzzes/boosters/expander/susta;
+# pulls trany.h + its tube tables at global scope, include-once).
+SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
 
 # Header dependencies — most of the engine lives in headers (Voice.h,
 # Motherboard.h, OscillatorBlock.h, Filter.h, Utils.h, ...) #include'd by the
@@ -42,7 +44,7 @@ SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_host.cpp ../../third_par
 # param_table.h is NOT listed — it doesn't exist on a fresh clone before
 # build.sh synth generates it; its staleness is gated separately by
 # gen-param-table.mjs --check in build.sh.)
-HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h gxfx_prelude.h ../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h ../../third_party/guitarix/trunk/src/LV2/faust-generated/*.cc ../../third_party/guitarix/trunk/src/LV2/faust/*.h ../../third_party/guitarix/trunk/src/LV2/faust/clipt*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/gx_resampler.* ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0/zita-resampler/*.h)
+HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h gxfx_prelude.h ../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h ../../third_party/guitarix/trunk/src/LV2/DSP/trany.h ../../third_party/guitarix/trunk/src/LV2/DSP/tube_tables/*.cc ../../third_party/guitarix/trunk/src/LV2/faust-generated/*.cc ../../third_party/guitarix/trunk/src/LV2/faust/*.h ../../third_party/guitarix/trunk/src/LV2/faust/clipt*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/gx_resampler.* ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0/zita-resampler/*.h)
 
 # OB-Xf include paths. The engine sources are consumed STRAIGHT from the
 # fork tree at ../../third_party/OB-Xf/src (the maxolgi/OB-Xf fork main,
@@ -78,14 +80,19 @@ OBXF_INCLUDES = \
     -I ../../third_party/OB-Xf/src/parameter \
     -I ../../third_party/OB-Xf/src/state
 
-# Guitarix FX includes (gxfx_dsp.cpp / gxfx_host.cpp only — main_obxd.cpp and
-# juce_amalgam.cpp must not see these). faust-generated/ holds the DSP .cc
-# classes, faust/ holds clipping.h (+ its clipt*.cc tables) pulled in by
-# bossds1.cc, zita-resampler-1.1.0 backs gx_resampler's FixedRateResampler
-# (bossds1 oversampler).
+# Guitarix FX includes (gxfx_dsp*.cpp / gxfx_host.cpp only — main_obxd.cpp
+# and juce_amalgam.cpp must not see these). faust-generated/ holds the DSP
+# .cc classes, faust/ holds clipping.h (+ its clipt*.cc tables) pulled in by
+# bossds1.cc, DSP/ holds trany.h (tube transfer tables for the fuzzes —
+# included ONCE at global scope in gxfx_dsp_drive.cpp) and DSP/tube_tables/
+# holds the KT88/7199P table .cc files trany.h includes,
+# zita-resampler-1.1.0 backs gx_resampler's FixedRateResampler (bossds1
+# oversampler).
 GXFU_INCLUDES = \
     -I ../../third_party/guitarix/trunk/src/LV2/faust-generated \
     -I ../../third_party/guitarix/trunk/src/LV2/faust \
+    -I ../../third_party/guitarix/trunk/src/LV2/DSP \
+    -I ../../third_party/guitarix/trunk/src/LV2/DSP/tube_tables \
     -I ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0
 
 # -sENVIRONMENT=worker sets up the runtime for a worker-like scope

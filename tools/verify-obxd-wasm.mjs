@@ -538,17 +538,20 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 11) return `effect_count=${mod._fx_effect_count()}, want 11`;
+    if (mod._fx_effect_count() !== 28) return `effect_count=${mod._fx_effect_count()}, want 28 (11 v1 + 17 drive/dynamics)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
-    if (mod._fx_param_count(11) !== -1) return `param_count(11)=${mod._fx_param_count(11)}, want -1 (out of range)`;
+    if (mod._fx_param_count(11) !== 2) return `param_count(11)=${mod._fx_param_count(11)}, want 2 (fuzzface)`;
+    if (mod._fx_param_count(28) !== -1) return `param_count(28)=${mod._fx_param_count(28)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
+    if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
-    if (mod._fx_default(11, 0) !== 0) return `default(11,0)=${mod._fx_default(11, 0)}, want 0 (invalid fx)`;
+    if (mod._fx_default(17, 1) !== -7) return `default(17,1)=${mod._fx_default(17, 1)}, want -7 (rat LEVEL, ttl)`;
+    if (mod._fx_default(28, 0) !== 0) return `default(28,0)=${mod._fx_default(28, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
     for (let s = 0; s < 11; s++) {
@@ -566,7 +569,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 11);
+    mod._fx_set_slot(0, 0, 28);
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -813,6 +816,54 @@ async function main() {
     mod._obxd_panic(0);
     if (!finite) return 'non-finite sample after bulk restore';
     if (!(sq > 0)) return `sum-of-squares = ${sq} (silent after restore)`;
+  });
+
+  // (s) Drive family spot check (Phase 1-a) ---------------------------------
+  // Loads a NEW effect (fuzzface, id 11) into a slot, round-trips params
+  // through the mirror, and proves the generated FX_PORTS row actually
+  // feeds the DSP connect_ports: a held note's RMS at FUZZ=1.0 is ~30%
+  // above FUZZ=0.05 (measured; repeats stable to ±0.5%), so a 15% margin
+  // cleanly separates "param wired" from "param dropped on the floor"
+  // (an unconnected port would leave the ratio at 1.00 ± 0.01). Rendering
+  // is not bit-deterministic across obxd_init (~0.3% RMS run-to-run) —
+  // RMS-level comparison absorbs that noise.
+  expect('s. drive family: fuzzface slot renders + FUZZ knob changes the audio', () => {
+    const renderRms = (fuzz) => {
+      mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
+      mod._fx_set_slot(0, 0, 11); // -> fuzzface
+      if (mod._fx_get_slot(0, 0) !== 11) return { err: `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 11 (fuzzface)` };
+      if (mod._fx_param_count(11) !== 2) return { err: `param_count(11)=${mod._fx_param_count(11)}, want 2` };
+      mod._fx_set_param(0, 0, 0, fuzz); // FUZZ (ordinal 0, PortIndex 2)
+      if (mod._fx_get_param(0, 0, 0) !== f32(fuzz)) return { err: `FUZZ round-trip=${mod._fx_get_param(0, 0, 0)}, want ${f32(fuzz)}` };
+      mod._fx_set_param(0, 0, 1, 0.5); // LEVEL (ordinal 1, PortIndex 3)
+      if (mod._fx_get_param(0, 0, 1) !== f32(0.5)) return { err: `LEVEL round-trip=${mod._fx_get_param(0, 0, 1)}, want ${f32(0.5)}` };
+      mod._fx_set_enabled(0, 0, 1);
+      mod._obxd_midi_in(0, 0x90, 60, 100);
+      let s = 0;
+      let finite = true;
+      for (let q = 0; q < 30; q++) {
+        mod._obxd_render(128);
+        if (q < 20) continue; // let the note + si.smooth settle
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+          s += l[i] * l[i] + r[i] * r[i];
+        }
+      }
+      mod._obxd_midi_in(0, 0x80, 60, 0);
+      mod._obxd_panic(0);
+      if (!finite) return { err: 'non-finite sample through fuzzface' };
+      return { rms: Math.sqrt(s / (10 * 256)) };
+    };
+    const low = renderRms(0.05);
+    if (low.err) return low.err;
+    const high = renderRms(1.0);
+    if (high.err) return high.err;
+    if (!(low.rms > 0)) return `fuzzface output silent at FUZZ=0.05 (rms=${low.rms.toExponential(3)})`;
+    if (!(high.rms > low.rms * 1.15)) {
+      return `FUZZ knob does not reach the DSP: rms(0.05)=${low.rms.toExponential(4)} rms(1.0)=${high.rms.toExponential(4)} (ratio ${(high.rms / low.rms).toFixed(3)}, want > 1.15)`;
+    }
   });
 
   // --- summary -------------------------------------------------------------

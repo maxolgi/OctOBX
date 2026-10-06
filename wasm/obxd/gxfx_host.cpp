@@ -10,30 +10,15 @@
 #include "../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h"
 #include <emscripten.h>
 
-static const int FX_COUNT = 11;
+// Effect catalog size + per-effect data (defaults, param counts, stereo
+// flags, port maps) come from the GENERATED gxfx_defaults.h
+// (tools/gen-gxfx-params.mjs ← manifest: ttl bundles + orphan .cc classes
+// in third_party/guitarix; v1 eleven pinned in tools/gxfx-param-spec.json).
+static const int FX_COUNT = GXFX_EFFECT_COUNT;
 static const int FX_SLOTS = 11;
 static const int FX_INSTANCE_COUNT = 10;
 static const int FX_SLOT_PARAMS = 48;
 static const int FX_OUT_PORTS = 8;
-
-// Param defaults + per-effect live param counts come from the generated
-// gxfx_defaults.h (tools/gen-gxfx-params.mjs ← tools/gxfx-param-spec.json).
-
-static const int FX_STEREO[FX_COUNT] = {0,0,0,0,1,0,0,0,1,1,1};
-
-static const int FX_PORTS[FX_COUNT][7] = {
-    {2,3},
-    {2},
-    {2,3,4},
-    {0,1,2,3,4},
-    {0,1,2,3},
-    {0,1,2,3,4,5},
-    {0,1,2},
-    {0,1,2,3},
-    {0,1,2,3,4,5,6},
-    {0,1,2,3,4,5,6},
-    {0,1,2,3,4}
-};
 
 PluginLV2* gxfx_create_wah();
 PluginLV2* gxfx_create_overdrive();
@@ -46,9 +31,27 @@ PluginLV2* gxfx_create_tremolo();
 PluginLV2* gxfx_create_delay();
 PluginLV2* gxfx_create_echo();
 PluginLV2* gxfx_create_reverb();
+// drive + dynamics family (gxfx_dsp_drive.cpp, Phase 1-a)
+PluginLV2* gxfx_create_fuzzface();
+PluginLV2* gxfx_create_fuzzfacefm();
+PluginLV2* gxfx_create_fumaster();
+PluginLV2* gxfx_create_hornet();
+PluginLV2* gxfx_create_muff();
+PluginLV2* gxfx_create_cstb();
+PluginLV2* gxfx_create_aclipper();
+PluginLV2* gxfx_create_mxrdist();
+PluginLV2* gxfx_create_rangem();
+PluginLV2* gxfx_create_mole();
+PluginLV2* gxfx_create_hfb();
+PluginLV2* gxfx_create_hogsfoot();
+PluginLV2* gxfx_create_softclip();
+PluginLV2* gxfx_create_bassbooster();
+PluginLV2* gxfx_create_highbooster();
+PluginLV2* gxfx_create_expander();
+PluginLV2* gxfx_create_susta();
 
 typedef PluginLV2* (*gxfx_factory)();
-static const gxfx_factory FX_FACTORIES[FX_COUNT] = {
+static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_wah,
     gxfx_create_overdrive,
     gxfx_create_distortion,
@@ -59,8 +62,32 @@ static const gxfx_factory FX_FACTORIES[FX_COUNT] = {
     gxfx_create_tremolo,
     gxfx_create_delay,
     gxfx_create_echo,
-    gxfx_create_reverb
+    gxfx_create_reverb,
+    gxfx_create_fuzzface,
+    gxfx_create_fuzzfacefm,
+    gxfx_create_fumaster,
+    gxfx_create_hornet,
+    gxfx_create_muff,
+    gxfx_create_cstb,
+    gxfx_create_aclipper,
+    gxfx_create_mxrdist,
+    gxfx_create_rangem,
+    gxfx_create_mole,
+    gxfx_create_hfb,
+    gxfx_create_hogsfoot,
+    gxfx_create_softclip,
+    gxfx_create_bassbooster,
+    gxfx_create_highbooster,
+    gxfx_create_expander,
+    gxfx_create_susta
 };
+
+// Generator↔host drift guard: the factory registry above must list every
+// manifest effect (and only those) — adding a manifest entry without its
+// factory (or vice versa) fails the build here.
+static_assert(sizeof(FX_FACTORIES) / sizeof(FX_FACTORIES[0]) == (size_t)GXFX_EFFECT_COUNT,
+              "gxfx_host.cpp FX_FACTORIES out of sync with generated gxfx_defaults.h — "
+              "regenerate (node tools/gen-gxfx-params.mjs) and extend FX_FACTORIES in manifest order");
 
 struct FxRuntime {
     PluginLV2* dsp;
