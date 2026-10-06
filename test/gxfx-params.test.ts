@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(28);
+        expect(FX_COUNT).toBe(34);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -93,6 +93,8 @@ describe("gxfx-params — layout invariants", () => {
             "drive", "drive", "drive",      // softclip, bassbooster, highbooster
             // Phase 1-a dynamics family (26..27)
             "dynamics", "dynamics",         // expander, susta
+            // Phase 1-b eq family (28..33)
+            "eq", "eq", "eq", "eq", "eq", "eq", // graphiceq, selecteq, tonecontroll, moog, low_high_pass, noise_shaper
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -100,14 +102,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 87", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 142", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(87);
-        expect(FX_TOTAL_PARAMS).toBe(87);
+        expect(running).toBe(142);
+        expect(FX_TOTAL_PARAMS).toBe(142);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -177,16 +179,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..27", () => {
-        for (let i = 0; i < 28; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..33", () => {
+        for (let i = 0; i < 34; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(28)).toBe(false);
+        expect(isFxId(34)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(28, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(34, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -236,5 +238,92 @@ describe("gxfx-params — Phase 1-a drive + dynamics additions", () => {
         expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4]);
         expect(fx.params[0].default).toBe(2);
         expect(fx.params[2].default).toBe(-40);
+    });
+});
+
+describe("gxfx-params — Phase 1-b eq family additions", () => {
+    it("graphiceq (ttl-parsed): 11 band gains at ttl ports 0..10, mono", () => {
+        const fx = FX_EFFECTS[28];
+        expect(fx.key).toBe("graphiceq");
+        expect(fx.label).toBe("Graphic EQ");
+        expect(fx.category).toBe("eq");
+        expect(fx.stereo).toBe(false);
+        expect(fx.params).toHaveLength(11);
+        expect(fx.params.map((p) => p.symbol)).toEqual(["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10", "G11"]);
+        expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        for (const p of fx.params) {
+            expect(p.default).toBe(0);
+            expect(p.min).toBe(-30);
+            expect(p.max).toBe(20);
+        }
+    });
+
+    it("graphiceq meter outputs V1..V11 are declared out_ports, never params", () => {
+        const se = spec.effects[28];
+        expect(se.out_ports).toHaveLength(11);
+        expect(se.out_ports.map((p) => p.symbol)).toEqual(
+            ["V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V10", "V11"],
+        );
+        expect(se.out_ports.map((p) => p.port)).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
+        for (const p of se.out_ports) expect(p.min).toBe(-70);
+        // V ports must NOT leak into the param mirror (Phase 0 policy).
+        expect(se.params.some((p) => p.symbol.startsWith("V"))).toBe(false);
+    });
+
+    it("selecteq (orphan): 30 params — Q/freq/gain per band, enum-comment ports", () => {
+        const fx = FX_EFFECTS[29];
+        expect(fx.key).toBe("selecteq");
+        expect(fx.params).toHaveLength(30);
+        // Enum order (faust comment): QS125..QS8K (10), FREQ125..FREQ8K (10), FS125..FS8K (10).
+        expect(fx.params.slice(0, 10).map((p) => p.symbol)).toEqual(
+            ["QS125", "QS16K", "QS1K", "QS250", "QS2K", "QS31_25", "QS4K", "QS500", "QS62_5", "QS8K"],
+        );
+        expect(fx.params.slice(10, 20).every((p) => p.symbol.startsWith("FREQ"))).toBe(true);
+        expect(fx.params.slice(20).every((p) => p.symbol.startsWith("FS"))).toBe(true);
+        expect(fx.params.map((p) => p.port)).toEqual(Array.from({ length: 30 }, (_, i) => i));
+        const qs125 = fx.params[0];
+        expect(qs125).toMatchObject({ default: 50, min: 1, max: 100, step: 1 });
+        const freq16k = fx.params[11];
+        expect(freq16k).toMatchObject({ default: 16000, min: 20, max: 20000 });
+        const fs125 = fx.params[20];
+        expect(fs125).toMatchObject({ default: 0, min: -50, max: 10, step: 0.1 });
+        // Label overrides decode the mangled band suffixes.
+        expect(qs125.name).toBe("Q 125");
+        expect(freq16k.name).toBe("Freq 16k");
+        expect(fs125.name).toBe("Gain 125");
+    });
+
+    it("tonecontroll + moog are stereo-path orphans; moog FR keeps ttl-scale ranges", () => {
+        const tc = FX_EFFECTS[30];
+        expect(tc.key).toBe("tonecontroll");
+        expect(tc.stereo).toBe(true); // faust class exposes stereo_audio only
+        expect(tc.params.map((p) => p.symbol)).toEqual(["BASS", "MIDDLE", "ON", "TREBLE", "SHARPER"]);
+        expect(tc.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4]);
+        expect(tc.params[0]).toMatchObject({ default: 0, min: -5, max: 5, step: 0.01 });
+
+        const moog = FX_EFFECTS[31];
+        expect(moog.key).toBe("moog");
+        expect(moog.stereo).toBe(true);
+        expect(moog.params.map((p) => p.symbol)).toEqual(["Q", "FR"]);
+        expect(moog.params[0]).toMatchObject({ default: 1, min: 0, max: 4, step: 0.1 });
+        expect(moog.params[1]).toMatchObject({ symbol: "FR", name: "Frequency", default: 3000, min: 440, max: 6000 });
+    });
+
+    it("low_high_pass carries both filter stages; noise_shaper is one knob", () => {
+        const lhp = FX_EFFECTS[32];
+        expect(lhp.key).toBe("low_high_pass");
+        expect(lhp.stereo).toBe(false);
+        expect(lhp.params.map((p) => p.symbol)).toEqual(
+            ["HIGHFREQ", "LOWFREQ", "ONOFF", "HIGH_FREQ", "LOW_FREQ", "ON_OFF"],
+        );
+        expect(lhp.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4, 5]);
+        expect(lhp.params[0]).toMatchObject({ default: 5000, min: 1000, max: 12000 });
+        expect(lhp.params[1]).toMatchObject({ default: 130, min: 20, max: 1000 });
+        expect(lhp.params[5]).toMatchObject({ default: 0, min: 0, max: 1, step: 1 });
+
+        const ns = FX_EFFECTS[33];
+        expect(ns.key).toBe("noise_shaper");
+        expect(ns.params).toHaveLength(1);
+        expect(ns.params[0]).toMatchObject({ port: 0, symbol: "SHARPER", default: 1, min: 1, max: 10, step: 1 });
     });
 });

@@ -25,8 +25,8 @@
 #ifndef GXFX_DEFAULTS_H
 #define GXFX_DEFAULTS_H
 
-#define GXFX_EFFECT_COUNT 28
-#define GXFX_PORTS_ROW 7
+#define GXFX_EFFECT_COUNT 34
+#define GXFX_PORTS_ROW 30
 
 static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
     /*  0: wah — 2 params + 46 pad */
@@ -281,11 +281,65 @@ static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
     },
+    /* 28: graphiceq — 11 params + 37 pad */
+    {
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 29: selecteq — 30 params + 18 pad */
+    {
+           50.0f,   50.0f,   50.0f,   50.0f,   50.0f,   50.0f,   50.0f,   50.0f,
+           50.0f,   50.0f,  125.0f,16000.0f, 1000.0f,  250.0f, 2000.0f,   31.0f,
+         4000.0f,  500.0f,   62.0f, 8000.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 30: tonecontroll — 5 params + 43 pad */
+    {
+            0.0f,    0.0f,    0.0f,    0.0f,   -2.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 31: moog — 2 params + 46 pad */
+    {
+            1.0f, 3000.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 32: low_high_pass — 6 params + 42 pad */
+    {
+         5000.0f,  130.0f,    0.0f,  130.0f, 5000.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 33: noise_shaper — 1 params + 47 pad */
+    {
+            1.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
 };
 
-static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2 };
+static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2, 11, 30, 5, 2, 6, 1 };
 
-static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
+static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0 };
 
 static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     /*  0: wah */
@@ -344,6 +398,18 @@ static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     { 0,1,2,3,4 },
     /* 27: susta */
     { 2,3 },
+    /* 28: graphiceq */
+    { 0,1,2,3,4,5,6,7,8,9,10 },
+    /* 29: selecteq */
+    { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29 },
+    /* 30: tonecontroll */
+    { 0,1,2,3,4 },
+    /* 31: moog */
+    { 0,1 },
+    /* 32: low_high_pass */
+    { 0,1,2,3,4,5 },
+    /* 33: noise_shaper */
+    { 0 },
 };
 
 #endif /* GXFX_DEFAULTS_H */

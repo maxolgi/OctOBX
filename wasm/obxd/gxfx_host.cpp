@@ -49,6 +49,13 @@ PluginLV2* gxfx_create_bassbooster();
 PluginLV2* gxfx_create_highbooster();
 PluginLV2* gxfx_create_expander();
 PluginLV2* gxfx_create_susta();
+// eq family (gxfx_dsp_eq.cpp, Phase 1-b)
+PluginLV2* gxfx_create_graphiceq();
+PluginLV2* gxfx_create_selecteq();
+PluginLV2* gxfx_create_tonecontroll();
+PluginLV2* gxfx_create_moog();
+PluginLV2* gxfx_create_low_high_pass();
+PluginLV2* gxfx_create_noise_shaper();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -79,7 +86,13 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_bassbooster,
     gxfx_create_highbooster,
     gxfx_create_expander,
-    gxfx_create_susta
+    gxfx_create_susta,
+    gxfx_create_graphiceq,
+    gxfx_create_selecteq,
+    gxfx_create_tonecontroll,
+    gxfx_create_moog,
+    gxfx_create_low_high_pass,
+    gxfx_create_noise_shaper
 };
 
 // Generator↔host drift guard: the factory registry above must list every
@@ -101,9 +114,12 @@ static FxRuntime g_fx_rt[FX_INSTANCE_COUNT][FX_SLOTS];
 static float g_fx_params[FX_INSTANCE_COUNT][FX_SLOTS][FX_SLOT_PARAMS];
 static unsigned char g_fx_enabled[FX_INSTANCE_COUNT][FX_SLOTS];
 // Output-port storage (meters, tuner FREQ — Phase 2/3 effects): per slot,
-// FX_OUT_PORTS floats. TODO(Phase 2): once a spec declares out_ports,
-// connect them in fx_create_one() next to fx_connect_params(); no current
-// effect declares any, so fx_get_out_param reads zeros for now.
+// FX_OUT_PORTS floats. TODO(Phase 2): the spec declares out_ports for meter
+// effects since Phase 1-b (graphiceq's V1..V11 band levels) — connect them
+// in fx_create_one() next to fx_connect_params(); until then the connection
+// stays unwired (fx_get_out_param reads zeros; graphiceq's factory in
+// gxfx_dsp_eq.cpp parks its meters on TU-local scratch so the unwired
+// policy cannot crash the class).
 static float g_fx_out[FX_INSTANCE_COUNT][FX_SLOTS][FX_OUT_PORTS];
 static uint32_t g_fx_sample_rate = 48000;
 static bool g_fx_initialized = false;

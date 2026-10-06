@@ -1265,6 +1265,755 @@
           "integer": false
         }
       ]
+    },
+    {
+      "id": 28,
+      "key": "graphiceq",
+      "label": "Graphic EQ",
+      "dsp": "graphiceq",
+      "stereo": false,
+      "category": "eq",
+      "out_ports": [
+        {
+          "port": 11,
+          "symbol": "V1",
+          "name": "V1",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 12,
+          "symbol": "V2",
+          "name": "V2",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 13,
+          "symbol": "V3",
+          "name": "V3",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 14,
+          "symbol": "V4",
+          "name": "V4",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 15,
+          "symbol": "V5",
+          "name": "V5",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 16,
+          "symbol": "V6",
+          "name": "V6",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 17,
+          "symbol": "V7",
+          "name": "V7",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 18,
+          "symbol": "V8",
+          "name": "V8",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 19,
+          "symbol": "V9",
+          "name": "V9",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 20,
+          "symbol": "V10",
+          "name": "V10",
+          "min": -70,
+          "max": 4
+        },
+        {
+          "port": 21,
+          "symbol": "V11",
+          "name": "V11",
+          "min": -70,
+          "max": 4
+        }
+      ],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "G1",
+          "name": "G1",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "G2",
+          "name": "G2",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "G3",
+          "name": "G3",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "G4",
+          "name": "G4",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "G5",
+          "name": "G5",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "G6",
+          "name": "G6",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "G7",
+          "name": "G7",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "G8",
+          "name": "G8",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "G9",
+          "name": "G9",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "G10",
+          "name": "G10",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "G11",
+          "name": "G11",
+          "default": 0,
+          "min": -30,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "key": "selecteq",
+      "label": "Scaleable EQ",
+      "dsp": "selecteq",
+      "stereo": false,
+      "category": "eq",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "QS125",
+          "name": "Q 125",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "QS16K",
+          "name": "Q 16k",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "QS1K",
+          "name": "Q 1k",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "QS250",
+          "name": "Q 250",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "QS2K",
+          "name": "Q 2k",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "QS31_25",
+          "name": "Q 31.25",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "QS4K",
+          "name": "Q 4k",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "QS500",
+          "name": "Q 500",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "QS62_5",
+          "name": "Q 62.5",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "QS8K",
+          "name": "Q 8k",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "FREQ125",
+          "name": "Freq 125",
+          "default": 125,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 11,
+          "symbol": "FREQ16K",
+          "name": "Freq 16k",
+          "default": 16000,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 12,
+          "symbol": "FREQ1K",
+          "name": "Freq 1k",
+          "default": 1000,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 13,
+          "symbol": "FREQ250",
+          "name": "Freq 250",
+          "default": 250,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 14,
+          "symbol": "FREQ2K",
+          "name": "Freq 2k",
+          "default": 2000,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 15,
+          "symbol": "FREQ31_25",
+          "name": "Freq 31.25",
+          "default": 31,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 16,
+          "symbol": "FREQ4K",
+          "name": "Freq 4k",
+          "default": 4000,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 17,
+          "symbol": "FREQ500",
+          "name": "Freq 500",
+          "default": 500,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 18,
+          "symbol": "FREQ62_5",
+          "name": "Freq 62.5",
+          "default": 62,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 19,
+          "symbol": "FREQ8K",
+          "name": "Freq 8k",
+          "default": 8000,
+          "min": 20,
+          "max": 20000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 20,
+          "symbol": "FS125",
+          "name": "Gain 125",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 21,
+          "symbol": "FS16K",
+          "name": "Gain 16k",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 22,
+          "symbol": "FS1K",
+          "name": "Gain 1k",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 23,
+          "symbol": "FS250",
+          "name": "Gain 250",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 24,
+          "symbol": "FS2K",
+          "name": "Gain 2k",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 25,
+          "symbol": "FS31_25",
+          "name": "Gain 31.25",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 26,
+          "symbol": "FS4K",
+          "name": "Gain 4k",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 27,
+          "symbol": "FS500",
+          "name": "Gain 500",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 28,
+          "symbol": "FS62_5",
+          "name": "Gain 62.5",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 29,
+          "symbol": "FS8K",
+          "name": "Gain 8k",
+          "default": 0,
+          "min": -50,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "key": "tonecontroll",
+      "label": "3 Band EQ",
+      "dsp": "tonecontroll",
+      "stereo": true,
+      "category": "eq",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "BASS",
+          "name": "Bass",
+          "default": 0,
+          "min": -5,
+          "max": 5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "MIDDLE",
+          "name": "Middle",
+          "default": 0,
+          "min": -5,
+          "max": 5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "ON",
+          "name": "On",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "TREBLE",
+          "name": "Treble",
+          "default": 0,
+          "min": -5,
+          "max": 5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "SHARPER",
+          "name": "Sharper",
+          "default": -2,
+          "min": -2.5,
+          "max": 5,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "key": "moog",
+      "label": "Moog Filter",
+      "dsp": "moog",
+      "stereo": true,
+      "category": "eq",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "Q",
+          "name": "Q",
+          "default": 1,
+          "min": 0,
+          "max": 4,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "FR",
+          "name": "Frequency",
+          "default": 3000,
+          "min": 440,
+          "max": 6000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "key": "low_high_pass",
+      "label": "Low/High Filter",
+      "dsp": "low_high_pass",
+      "stereo": false,
+      "category": "eq",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "HIGHFREQ",
+          "name": "BP High Freq",
+          "default": 5000,
+          "min": 1000,
+          "max": 12000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "LOWFREQ",
+          "name": "BP Low Freq",
+          "default": 130,
+          "min": 20,
+          "max": 1000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "ONOFF",
+          "name": "BP On/Off",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "HIGH_FREQ",
+          "name": "HP Freq",
+          "default": 130,
+          "min": 20,
+          "max": 7040,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "LOW_FREQ",
+          "name": "LP Freq",
+          "default": 5000,
+          "min": 20,
+          "max": 12000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "ON_OFF",
+          "name": "LP/HP On/Off",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "key": "noise_shaper",
+      "label": "Noise Shaper",
+      "dsp": "noise_shaper",
+      "stereo": false,
+      "category": "eq",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "SHARPER",
+          "name": "Sharper",
+          "default": 1,
+          "min": 1,
+          "max": 10,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
     }
   ]
 }

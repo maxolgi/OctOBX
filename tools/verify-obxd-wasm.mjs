@@ -538,20 +538,25 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 28) return `effect_count=${mod._fx_effect_count()}, want 28 (11 v1 + 17 drive/dynamics)`;
+    if (mod._fx_effect_count() !== 34) return `effect_count=${mod._fx_effect_count()}, want 34 (11 v1 + 17 drive/dynamics + 6 eq)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
     if (mod._fx_param_count(11) !== 2) return `param_count(11)=${mod._fx_param_count(11)}, want 2 (fuzzface)`;
-    if (mod._fx_param_count(28) !== -1) return `param_count(28)=${mod._fx_param_count(28)}, want -1 (out of range)`;
+    if (mod._fx_param_count(28) !== 11) return `param_count(28)=${mod._fx_param_count(28)}, want 11 (graphiceq)`;
+    if (mod._fx_param_count(29) !== 30) return `param_count(29)=${mod._fx_param_count(29)}, want 30 (selecteq)`;
+    if (mod._fx_param_count(34) !== -1) return `param_count(34)=${mod._fx_param_count(34)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
+    if (mod._fx_is_stereo(30) !== 1) return `is_stereo(30)=${mod._fx_is_stereo(30)}, want 1 (tonecontroll, native stereo faust class)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
     if (mod._fx_default(17, 1) !== -7) return `default(17,1)=${mod._fx_default(17, 1)}, want -7 (rat LEVEL, ttl)`;
-    if (mod._fx_default(28, 0) !== 0) return `default(28,0)=${mod._fx_default(28, 0)}, want 0 (invalid fx)`;
+    if (mod._fx_default(28, 3) !== 0) return `default(28,3)=${mod._fx_default(28, 3)}, want 0 (graphiceq G4)`;
+    if (mod._fx_default(31, 1) !== 3000) return `default(31,1)=${mod._fx_default(31, 1)}, want 3000 (moog FR)`;
+    if (mod._fx_default(34, 0) !== 0) return `default(34,0)=${mod._fx_default(34, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
     for (let s = 0; s < 11; s++) {
@@ -569,7 +574,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 28);
+    mod._fx_set_slot(0, 0, 34);
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -863,6 +868,54 @@ async function main() {
     if (!(low.rms > 0)) return `fuzzface output silent at FUZZ=0.05 (rms=${low.rms.toExponential(3)})`;
     if (!(high.rms > low.rms * 1.15)) {
       return `FUZZ knob does not reach the DSP: rms(0.05)=${low.rms.toExponential(4)} rms(1.0)=${high.rms.toExponential(4)} (ratio ${(high.rms / low.rms).toFixed(3)}, want > 1.15)`;
+    }
+  });
+
+  // (t) EQ family spot check (Phase 1-b) ------------------------------------
+  // Loads graphiceq (id 28) into a slot and proves the generated FX_PORTS
+  // row feeds the DSP. graphiceq is a PARALLEL filter bank (fi.filterbank,
+  // bands summed coherently), so a single-band probe can cancel against its
+  // un-boosted neighbours — instead sweep ALL 11 gains uniformly: +12 dB vs
+  // -18 dB is a coherent ~30x gain change (db2linear), far beyond the 1.15
+  // margin, and only reaches the DSP if the ports wire. Also proves the
+  // V1..V11 meter pointers are parked (the faust compute() dereferences them
+  // unconditionally via #define — an unwired pointer would trap on render).
+  expect('t. eq family: graphiceq slot renders + uniform gain sweep reaches the DSP', () => {
+    const renderRms = (bandGainDb) => {
+      mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
+      mod._fx_set_slot(0, 0, 28); // -> graphiceq
+      if (mod._fx_get_slot(0, 0) !== 28) return { err: `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 28 (graphiceq)` };
+      if (mod._fx_param_count(28) !== 11) return { err: `param_count(28)=${mod._fx_param_count(28)}, want 11` };
+      for (let g = 0; g < 11; g++) {
+        mod._fx_set_param(0, 0, g, bandGainDb); // G1..G11 (ordinals = PortIndex 0..10)
+        if (mod._fx_get_param(0, 0, g) !== f32(bandGainDb)) return { err: `G${g + 1} round-trip=${mod._fx_get_param(0, 0, g)}, want ${f32(bandGainDb)}` };
+      }
+      mod._fx_set_enabled(0, 0, 1);
+      mod._obxd_midi_in(0, 0x90, 60, 100);
+      let s = 0;
+      let finite = true;
+      for (let q = 0; q < 30; q++) {
+        mod._obxd_render(128);
+        if (q < 20) continue; // let the note + si.smooth(0.999) settle
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+          s += l[i] * l[i] + r[i] * r[i];
+        }
+      }
+      mod._obxd_midi_in(0, 0x80, 60, 0);
+      mod._obxd_panic(0);
+      if (!finite) return { err: 'non-finite sample through graphiceq' };
+      return { rms: Math.sqrt(s / (10 * 256)) };
+    };
+    const cut = renderRms(-18);
+    if (cut.err) return cut.err;
+    const boost = renderRms(12);
+    if (boost.err) return boost.err;
+    if (!(cut.rms > 0)) return `graphiceq output silent at -18 dB bands (rms=${cut.rms.toExponential(3)})`;
+    if (!(boost.rms > cut.rms * 1.15)) {
+      return `gain knobs do not reach the DSP: rms(-18dB)=${cut.rms.toExponential(4)} rms(+12dB)=${boost.rms.toExponential(4)} (ratio ${(boost.rms / cut.rms).toFixed(3)}, want > 1.15)`;
     }
   });
 

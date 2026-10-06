@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ===========================================================================
 // gen-gxfx-params.mjs — generates every consumable artifact of the guitarix
-// FX param spec (fx2plan.md Phase 1-a: manifest-driven, ttl-parsing).
+// FX param spec (fx2plan.md Phase 1-a/1-b: manifest-driven, ttl-parsing).
 //
 // SOURCE OF TRUTH for param DATA, per effect kind:
 //   - v1 eleven (wah..reverb, ids 0..10): PINNED in
@@ -31,6 +31,10 @@
 //     (wrapper-level BYPASS — the faust classes ignore it; matches v1, where
 //     bossds1's ttl BYPASS port is not exposed), `pprop:trigger` (tremolo
 //     reset style) and `pprop:notOnGUI` ports.
+//   - control OUTPUT ports (meters — e.g. graphiceq's V1..V11 band levels)
+//     are declared in the spec's out_ports[] (name+range) but are NOT added
+//     to the param mirror; the engine out-port connection stays unwired
+//     (Phase 0 policy — fx_get_out_param reads zeros until Phase 2 wires it).
 //   - ttl carries no step: derived deterministically (1 for integer/toggled,
 //     else by range span: <=3 -> 0.01, <=30 -> 0.1, <=300 -> 1, else 10).
 //     Step is display metadata only — the 0..1<->engine transforms are linear.
@@ -39,7 +43,9 @@
 //   1. tools/gxfx-param-spec.json  v2 shape: everything v1 had, PLUS per
 //                                  effect `category` and `out_ports`
 //                                  (name+range, for meters/tuner freq —
-//                                  Phase 2/3; empty for all current effects)
+//                                  Phase 2/3; graphiceq's V1..V11 meter
+//                                  outputs are declared there since Phase
+//                                  1-b, all earlier effects empty)
 //   2. src/gxfx-params.ts          GENERATED TS param tables — same public
 //                                  API the UI imports (FX_EFFECTS, the
 //                                  0..1<->engine transforms, flat-mirror
@@ -112,13 +118,23 @@ const V1_KEYS = Object.keys(V1_CATEGORY_BY_KEY);
 // New entries: { key, menuName, category, ttl } parses the bundle ttl
 // relative to third_party/guitarix/trunk/src/LV2/, or
 // { key, menuName, category, orphan } parses the faust-generated .cc
-// connect_ports comments (classes with no .lv2 bundle).
+// connect_ports comments (classes with no .lv2 bundle). Optional `stereo:
+// true` overrides the derived flag — needed for orphan classes whose faust
+// process is natively 2-in/2-out (tonecontroll, moog expose only
+// stereo_audio; running them dual-mono would find mono_audio == 0 and
+// silently do nothing).
 // Phase 1-a ships the drive family (fuzzes/distortions/boosters + the
 // softclip orphan + the booster halves of the gxbooster composite) and the
 // remaining dynamics bundles. Excluded per fx2plan.md: gx_fuzz (wrapper
 // composite: bmfp+lowpass_up+lowpass_down+noiser), gx_distortion / gx_feedback
 // orphans (plan defaults optional-skip), mbdistortion/mbcompressor (multiband
 // family, later phase), jcm800pre (Phase 4, needs Eigen).
+// Phase 1-b ships the eq family. Excluded per fx2plan.md: biquad orphan
+// (plan optional-skip), gx_barkgraphiceq (multiband family, later phase),
+// gxtilttone (tilt-tone preamp hybrid with a drive stage — not in the plan's
+// eq enumeration; add with the amp family if wanted). No `gx_eq` 10-band
+// bundle exists in the pinned submodule — graphiceq is the tree's only
+// standalone graphic EQ.
 // ---------------------------------------------------------------------------
 const MANIFEST = [
     // --- v1 eleven (ids 0..10) — pinned data, canonical default chain ---
@@ -144,6 +160,14 @@ const MANIFEST = [
     // --- Phase 1-a: dynamics family ---
     { key: 'expander', menuName: 'Expander', category: 'dynamics', ttl: 'gx_expander.lv2/gx_expander.ttl' },
     { key: 'susta', menuName: 'Sustainer', category: 'dynamics', ttl: 'gx_susta.lv2/gx_susta.ttl' },
+
+    // --- Phase 1-b: eq family ---
+    { key: 'graphiceq', menuName: 'Graphic EQ', category: 'eq', ttl: 'gx_graphiceq.lv2/gx_graphiceq.ttl' },
+    { key: 'selecteq', menuName: 'Scaleable EQ', category: 'eq', orphan: 'selecteq.cc' },
+    { key: 'tonecontroll', menuName: '3 Band EQ', category: 'eq', orphan: 'tonecontroll.cc', stereo: true },
+    { key: 'moog', menuName: 'Moog Filter', category: 'eq', orphan: 'moog.cc', stereo: true },
+    { key: 'low_high_pass', menuName: 'Low/High Filter', category: 'eq', orphan: 'low_high_pass.cc' },
+    { key: 'noise_shaper', menuName: 'Noise Shaper', category: 'eq', orphan: 'noise_shaper.cc' },
 ];
 
 const FX_COUNT = MANIFEST.length;
@@ -196,11 +220,23 @@ function ttlEffect(entry) {
         && !p.designation.some((d) => d.endsWith('enabled'))
         && !p.props.some((x) => x.endsWith('trigger') || x.endsWith('notOnGUI')));
     paramPorts.sort((a, b) => a.index - b.index);
+    // Control OUTPUT ports (meters): declared as out_ports (name+range) but
+    // never added to the param mirror; the engine connection stays unwired
+    // (Phase 0 policy — see the g_fx_out comment in gxfx_host.cpp).
+    const outPorts = ports.filter((p) => isA(p, 'ControlPort') && isA(p, 'OutputPort'));
+    outPorts.sort((a, b) => a.index - b.index);
     if (paramPorts.length === 0) problems.push('no param ports after filtering');
     if (problems.length > 0) throw new Error(`${entry.ttl}: ${problems.join('; ')}`);
 
     return {
         stereo: audioIns.length >= 2,
+        out_ports: outPorts.map((p) => ({
+            port: p.index,
+            symbol: p.symbol,
+            name: humanLabel(p.name || p.symbol, p.symbol),
+            min: p.min,
+            max: p.max,
+        })),
         params: paramPorts.map((p) => {
             const toggled = p.props.some((x) => x.endsWith('toggled'));
             const integer = p.props.some((x) => x.endsWith('integer'));
@@ -251,7 +287,7 @@ function orphanEffect(entry) {
     }
     if (params.length === 0) throw new Error(`${entry.orphan}: no connect_ports param comments`);
     params.sort((a, b) => a.port - b.port);
-    return { stereo: false, params };
+    return { stereo: false, out_ports: [], params };
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +300,27 @@ const LABEL_OVERRIDES = {
     DRY_WET: 'Dry/Wet',
     INPUT: 'Input',
     AUDIO_IN: 'Input',
+    // --- Phase 1-b eq family (dsp2cc uppercases + mangles band suffixes;
+    // names follow the .dsp tooltips: Q per band, freq Hz, gain dB) ---
+    // moog
+    FR: 'Frequency',
+    // selecteq — 10 bands × (quality, freq, gain)
+    QS31_25: 'Q 31.25', QS62_5: 'Q 62.5', QS125: 'Q 125', QS250: 'Q 250', QS500: 'Q 500',
+    QS1K: 'Q 1k', QS2K: 'Q 2k', QS4K: 'Q 4k', QS8K: 'Q 8k', QS16K: 'Q 16k',
+    FREQ31_25: 'Freq 31.25', FREQ62_5: 'Freq 62.5', FREQ125: 'Freq 125', FREQ250: 'Freq 250',
+    FREQ500: 'Freq 500', FREQ1K: 'Freq 1k', FREQ2K: 'Freq 2k', FREQ4K: 'Freq 4k',
+    FREQ8K: 'Freq 8k', FREQ16K: 'Freq 16k',
+    FS31_25: 'Gain 31.25', FS62_5: 'Gain 62.5', FS125: 'Gain 125', FS250: 'Gain 250',
+    FS500: 'Gain 500', FS1K: 'Gain 1k', FS2K: 'Gain 2k', FS4K: 'Gain 4k',
+    FS8K: 'Gain 8k', FS16K: 'Gain 16k',
+    // low_high_pass — two stages in one class: the speaker band-pass
+    // (LOWFREQ/HIGHFREQ/ONOFF) and the low/high-pass (LOW_FREQ/HIGH_FREQ/ON_OFF)
+    LOWFREQ: 'BP Low Freq',
+    HIGHFREQ: 'BP High Freq',
+    ONOFF: 'BP On/Off',
+    LOW_FREQ: 'LP Freq',
+    HIGH_FREQ: 'HP Freq',
+    ON_OFF: 'LP/HP On/Off',
 };
 
 function titleCase(s) {
@@ -384,9 +441,9 @@ function normalize(raw, problems) {
                 key: entry.key,
                 label: entry.menuName,
                 dsp: entry.key,
-                stereo: parsed.stereo,
+                stereo: entry.stereo !== undefined ? entry.stereo : parsed.stereo,
                 category: entry.category,
-                out_ports: [],
+                out_ports: parsed.out_ports,
                 params: parsed.params,
             };
         }

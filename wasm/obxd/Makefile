@@ -32,7 +32,9 @@ TARGET = ../build/obxd_wasm
 # separate TUs that must NEVER include JUCE/OB-Xf headers. gxfx_dsp_drive.cpp
 # is the Phase 1-a drive + dynamics family (fuzzes/boosters/expander/susta;
 # pulls trany.h + its tube tables at global scope, include-once).
-SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
+# gxfx_dsp_eq.cpp is the Phase 1-b eq family (graphiceq + the selecteq/
+# tonecontroll/moog/low_high_pass/noise_shaper orphans).
+SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_eq.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
 
 # Header dependencies — most of the engine lives in headers (Voice.h,
 # Motherboard.h, OscillatorBlock.h, Filter.h, Utils.h, ...) #include'd by the

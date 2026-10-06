@@ -13,7 +13,7 @@
  * Freshness check:    node tools/gen-gxfx-params.mjs --check   (CI gate)
  */
 
-export const FX_COUNT = 28;
+export const FX_COUNT = 34;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
 export const FX_SLOT_PARAMS = 48;
@@ -40,7 +40,7 @@ export interface FxEffectDef {
     label: string;
     category: FxCategory;
     stereo: boolean;
-    offset: number;    // cumulative param offset into the flat 87-slot mirror
+    offset: number;    // cumulative param offset into the flat 142-slot mirror
     params: FxParamDef[];
 }
 
@@ -48,7 +48,7 @@ export interface FxEffectDef {
  * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →
  * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the
  * Phase-1 additions selectable per slot.
- * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85. */
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141. */
 export const FX_EFFECTS: FxEffectDef[] = [
     {
         id: 0, key: "wah", label: "Wah", category: "wah", stereo: false, offset: 0,
@@ -277,9 +277,94 @@ export const FX_EFFECTS: FxEffectDef[] = [
             { port: 3, symbol: "VOLUME", name: "Volume", default: 0.5, min: 0, max: 1, step: 0.01 },
         ],
     },
+    {
+        id: 28, key: "graphiceq", label: "Graphic EQ", category: "eq", stereo: false, offset: 87,
+        params: [
+            { port: 0, symbol: "G1", name: "G1", default: 0, min: -30, max: 20, step: 1 },
+            { port: 1, symbol: "G2", name: "G2", default: 0, min: -30, max: 20, step: 1 },
+            { port: 2, symbol: "G3", name: "G3", default: 0, min: -30, max: 20, step: 1 },
+            { port: 3, symbol: "G4", name: "G4", default: 0, min: -30, max: 20, step: 1 },
+            { port: 4, symbol: "G5", name: "G5", default: 0, min: -30, max: 20, step: 1 },
+            { port: 5, symbol: "G6", name: "G6", default: 0, min: -30, max: 20, step: 1 },
+            { port: 6, symbol: "G7", name: "G7", default: 0, min: -30, max: 20, step: 1 },
+            { port: 7, symbol: "G8", name: "G8", default: 0, min: -30, max: 20, step: 1 },
+            { port: 8, symbol: "G9", name: "G9", default: 0, min: -30, max: 20, step: 1 },
+            { port: 9, symbol: "G10", name: "G10", default: 0, min: -30, max: 20, step: 1 },
+            { port: 10, symbol: "G11", name: "G11", default: 0, min: -30, max: 20, step: 1 },
+        ],
+    },
+    {
+        id: 29, key: "selecteq", label: "Scaleable EQ", category: "eq", stereo: false, offset: 98,
+        params: [
+            { port: 0, symbol: "QS125", name: "Q 125", default: 50, min: 1, max: 100, step: 1 },
+            { port: 1, symbol: "QS16K", name: "Q 16k", default: 50, min: 1, max: 100, step: 1 },
+            { port: 2, symbol: "QS1K", name: "Q 1k", default: 50, min: 1, max: 100, step: 1 },
+            { port: 3, symbol: "QS250", name: "Q 250", default: 50, min: 1, max: 100, step: 1 },
+            { port: 4, symbol: "QS2K", name: "Q 2k", default: 50, min: 1, max: 100, step: 1 },
+            { port: 5, symbol: "QS31_25", name: "Q 31.25", default: 50, min: 1, max: 100, step: 1 },
+            { port: 6, symbol: "QS4K", name: "Q 4k", default: 50, min: 1, max: 100, step: 1 },
+            { port: 7, symbol: "QS500", name: "Q 500", default: 50, min: 1, max: 100, step: 1 },
+            { port: 8, symbol: "QS62_5", name: "Q 62.5", default: 50, min: 1, max: 100, step: 1 },
+            { port: 9, symbol: "QS8K", name: "Q 8k", default: 50, min: 1, max: 100, step: 1 },
+            { port: 10, symbol: "FREQ125", name: "Freq 125", default: 125, min: 20, max: 20000, step: 1 },
+            { port: 11, symbol: "FREQ16K", name: "Freq 16k", default: 16000, min: 20, max: 20000, step: 1 },
+            { port: 12, symbol: "FREQ1K", name: "Freq 1k", default: 1000, min: 20, max: 20000, step: 1 },
+            { port: 13, symbol: "FREQ250", name: "Freq 250", default: 250, min: 20, max: 20000, step: 1 },
+            { port: 14, symbol: "FREQ2K", name: "Freq 2k", default: 2000, min: 20, max: 20000, step: 1 },
+            { port: 15, symbol: "FREQ31_25", name: "Freq 31.25", default: 31, min: 20, max: 20000, step: 1 },
+            { port: 16, symbol: "FREQ4K", name: "Freq 4k", default: 4000, min: 20, max: 20000, step: 1 },
+            { port: 17, symbol: "FREQ500", name: "Freq 500", default: 500, min: 20, max: 20000, step: 1 },
+            { port: 18, symbol: "FREQ62_5", name: "Freq 62.5", default: 62, min: 20, max: 20000, step: 1 },
+            { port: 19, symbol: "FREQ8K", name: "Freq 8k", default: 8000, min: 20, max: 20000, step: 1 },
+            { port: 20, symbol: "FS125", name: "Gain 125", default: 0, min: -50, max: 10, step: 0.1 },
+            { port: 21, symbol: "FS16K", name: "Gain 16k", default: 0, min: -50, max: 10, step: 0.1 },
+            { port: 22, symbol: "FS1K", name: "Gain 1k", default: 0, min: -50, max: 10, step: 0.1 },
+            { port: 23, symbol: "FS250", name: "Gain 250", default: 0, min: -50, max: 10, step: 0.1 },
+            { port: 24, symbol: "FS2K", name: "Gain 2k", default: 0, min: -50, max: 10, step: 0.1 },
+            { port: 25, symbol: "FS31_25", name: "Gain 31.25", default: 0, min: -50, max: 10, step: 0.1 },
+            { port: 26, symbol: "FS4K", name: "Gain 4k", default: 0, min: -50, max: 10, step: 0.1 },
+            { port: 27, symbol: "FS500", name: "Gain 500", default: 0, min: -50, max: 10, step: 0.1 },
+            { port: 28, symbol: "FS62_5", name: "Gain 62.5", default: 0, min: -50, max: 10, step: 0.1 },
+            { port: 29, symbol: "FS8K", name: "Gain 8k", default: 0, min: -50, max: 10, step: 0.1 },
+        ],
+    },
+    {
+        id: 30, key: "tonecontroll", label: "3 Band EQ", category: "eq", stereo: true, offset: 128,
+        params: [
+            { port: 0, symbol: "BASS", name: "Bass", default: 0, min: -5, max: 5, step: 0.01 },
+            { port: 1, symbol: "MIDDLE", name: "Middle", default: 0, min: -5, max: 5, step: 0.01 },
+            { port: 2, symbol: "ON", name: "On", default: 0, min: 0, max: 1, step: 1 },
+            { port: 3, symbol: "TREBLE", name: "Treble", default: 0, min: -5, max: 5, step: 0.01 },
+            { port: 4, symbol: "SHARPER", name: "Sharper", default: -2, min: -2.5, max: 5, step: 0.1 },
+        ],
+    },
+    {
+        id: 31, key: "moog", label: "Moog Filter", category: "eq", stereo: true, offset: 133,
+        params: [
+            { port: 0, symbol: "Q", name: "Q", default: 1, min: 0, max: 4, step: 0.1 },
+            { port: 1, symbol: "FR", name: "Frequency", default: 3000, min: 440, max: 6000, step: 10 },
+        ],
+    },
+    {
+        id: 32, key: "low_high_pass", label: "Low/High Filter", category: "eq", stereo: false, offset: 135,
+        params: [
+            { port: 0, symbol: "HIGHFREQ", name: "BP High Freq", default: 5000, min: 1000, max: 12000, step: 10 },
+            { port: 1, symbol: "LOWFREQ", name: "BP Low Freq", default: 130, min: 20, max: 1000, step: 10 },
+            { port: 2, symbol: "ONOFF", name: "BP On/Off", default: 0, min: 0, max: 1, step: 1 },
+            { port: 3, symbol: "HIGH_FREQ", name: "HP Freq", default: 130, min: 20, max: 7040, step: 10 },
+            { port: 4, symbol: "LOW_FREQ", name: "LP Freq", default: 5000, min: 20, max: 12000, step: 10 },
+            { port: 5, symbol: "ON_OFF", name: "LP/HP On/Off", default: 0, min: 0, max: 1, step: 1 },
+        ],
+    },
+    {
+        id: 33, key: "noise_shaper", label: "Noise Shaper", category: "eq", stereo: false, offset: 141,
+        params: [
+            { port: 0, symbol: "SHARPER", name: "Sharper", default: 1, min: 1, max: 10, step: 1 },
+        ],
+    },
 ];
 
-export const FX_TOTAL_PARAMS = 87;
+export const FX_TOTAL_PARAMS = 142;
 
 // --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
 
