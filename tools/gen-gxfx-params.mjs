@@ -408,6 +408,21 @@ const MANIFEST = [
     { key: 'ampout', menuName: 'Amp Out', category: 'utility', orphan: 'gx_ampout.cc' },
     { key: 'ampmodul', menuName: 'Postamp', category: 'utility', orphan: 'gx_ampmodul.cc', stereo: true },
 
+    // --- Phase 2-a: convolution family (kissfft convolver core) ---
+    // cabinet: gx_cabinet.lv2 over the SELF-WRITTEN partitioned convolver
+    // (wasm/obxd/gxfx_convolver.h + vendored kissfft — fx2plan Phase 2 does
+    // NOT port zita-convolver). The ttl's 4 control inputs parse directly
+    // (CLevel/CBass/CTreble/c_model); BYPASS (enabled designation),
+    // SCHEDULE (notOnGUI output — declared in out_ports like ampmodel's)
+    // and the atom ports are filtered by the standard policy. One audio
+    // input → mono → dual-mono host. c_model 18 "Off" = dry passthrough in
+    // the OctOBX wrapper. Still NOT shipped from the convolver family:
+    // gx_redeye + the chump preamps (fixed-IR aggregate — later Phase 2),
+    // gxmetal_amp/gxmetal_head (cab_data convolution), gx_detune (fftw
+    // complex shim), gxtuner (R2HC shim + host timer), the
+    // impulseresponse.cc orphan (optional per plan).
+    { key: 'cabinet', menuName: 'Cabinet', category: 'amp', ttl: 'gx_cabinet.lv2/gx_cabinet.ttl' },
+
 ];
 
 const FX_COUNT = MANIFEST.length;

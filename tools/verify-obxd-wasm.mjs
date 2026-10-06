@@ -538,7 +538,7 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 76) return `effect_count=${mod._fx_effect_count()}, want 76 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi)`;
+    if (mod._fx_effect_count() !== 77) return `effect_count=${mod._fx_effect_count()}, want 77 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi + Phase 2-a cabinet)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
@@ -582,7 +582,8 @@ async function main() {
     if (mod._fx_param_count(73) !== 1) return `param_count(73)=${mod._fx_param_count(73)}, want 1 (outputlevel)`;
     if (mod._fx_param_count(74) !== 1) return `param_count(74)=${mod._fx_param_count(74)}, want 1 (ampout)`;
     if (mod._fx_param_count(75) !== 7) return `param_count(75)=${mod._fx_param_count(75)}, want 7 (ampmodul)`;
-    if (mod._fx_param_count(76) !== -1) return `param_count(76)=${mod._fx_param_count(76)}, want -1 (out of range)`;
+    if (mod._fx_param_count(76) !== 4) return `param_count(76)=${mod._fx_param_count(76)}, want 4 (cabinet: CLevel/CBass/CTreble/c_model)`;
+    if (mod._fx_param_count(77) !== -1) return `param_count(77)=${mod._fx_param_count(77)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -611,6 +612,7 @@ async function main() {
     if (mod._fx_is_stereo(73) !== 1) return `is_stereo(73)=${mod._fx_is_stereo(73)}, want 1 (outputlevel, native stereo)`;
     if (mod._fx_is_stereo(74) !== 0) return `is_stereo(74)=${mod._fx_is_stereo(74)}, want 0 (ampout, dual-mono)`;
     if (mod._fx_is_stereo(75) !== 1) return `is_stereo(75)=${mod._fx_is_stereo(75)}, want 1 (ampmodul, native stereo)`;
+    if (mod._fx_is_stereo(76) !== 0) return `is_stereo(76)=${mod._fx_is_stereo(76)}, want 0 (cabinet, dual-mono convolver)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
@@ -652,6 +654,10 @@ async function main() {
     if (mod._fx_default(72, 0) !== 0) return `default(72,0)=${mod._fx_default(72, 0)}, want 0 (balance)`;
     if (mod._fx_default(73, 0) !== 0) return `default(73,0)=${mod._fx_default(73, 0)}, want 0 (outputlevel)`;
     if (mod._fx_default(75, 4) !== 6) return `default(75,4)=${mod._fx_default(75, 4)}, want 6 (ampmodul TUBE1)`;
+    if (mod._fx_default(76, 0) !== 1) return `default(76,0)=${mod._fx_default(76, 0)}, want 1 (cabinet CLevel)`;
+    if (mod._fx_default(76, 1) !== 0) return `default(76,1)=${mod._fx_default(76, 1)}, want 0 (cabinet CBass)`;
+    if (mod._fx_default(76, 2) !== 0) return `default(76,2)=${mod._fx_default(76, 2)}, want 0 (cabinet CTreble)`;
+    if (mod._fx_default(76, 3) !== 0) return `default(76,3)=${mod._fx_default(76, 3)}, want 0 (cabinet c_model)`;
     if (mod._fx_default(61, 0) !== 0) return `default(61,0)=${mod._fx_default(61, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
@@ -670,7 +676,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 76); // FX_COUNT == 76 since Phase 1-h
+    mod._fx_set_slot(0, 0, 77); // FX_COUNT == 77 since Phase 2-a
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -1566,6 +1572,104 @@ async function main() {
       if (!(r.rms > 0)) return `${name} silent across mid-render model swaps (rms=${r.rms.toExponential(3)})`;
     }
     console.log(`    amp/tonestack MODEL selectivity: amp 0↔16 max rms delta ${ampDiff.toFixed(4)}, tonestack 0↔26 ${tsDiff.toFixed(4)}; both aggregates survive ${19 + 27} mid-render swaps`);
+  });
+
+  // (z) Convolution family spot check (Phase 2-a) ---------------------------
+  // Cabinet (id 76) over the self-written partitioned convolver: params
+  // round-trip through the mirror, a held note through CAB=0 (4x12,
+  // 1000-tap IR) vs CAB=5 (HighGain, 192-tap) produces measurably different
+  // output (~66% RMS delta measured; the two IRs filter very differently —
+  // an unwired c_model would leave the ratio at ~1.00), the CLevel knob
+  // (baked into the IR by the bundle's Impf impulse former, including its
+  // level-dependent makeup) audibly scales the output, model "Off" (18) is
+  // dry passthrough, and walking ALL 19 models mid-render (one pending
+  // rebuild per quantum — the bounded-alloc path) stays finite and alive.
+  // The default factory patch is a pad whose per-init LFO phase swings
+  // short-window RMS by tens of percent, which drowns the IR delta — so the
+  // comparison loads factory patch 6 ("Acoustic Bass"), measured stable to
+  // ~1-2% across inits (same reason check s/t use early settled windows).
+  expect('z. conv family: cabinet IR switch CAB=0 vs CAB=5 changes the response; CLevel scales; params round-trip; model walk finite', () => {
+    // param round-trip: set/get over all 4 ordinals (CLevel/CBass/CTreble/c_model)
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 76);
+    if (mod._fx_get_slot(0, 0) !== 76) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 76 (cabinet)`;
+    for (const [p, v] of [[0, 2.5], [1, -6], [2, 3], [3, 7]]) {
+      mod._fx_set_param(0, 0, p, v);
+      if (mod._fx_get_param(0, 0, p) !== f32(v)) return `param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
+    }
+    // Sustained note through the convolver, stable patch, fresh init per
+    // measurement (fuzzface-check shape; ~1-2% cross-init drift).
+    const cabRms = (model, level = 1, note = 48, skip = 25, meas = 15) => {
+      mod._obxd_init(48000);
+      mod._obxd_set_factory_patch(0, 6); // "Acoustic Bass" — init-stable
+      mod._fx_set_slot(0, 0, 76);
+      mod._fx_set_param(0, 0, 0, level); // CLevel
+      mod._fx_set_param(0, 0, 3, model); // c_model
+      mod._fx_set_enabled(0, 0, 1);
+      mod._obxd_midi_in(0, 0x90, note, 127);
+      let s = 0;
+      let finite = true;
+      for (let q = 0; q < skip + meas; q++) {
+        mod._obxd_render(128);
+        if (q < skip) continue;
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+          s += l[i] * l[i] + r[i] * r[i];
+        }
+      }
+      mod._obxd_midi_in(0, 0x80, note, 0);
+      mod._obxd_panic(0);
+      if (!finite) return { err: `non-finite sample through cabinet (model ${model})` };
+      return { rms: Math.sqrt(s / (meas * 256)) };
+    };
+    const r0 = cabRms(0);
+    if (r0.err) return r0.err;
+    const r5 = cabRms(5);
+    if (r5.err) return r5.err;
+    if (!(r0.rms > 1e-4)) return `cabinet CAB=0 output too quiet to test (rms=${r0.rms.toExponential(3)})`;
+    const rel = Math.abs(r0.rms - r5.rms) / Math.max(r0.rms, r5.rms);
+    if (!(rel > 0.25)) {
+      return `cabinet IR switch 0↔5 changed RMS by only ${(rel * 100).toFixed(1)}% (${r0.rms.toExponential(4)} vs ${r5.rms.toExponential(4)}) — c_model not reaching the convolver`;
+    }
+    // CLevel 0.5 vs 5.0 (model 0): Impf bakes level·10^(-0.1·level) into
+    // the IR — 0.397 vs 1.581 ≈ 4x amplitude. Assert a clear scaling with
+    // margin for the shared shelving.
+    const lo = cabRms(0, 0.5);
+    if (lo.err) return lo.err;
+    const hi = cabRms(0, 5.0);
+    if (hi.err) return hi.err;
+    const levelRatio = hi.rms / lo.rms;
+    if (!(levelRatio > 1.5)) {
+      return `cabinet CLevel 0.5→5.0 scaled RMS by only ${levelRatio.toFixed(2)}x (${lo.rms.toExponential(4)} → ${hi.rms.toExponential(4)}) — CLevel not reaching the IR bake`;
+    }
+    // Model walk 0..18 inside one render: a pending rebuild per quantum
+    // (incl. Off at 18 — passthrough) must stay finite and audible.
+    mod._obxd_init(48000);
+    mod._obxd_set_factory_patch(0, 6);
+    mod._fx_set_slot(0, 0, 76);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._obxd_midi_in(0, 0x90, 48, 127);
+    let walkSq = 0;
+    let walkFinite = true;
+    for (let m = 0; m <= 18; m++) {
+      mod._fx_set_param(0, 0, 3, m);
+      for (let k = 0; k < 6; k++) {
+        mod._obxd_render(128);
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) walkFinite = false;
+          walkSq += l[i] * l[i] + r[i] * r[i];
+        }
+      }
+    }
+    mod._obxd_midi_in(0, 0x80, 48, 0);
+    mod._obxd_panic(0);
+    if (!walkFinite) return 'non-finite sample during the cabinet model walk';
+    if (!(Math.sqrt(walkSq / (19 * 6 * 256)) > 1e-4)) return 'cabinet model walk silent';
+    console.log(`    cabinet IR selectivity: CAB 0↔5 rms ${r0.rms.toExponential(4)} vs ${r5.rms.toExponential(4)} (${(rel * 100).toFixed(1)}% delta); CLevel 0.5→5.0 scales ${levelRatio.toFixed(2)}x; 19-model walk finite`);
   });
 
   // --- summary -------------------------------------------------------------

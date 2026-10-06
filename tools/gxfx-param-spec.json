@@ -6229,6 +6229,69 @@
           "integer": false
         }
       ]
+    },
+    {
+      "id": 76,
+      "key": "cabinet",
+      "label": "Cabinet",
+      "dsp": "cabinet",
+      "stereo": false,
+      "category": "amp",
+      "out_ports": [
+        {
+          "port": 6,
+          "symbol": "SCHEDULE",
+          "name": "Schedule",
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "CLevel",
+          "name": "Cabinet",
+          "default": 1,
+          "min": 0.5,
+          "max": 5,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "CBass",
+          "name": "Bass",
+          "default": 0,
+          "min": -10,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "CTreble",
+          "name": "Treble",
+          "default": 0,
+          "min": -10,
+          "max": 10,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "c_model",
+          "name": "Cab Model",
+          "default": 0,
+          "min": 0,
+          "max": 18,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        }
+      ]
     }
   ]
 }

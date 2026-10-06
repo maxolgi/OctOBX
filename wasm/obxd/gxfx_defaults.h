@@ -25,7 +25,7 @@
 #ifndef GXFX_DEFAULTS_H
 #define GXFX_DEFAULTS_H
 
-#define GXFX_EFFECT_COUNT 76
+#define GXFX_EFFECT_COUNT 77
 #define GXFX_PORTS_ROW 34
 
 static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
@@ -713,11 +713,20 @@ static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
     },
+    /* 76: cabinet — 4 params + 44 pad */
+    {
+            1.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
 };
 
-static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2, 11, 30, 5, 2, 6, 1, 5, 3, 0, 1, 8, 5, 5, 8, 10, 7, 3, 5, 8, 8, 8, 10, 10, 8, 5, 3, 3, 2, 2, 11, 3, 5, 12, 6, 4, 12, 5, 2, 34, 19, 15, 14, 24, 3, 1, 1, 1, 7 };
+static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2, 11, 30, 5, 2, 6, 1, 5, 3, 0, 1, 8, 5, 5, 8, 10, 7, 3, 5, 8, 8, 8, 10, 10, 8, 5, 3, 3, 2, 2, 11, 3, 5, 12, 6, 4, 12, 5, 2, 34, 19, 15, 14, 24, 3, 1, 1, 1, 7, 4 };
 
-static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,0,0,0,1,1,0,0,1,0,1,0,1,0,0,0,0,0,0,1,0,0,1,0,1,1,0,0,0,0,0,0,0,0,1,1,0,1 };
+static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,0,0,0,1,1,0,0,1,0,1,0,1,0,0,0,0,0,0,1,0,0,1,0,1,1,0,0,0,0,0,0,0,0,1,1,0,1,0 };
 
 static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     /*  0: wah */
@@ -872,6 +881,8 @@ static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     { 0 },
     /* 75: ampmodul */
     { 0,1,2,3,4,5,6 },
+    /* 76: cabinet */
+    { 0,1,2,3 },
 };
 
 #endif /* GXFX_DEFAULTS_H */

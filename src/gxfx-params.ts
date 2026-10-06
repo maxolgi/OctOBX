@@ -13,7 +13,7 @@
  * Freshness check:    node tools/gen-gxfx-params.mjs --check   (CI gate)
  */
 
-export const FX_COUNT = 76;
+export const FX_COUNT = 77;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
 export const FX_SLOT_PARAMS = 48;
@@ -40,7 +40,7 @@ export interface FxEffectDef {
     label: string;
     category: FxCategory;
     stereo: boolean;
-    offset: number;    // cumulative param offset into the flat 448-slot mirror
+    offset: number;    // cumulative param offset into the flat 452-slot mirror
     params: FxParamDef[];
 }
 
@@ -48,7 +48,7 @@ export interface FxEffectDef {
  * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →
  * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the
  * Phase-1 additions selectable per slot.
- * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2,11,3,5,12,6,4,12,5,2,34,19,15,14,24,3,1,1,1,7 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267,269,280,283,288,300,306,310,322,327,329,363,382,397,411,435,438,439,440,441. */
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2,11,3,5,12,6,4,12,5,2,34,19,15,14,24,3,1,1,1,7,4 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267,269,280,283,288,300,306,310,322,327,329,363,382,397,411,435,438,439,440,441,448. */
 export const FX_EFFECTS: FxEffectDef[] = [
     {
         id: 0, key: "wah", label: "Wah", category: "wah", stereo: false, offset: 0,
@@ -878,9 +878,18 @@ export const FX_EFFECTS: FxEffectDef[] = [
             { port: 6, symbol: "WET_DRY", name: "Dry/Wet", default: 0, min: -1, max: 1, step: 0.1 },
         ],
     },
+    {
+        id: 76, key: "cabinet", label: "Cabinet", category: "amp", stereo: false, offset: 448,
+        params: [
+            { port: 0, symbol: "CLevel", name: "Cabinet", default: 1, min: 0.5, max: 5, step: 0.1 },
+            { port: 1, symbol: "CBass", name: "Bass", default: 0, min: -10, max: 10, step: 0.1 },
+            { port: 2, symbol: "CTreble", name: "Treble", default: 0, min: -10, max: 10, step: 0.1 },
+            { port: 3, symbol: "c_model", name: "Cab Model", default: 0, min: 0, max: 18, step: 1, integer: true },
+        ],
+    },
 ];
 
-export const FX_TOTAL_PARAMS = 448;
+export const FX_TOTAL_PARAMS = 452;
 
 // --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
 

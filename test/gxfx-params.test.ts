@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(76);
+        expect(FX_COUNT).toBe(77);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -121,6 +121,8 @@ describe("gxfx-params — layout invariants", () => {
             // Phase 1-h enumeration-audit find + utility family (71..75)
             "drive",                                       // bigmuffpi (gx_bmp)
             "utility", "utility", "utility", "utility", // balance, outputlevel, ampout, ampmodul
+            // Phase 2-a convolution family (76)
+            "amp",                                         // cabinet (kissfft convolver)
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -128,14 +130,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 448", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 452", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(448);
-        expect(FX_TOTAL_PARAMS).toBe(448);
+        expect(running).toBe(452);
+        expect(FX_TOTAL_PARAMS).toBe(452);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -205,16 +207,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..75", () => {
-        for (let i = 0; i < 76; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..76", () => {
+        for (let i = 0; i < 77; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(76)).toBe(false);
+        expect(isFxId(77)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(76, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(77, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -878,5 +880,28 @@ describe("gxfx-params — Phase 1-h multiband + utility family additions", () =>
         expect(mod.params[0]).toMatchObject({ default: 0, min: -1, max: 1, step: 0.01 });
         expect(mod.params[2]).toMatchObject({ default: -20, min: -40, max: 4, step: 0.1 });
         expect(mod.params[4]).toMatchObject({ default: 6, min: -20, max: 20, step: 0.1 });
+    });
+});
+
+describe("gxfx-params — Phase 2-a convolution family additions", () => {
+    it("cabinet (ttl-parsed): CLevel/CBass/CTreble/c_model, MODEL integer 0..18, mono dual-mono", () => {
+        const fx = FX_EFFECTS[76];
+        expect(fx.key).toBe("cabinet");
+        expect(fx.label).toBe("Cabinet");
+        expect(fx.category).toBe("amp");
+        expect(fx.stereo).toBe(false); // one ttl audio input — dual-mono host
+        expect(fx.params.map((p) => p.symbol)).toEqual(["CLevel", "CBass", "CTreble", "c_model"]);
+        expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2, 3]);
+        expect(fx.params.map((p) => p.name)).toEqual(["Cabinet", "Bass", "Treble", "Cab Model"]);
+        expect(fx.params[0]).toMatchObject({ default: 1, min: 0.5, max: 5, step: 0.1 });
+        expect(fx.params[1]).toMatchObject({ default: 0, min: -10, max: 10, step: 0.1 });
+        expect(fx.params[2]).toMatchObject({ default: 0, min: -10, max: 10, step: 0.1 });
+        const model = fx.params[3];
+        expect(model).toMatchObject({ default: 0, min: 0, max: 18, step: 1, integer: true });
+        expect(fxParamFrom01(76, 3, 1)).toBe(18); // MODEL knob endpoint (18 = Off)
+        // SCHEDULE (notOnGUI worker output) lands in out_ports like
+        // ampmodel's — never in the param mirror.
+        expect(spec.effects[76].out_ports.map((p) => p.symbol)).toEqual(["SCHEDULE"]);
+        expect(fx.params.some((p) => p.symbol === "SCHEDULE")).toBe(false);
     });
 });

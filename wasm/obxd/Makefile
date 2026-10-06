@@ -56,8 +56,14 @@ TARGET = ../build/obxd_wasm
 # file's header). gxfx_mb.cpp is the Phase 1-h multiband + utility family
 # (the four gx_mb* bundles + the bundle-local barkgraphiceq with its
 # orfanidis_eq solver, meters parked on TU-local scratch; balance/
-# outputlevel/ampout orphans).
-SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_eq.cpp gxfx_dsp_wah.cpp gxfx_dsp_mod.cpp gxfx_dsp_time.cpp gxfx_dsp_reverb.cpp gxfx_dsp_amps.cpp gxfx_mb.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
+# outputlevel/ampout orphans). gxfx_convolver.cpp is the Phase 2-a
+# self-written partitioned convolution core (uniformly partitioned
+# overlap-save over vendored kissfft — wasm/obxd/kissfft/, BSD-3; the
+# kissfft .c files are compiled exactly once, inside that TU, so NO other
+# TU may include them). gxfx_dsp_conv.cpp is the Phase 2-a convolution
+# family TU (cab_data IR tables at global scope + the bundle's Impf
+# impulse former + the Cabinet PluginLV2 wrapper).
+SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_eq.cpp gxfx_dsp_wah.cpp gxfx_dsp_mod.cpp gxfx_dsp_time.cpp gxfx_dsp_reverb.cpp gxfx_dsp_amps.cpp gxfx_mb.cpp gxfx_convolver.cpp gxfx_dsp_conv.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
 
 # Header dependencies — most of the engine lives in headers (Voice.h,
 # Motherboard.h, OscillatorBlock.h, Filter.h, Utils.h, ...) #include'd by the
@@ -69,7 +75,7 @@ SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_e
 # param_table.h is NOT listed — it doesn't exist on a fresh clone before
 # build.sh synth generates it; its staleness is gated separately by
 # gen-param-table.mjs --check in build.sh.)
-HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h gxfx_prelude.h ../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h ../../third_party/guitarix/trunk/src/LV2/DSP/trany.h ../../third_party/guitarix/trunk/src/LV2/DSP/beat.h ../../third_party/guitarix/trunk/src/LV2/DSP/valve.h ../../third_party/guitarix/trunk/src/LV2/DSP/tube_tables/*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/circuit_tables/*.h ../../third_party/guitarix/trunk/src/LV2/gxautowah.lv2/dunwahauto.cc ../../third_party/guitarix/trunk/src/LV2/gx_vibe.lv2/vibe.cc ../../third_party/guitarix/trunk/src/LV2/gx_duck_delay.lv2/duck_delay.cc ../../third_party/guitarix/trunk/src/LV2/gx_duck_delay_st.lv2/duck_delay_st.cc ../../third_party/guitarix/trunk/src/LV2/gx_digital_delay.lv2/digital_delay.cc ../../third_party/guitarix/trunk/src/LV2/gx_digital_delay_st.lv2/digital_delay_st.cc ../../third_party/guitarix/trunk/src/LV2/gxts9.lv2/ts9sim.cc ../../third_party/guitarix/trunk/src/LV2/gxts9.lv2/ts9nonlin.cc ../../third_party/guitarix/trunk/src/LV2/gxts9.lv2/ts9nonlin.h ../../third_party/guitarix/trunk/src/LV2/gx_oc_2.lv2/oc_2.cc ../../third_party/guitarix/trunk/src/LV2/gx_oc_2.lv2/triggers_logic.h ../../third_party/guitarix/trunk/src/LV2/gx_room_simulator.lv2/room_simulator.cc ../../third_party/guitarix/trunk/src/LV2/gx_shimmizita.lv2/shimmizita.cc ../../third_party/guitarix/trunk/src/LV2/gx_barkgraphiceq.lv2/barkgraphiceq.cc ../../third_party/guitarix/trunk/src/LV2/gx_barkgraphiceq.lv2/orfanidis_eq.h ../../third_party/guitarix/trunk/src/LV2/gx_barkgraphiceq.lv2/bark_freq_grid.h ../../third_party/guitarix/trunk/src/LV2/faust-generated/*.cc ../../third_party/guitarix/trunk/src/LV2/faust/*.h ../../third_party/guitarix/trunk/src/LV2/faust/clipt*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/gx_resampler.* ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0/zita-resampler/*.h)
+HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h gxfx_prelude.h ../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h ../../third_party/guitarix/trunk/src/LV2/DSP/trany.h ../../third_party/guitarix/trunk/src/LV2/DSP/beat.h ../../third_party/guitarix/trunk/src/LV2/DSP/valve.h ../../third_party/guitarix/trunk/src/LV2/DSP/tube_tables/*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/circuit_tables/*.h ../../third_party/guitarix/trunk/src/LV2/gxautowah.lv2/dunwahauto.cc ../../third_party/guitarix/trunk/src/LV2/gx_vibe.lv2/vibe.cc ../../third_party/guitarix/trunk/src/LV2/gx_duck_delay.lv2/duck_delay.cc ../../third_party/guitarix/trunk/src/LV2/gx_duck_delay_st.lv2/duck_delay_st.cc ../../third_party/guitarix/trunk/src/LV2/gx_digital_delay.lv2/digital_delay.cc ../../third_party/guitarix/trunk/src/LV2/gx_digital_delay_st.lv2/digital_delay_st.cc ../../third_party/guitarix/trunk/src/LV2/gxts9.lv2/ts9sim.cc ../../third_party/guitarix/trunk/src/LV2/gxts9.lv2/ts9nonlin.cc ../../third_party/guitarix/trunk/src/LV2/gxts9.lv2/ts9nonlin.h ../../third_party/guitarix/trunk/src/LV2/gx_oc_2.lv2/oc_2.cc ../../third_party/guitarix/trunk/src/LV2/gx_oc_2.lv2/triggers_logic.h ../../third_party/guitarix/trunk/src/LV2/gx_room_simulator.lv2/room_simulator.cc ../../third_party/guitarix/trunk/src/LV2/gx_shimmizita.lv2/shimmizita.cc ../../third_party/guitarix/trunk/src/LV2/gx_barkgraphiceq.lv2/barkgraphiceq.cc ../../third_party/guitarix/trunk/src/LV2/gx_barkgraphiceq.lv2/orfanidis_eq.h ../../third_party/guitarix/trunk/src/LV2/gx_barkgraphiceq.lv2/bark_freq_grid.h ../../third_party/guitarix/trunk/src/LV2/faust-generated/*.cc ../../third_party/guitarix/trunk/src/LV2/faust/*.h ../../third_party/guitarix/trunk/src/LV2/faust/clipt*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/gx_resampler.* ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0/zita-resampler/*.h kissfft/*.c kissfft/*.h kissfft/_kiss_fft_guts.h gxfx_convolver.h ../../third_party/guitarix/trunk/src/LV2/DSP/cab_data.cc ../../third_party/guitarix/trunk/src/LV2/DSP/cab_data_table.cc ../../third_party/guitarix/trunk/src/LV2/gx_cabinet.lv2/cabinet_impulse_former.h)
 
 # OB-Xf include paths. The engine sources are consumed STRAIGHT from the
 # fork tree at ../../third_party/OB-Xf/src (the maxolgi/OB-Xf fork main,
@@ -116,14 +122,16 @@ OBXF_INCLUDES = \
 # per-namespace in the family TUs (no include guards, so no include-once
 # sharing — see gxfx_dsp_mod.cpp / gxfx_dsp_time.cpp),
 # zita-resampler-1.1.0 backs gx_resampler's FixedRateResampler (bossds1
-# oversampler).
+# oversampler) and BufferResampler (Phase 2 cabinet IR resampling).
+# kissfft/ is the Phase 2 vendored FFT (real-only core; BSD-3).
 GXFU_INCLUDES = \
     -I ../../third_party/guitarix/trunk/src/LV2/faust-generated \
     -I ../../third_party/guitarix/trunk/src/LV2/faust \
     -I ../../third_party/guitarix/trunk/src/LV2/DSP \
     -I ../../third_party/guitarix/trunk/src/LV2/DSP/tube_tables \
     -I ../../third_party/guitarix/trunk/src/LV2/DSP/circuit_tables \
-    -I ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0
+    -I ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0 \
+    -I kissfft
 
 # -sENVIRONMENT=worker sets up the runtime for a worker-like scope
 #   (no `window`, no `document`). Used because AudioWorkletGlobalScope is

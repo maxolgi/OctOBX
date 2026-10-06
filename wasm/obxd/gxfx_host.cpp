@@ -122,6 +122,10 @@ PluginLV2* gxfx_create_balance();
 PluginLV2* gxfx_create_outputlevel();
 PluginLV2* gxfx_create_ampout();
 PluginLV2* gxfx_create_ampmodul();
+// convolution family (gxfx_dsp_conv.cpp, Phase 2-a): the cabinet IR sim over
+// the self-written partitioned convolver (gxfx_convolver.h + vendored
+// kissfft; cab_data.cc IR tables baked with the bundle's Impf shelving)
+PluginLV2* gxfx_create_cabinet();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -200,7 +204,8 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_balance,
     gxfx_create_outputlevel,
     gxfx_create_ampout,
-    gxfx_create_ampmodul
+    gxfx_create_ampmodul,
+    gxfx_create_cabinet
 };
 
 // Generator↔host drift guard: the factory registry above must list every
