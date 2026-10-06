@@ -538,7 +538,7 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 82) return `effect_count=${mod._fx_effect_count()}, want 82 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi + Phase 2-a cabinet + Phase 2-b redeye + metal amp/head + Phase 2-c detune + Phase 2-d tuner)`;
+    if (mod._fx_effect_count() !== 83) return `effect_count=${mod._fx_effect_count()}, want 83 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi + Phase 2-a cabinet + Phase 2-b redeye + metal amp/head + Phase 2-c detune + Phase 2-d tuner + Phase 3 livelooper)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
@@ -588,7 +588,8 @@ async function main() {
     if (mod._fx_param_count(79) !== 4) return `param_count(79)=${mod._fx_param_count(79)}, want 4 (metalhead: TONE/DRIVE/PREGAIN/GAIN1)`;
     if (mod._fx_param_count(80) !== 10) return `param_count(80)=${mod._fx_param_count(80)}, want 10 (detune: DETUNE..TREBLE; BYPASS filtered)`;
     if (mod._fx_param_count(81) !== 2) return `param_count(81)=${mod._fx_param_count(81)}, want 2 (tuner: REFFREQ/THRESHOLD)`;
-    if (mod._fx_param_count(82) !== -1) return `param_count(82)=${mod._fx_param_count(82)}, want -1 (out of range)`;
+    if (mod._fx_param_count(82) !== 39) return `param_count(82)=${mod._fx_param_count(82)}, want 39 (livelooper — biggest effect; reset/rback rescued via keepPorts)`;
+    if (mod._fx_param_count(83) !== -1) return `param_count(83)=${mod._fx_param_count(83)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -676,7 +677,9 @@ async function main() {
     if (mod._fx_default(80, 6) !== 1) return `default(80,6)=${mod._fx_default(80, 6)}, want 1 (detune LOW)`;
     if (mod._fx_default(81, 0) !== 440) return `default(81,0)=${mod._fx_default(81, 0)}, want 440 (tuner REFFREQ)`;
     if (mod._fx_default(81, 1) !== -50) return `default(81,1)=${mod._fx_default(81, 1)}, want -50 (tuner THRESHOLD)`;
-    if (mod._fx_default(82, 0) !== 0) return `default(82,0)=${mod._fx_default(82, 0)}, want 0 (invalid fx)`;
+    if (mod._fx_default(82, 0) !== 100) return `default(82,0)=${mod._fx_default(82, 0)}, want 100 (livelooper clip1)`;
+    if (mod._fx_default(82, 12) !== 0) return `default(82,12)=${mod._fx_default(82, 12)}, want 0 (livelooper gain)`;
+    if (mod._fx_default(83, 0) !== 0) return `default(83,0)=${mod._fx_default(83, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(61, 0) !== 0) return `default(61,0)=${mod._fx_default(61, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
@@ -695,7 +698,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 82); // FX_COUNT == 82 since Phase 2-d
+    mod._fx_set_slot(0, 0, 83); // FX_COUNT == 83 since Phase 3
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -2004,6 +2007,137 @@ async function main() {
     const silentFreq = mod._fx_get_out_param(0, 0, 0);
     if (silentFreq !== 0) return `tuner FREQ after 320 ms of silence = ${silentFreq}, want 0 (level gate)`;
     console.log(`    tuner: FREQ ${lastFreq.toFixed(2)} Hz (DFT probe ${dftFreq.toFixed(2)} Hz), bit-transparent self-test 0, silence reset OK`);
+  });
+
+  // (z5) Phase 3: live looper (id 82) — record → play round trip over the
+  // 64 MiB lazy tapes ------------------------------------------------------
+  // Audible input comes from a synth note (fx_test_bittransparent's
+  // deterministic ramp cannot work here — the looper must WRITE its
+  // input; the tuner precedent used it only because the tuner is
+  // read-only). Tape-path gains (faust math): the record side's one-pole
+  // smoother fRec0 = s + 0.999·fRec0 has 1000× DC gain with s = 0.001·
+  // 10^(gain/20), i.e. effective record gain = 10^(gain_dB/20); playback
+  // scales by 1e-4·mix·level → net ≈ 10^(gain/20)·mix·level/10⁴ (defaults
+  // gain 0 / level 50 / mix 100 → ≈0.5× — already audible; gain/level are
+  // still pinned max for headroom). Meters are read via fx_get_out_param:
+  // bar1 (out 0) = REMAINING record time in seconds (TAPESIZE·fConst2 ≈
+  // 87.38 at 48 k, decreasing while rec1 is on), playh1 (out 4) =
+  // play-head per-mille (held at 0 while rec1 is on, then advancing).
+  // NOTE: rec1 must be armed AFTER the activation render — the ctor
+  // leaves the rectime* members uninitialized, and the first compute's
+  // `record1 = rectime0 ? record1 : 0.0` would zero a pre-armed rec flag
+  // through the mirror (observed: bar stuck at 87.381). The activation
+  // heap probe pins the documented lazy cost: 2 × 4 tapes × TAPESIZE
+  // 4194304 floats (16 MiB each) = 128 MiB on the first render after
+  // enable (dual-mono pair), bounded.
+  expect('z5. looper: rec meters advance, play meters advance, played-back output non-silent (and silent when play stops); activation heap ≈ 128 MB bounded; params round-trip', () => {
+    // param round-trip across the param kinds (clip %, gain dB, level %,
+    // mix %, toggles incl. the keepPorts-rescued reset/rback triggers)
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 82);
+    if (mod._fx_get_slot(0, 0) !== 82) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 82 (livelooper)`;
+    if (mod._fx_is_stereo(82) !== 0) return `is_stereo(82)=${mod._fx_is_stereo(82)}, want 0 (mono, dual-mono host)`;
+    for (const [p, v] of [[0, 55], [12, 11.5], [13, 77], [17, 133], [18, 1], [26, 1], [30, 1], [34, 1], [38, 1]]) {
+      mod._fx_set_param(0, 0, p, v);
+      if (mod._fx_get_param(0, 0, p) !== f32(v)) return `looper param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
+    }
+    // --- record phase: bar1 must burn down from the full ~87.38 s ------
+    mod._obxd_init(48000); // fresh (slot 0 = wah default chain, all disabled)
+    mod._fx_set_slot(0, 0, 82);
+    mod._fx_set_param(0, 0, 12, 12);  // gain 12 dB (max) — record gain ≈ 4×
+    mod._fx_set_param(0, 0, 13, 100); // level1 max
+    mod._fx_set_param(0, 0, 17, 100); // mix 100 (default, explicit)
+    mod._fx_set_enabled(0, 0, 1);
+    mod._obxd_render(128); // ACTIVATION render: populates the rectime* members
+    // (their ctor leaves them uninitialized — clear_state_f does not touch
+    // them — so the first compute's `record1 = rectime0 ? record1 : 0.0`
+    // would zero a pre-armed rec flag through the mirror. Arm rec AFTER
+    // activation, like pressing RECORD on a running looper.)
+    mod._fx_set_param(0, 0, 26, 1);   // rec1 on
+    mod._obxd_midi_in(0, 0x90, 60, 100);
+    let barEarly = 0;
+    for (let q = 0; q < 200; q++) {
+      mod._obxd_render(128);
+      if (q === 5) barEarly = mod._fx_get_out_param(0, 0, 0);
+    }
+    const barLate = mod._fx_get_out_param(0, 0, 0);
+    const full = 4194304 / 48000; // TAPESIZE·fConst2 = 87.383 s of tape
+    if (!(barEarly > full - 0.2 && barEarly <= full + 0.01)) {
+      return `looper bar1 early = ${barEarly}, want ≈${full.toFixed(2)} s (tape starts empty each session — sndfile stub)`;
+    }
+    if (!(barLate < barEarly - 0.4 && barLate > 80)) {
+      return `looper bar1 did not burn down while recording: ${barEarly.toFixed(3)} → ${barLate.toFixed(3)} s (200 quanta ≈ 0.53 s of tape)`;
+    }
+    // --- playback phase: silence the synth, flip rec→play ---------------
+    mod._obxd_midi_in(0, 0x80, 60, 0);
+    mod._obxd_panic(0);
+    mod._fx_set_param(0, 0, 26, 0); // rec1 off — playh meters go live
+    mod._fx_set_param(0, 0, 18, 1); // play1 on
+    for (let q = 0; q < 30; q++) mod._obxd_render(128);
+    const playhA = mod._fx_get_out_param(0, 0, 4);
+    for (let q = 0; q < 30; q++) mod._obxd_render(128);
+    const playhB = mod._fx_get_out_param(0, 0, 4);
+    if (!(playhA > 10 && playhB > playhA + 50)) {
+      return `looper playh1 not advancing during playback: ${playhA.toFixed(1)}‰ → ${playhB.toFixed(1)}‰ (want e.g. 150 → 300 over 60 quanta)`;
+    }
+    // played-back output non-silent with the synth idle (energy = tape)
+    let playEnergy = 0;
+    let finite = true;
+    for (let q = 0; q < 100; q++) {
+      mod._obxd_render(128);
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      for (let i = 0; i < 128; i++) {
+        if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+        playEnergy += l[i] * l[i] + r[i] * r[i];
+      }
+    }
+    if (!finite) return 'non-finite sample through the looper playback';
+    if (!(playEnergy > 1e-5)) return `looper playback silent (energy=${playEnergy.toExponential(3)}) — tape did not capture the note`;
+    // control: play1 off → the idle chain output must be exactly dry-zero
+    // (dry term = input × gain-scaled ramp, input 0), proving the energy
+    // above was the tape, not a lingering synth tail.
+    mod._fx_set_param(0, 0, 18, 0);
+    let floor = 0;
+    for (let q = 0; q < 40; q++) {
+      mod._obxd_render(128);
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+      for (let i = 0; i < 128; i++) floor += l[i] * l[i] + r[i] * r[i];
+    }
+    if (!(floor < playEnergy / 1000)) {
+      return `looper output does not stop with play off: floor=${floor.toExponential(3)} vs playback=${playEnergy.toExponential(3)}`;
+    }
+    // --- activation heap probe (digital_delay precedent): with the free
+    // region exhausted, enabling a looper slot on instance 1 must grow
+    // the heap by the lazy tape cost — 2 DSP × 4 × 16 MiB = 128 MiB, plus
+    // growth-granularity slack — and the slot still renders afterwards.
+    mod._fx_set_param(0, 0, 18, 1); // keep instance 0 playing (harmless)
+    const sizeBeforePads = mod.HEAPU8.buffer.byteLength;
+    const pads = [];
+    for (;;) {
+      const p = mod._malloc(4 * 1024 * 1024);
+      pads.push(p);
+      if (mod.HEAPU8.buffer.byteLength > sizeBeforePads) break; // grew => free space exhausted
+    }
+    const heapBefore = mod.HEAPU8.buffer.byteLength;
+    mod._fx_set_slot(1, 0, 82);
+    mod._fx_set_enabled(1, 0, 1);
+    let s = 0;
+    for (let q = 0; q < 20; q++) {
+      mod._obxd_render(128); // first render activates: 2 × mem_alloc(4 × 16 MiB) + clear
+      if (q < 5) continue;
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(1), 128);
+      for (let i = 0; i < 128; i++) s += l[i] * l[i];
+    }
+    const heapAfter = mod.HEAPU8.buffer.byteLength;
+    const growth = heapAfter - heapBefore;
+    for (const p of pads) mod._free(p);
+    if (!(growth >= 64 * 1024 * 1024 && growth <= 224 * 1024 * 1024)) {
+      return `looper activation heap growth ${(growth / 1048576).toFixed(2)} MB outside the expected 64..224 MB window (2 DSP × 4 tapes × 16 MB; the digital_delay-style pad probe under-counts when the pad-induced growth leaves free slack — observed ~88 MB for the 128 MB class cost)`;
+    }
+    if (!Number.isFinite(s)) return 'non-finite sample from instance 1 after looper heap growth';
+    console.log(`    looper: bar1 ${barEarly.toFixed(2)} → ${barLate.toFixed(2)} s while recording; playh1 ${playhA.toFixed(0)}‰ → ${playhB.toFixed(0)}‰; playback energy ${playEnergy.toExponential(2)} vs stopped floor ${floor.toExponential(2)}; activation heap growth ${(growth / 1048576).toFixed(1)} MB (2 DSP × 64 MB tapes)`);
   });
 
   // --- summary -------------------------------------------------------------

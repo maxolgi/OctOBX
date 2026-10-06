@@ -91,6 +91,12 @@ const GX_FAUST = `${GX_LV2}/faust-generated`;
 const FX_SLOTS = 11;
 const FX_INSTANCE_COUNT = 10;
 const FX_SLOT_PARAMS = 48;  // per-slot param array size (fx2plan.md: max params tree-wide = 39)
+// PortIndex ceiling for the shared validation below. Ports are only ever
+// FORWARDED to the DSP's connect_ports() (never used as array indices), so
+// the bound is a sanity check, not a layout constraint — but it must
+// exceed the widest wrapper port space (livelooper's synct sits at ttl
+// port 48, past FX_SLOT_PARAMS).
+const FX_PORT_MAX = 256;
 
 // Frozen menu-category vocabulary (fx2plan.md Phase 0/1; mirrored in
 // src/gxfx-params.ts FxCategory and the mixer dropdown grouping).
@@ -494,6 +500,25 @@ const MANIFEST = [
         { port: 0, symbol: 'FREQ', name: 'Frequency', min: 0, max: 1000 },
     ] },
 
+    // --- Phase 3: live looper ---
+    // livelooper: gx_livelooper.lv2's bundle-LOCAL, hand-tweaked faust
+    // class (livelooper.cc — NOT the gx_head/engine LiveLooper; the DSP
+    // rides gxfx_dsp_looper.cpp with the gxfx_shims/sndfile.hh stub so the
+    // wave save/load paths no-op and loops start empty each session).
+    // The ttl parses directly once keepPorts rescues the pprop:trigger
+    // momentary buttons the DSP actually consumes as plain toggles
+    // (reset1..4 clear the tapes, rback1..4 rewind to the clip end):
+    // 39 control inputs + 8 control OUTPUT meter ports (bar1..4 remaining
+    // record time, playh1..4 play-head per-mille) which land in
+    // out_ports and feed g_fx_out via FX_OUT_PORT_IDS. One ttl audio
+    // input → mono → dual-mono host. MEMORY (decision #5): TAPESIZE
+    // 4194304 floats = 16 MiB x 4 tapes = 64 MiB per DSP instance,
+    // lazily new'd on activate — an enabled mono slot costs 2 x 64 =
+    // 128 MiB on the first render after enable (Known Issues: enable
+    // looper slots sparingly).
+    { key: 'livelooper', menuName: 'Live Looper', category: 'special', ttl: 'gx_livelooper.lv2/gx_livelooper.ttl',
+      keepPorts: ['reset1', 'reset2', 'reset3', 'reset4', 'rback1', 'rback2', 'rback3', 'rback4'] },
+
 ];
 
 const FX_COUNT = MANIFEST.length;
@@ -538,15 +563,22 @@ function ttlEffect(entry) {
     const isA = (p, suffix) => p.types.some((t) => t.endsWith(suffix));
     for (const p of ports) {
         if (!Number.isInteger(p.index)) problems.push(`port ${p.symbol ?? '?'}: missing lv2:index`);
-        if (!p.symbol) problems.push(`port index ${p.index}: missing lv2:symbol`);
+        if (!p.symbol) problems.push(`port index ${p.index}: missing symbol`);
     }
     const audioIns = ports.filter((p) => isA(p, 'AudioPort') && isA(p, 'InputPort'));
     const skip = new Set(entry.skipPorts || []);
+    // keepPorts: symbols the trigger/notOnGUI screen must NOT drop (the
+    // DSP reads them as plain controls even though the ttl marks them as
+    // momentary buttons). Livelooper precedent: reset/rback — upstream's
+    // UI fires them as triggers, the class consumes them as toggles (and
+    // self-clears reset once the tape is empty).
+    const keep = new Set(entry.keepPorts || []);
     const paramPorts = ports.filter((p) =>
         isA(p, 'ControlPort') && isA(p, 'InputPort')
         && !skip.has(p.symbol)
         && !p.designation.some((d) => d.endsWith('enabled'))
-        && !p.props.some((x) => x.endsWith('trigger') || x.endsWith('notOnGUI')));
+        && (keep.has(p.symbol)
+            || !p.props.some((x) => x.endsWith('trigger') || x.endsWith('notOnGUI'))));
     paramPorts.sort((a, b) => a.index - b.index);
     // Control OUTPUT ports (meters): declared as out_ports (name+range) but
     // never added to the param mirror; the engine connection stays unwired
@@ -823,6 +855,21 @@ const LABEL_OVERRIDES = {
     FEEDBAC: 'Dry Feedback', // gx_ampmodul dry-path feedback (fback in the .dsp)
     TUBE1: 'Tube 1',       // gx_ampmodul stage1 preamp tube (dB)
     TUBE2: 'Tube 2',       // gx_ampmodul stage2 tube (dB)
+    // --- Phase 3 live looper (keys chosen to NOT collide with any
+    // symbol/name of effects 0..81 — regeneration keeps those
+    // byte-identical; 'gain' and 'mix' deliberately have NO overrides:
+    // flanger id 4 and gxtape/gxtape_st/w20 carry those symbols and
+    // titleCase yields "Gain"/"Mix" anyway) ---
+    clip1: 'Clip 1', clip2: 'Clip 2', clip3: 'Clip 3', clip4: 'Clip 4',
+    clips1: 'Clip Size 1', clips2: 'Clip Size 2', clips3: 'Clip Size 3', clips4: 'Clip Size 4',
+    speed1: 'Speed 1', speed2: 'Speed 2', speed3: 'Speed 3', speed4: 'Speed 4',
+    level1: 'Level 1', level2: 'Level 2', level3: 'Level 3', level4: 'Level 4',
+    play1: 'Play 1', play2: 'Play 2', play3: 'Play 3', play4: 'Play 4',
+    rplay1: 'Rev Play 1', rplay2: 'Rev Play 2', rplay3: 'Rev Play 3', rplay4: 'Rev Play 4',
+    rec1: 'Rec 1', rec2: 'Rec 2', rec3: 'Rec 3', rec4: 'Rec 4',
+    reset1: 'Reset 1', reset2: 'Reset 2', reset3: 'Reset 3', reset4: 'Reset 4',
+    rback1: 'Rewind 1', rback2: 'Rewind 2', rback3: 'Rewind 3', rback4: 'Rewind 4',
+    synct: 'Sync Tapes',   // one transport for all 4 tapes
 };
 
 function titleCase(s) {
@@ -958,7 +1005,7 @@ function normalize(raw, problems) {
         let prevPort = -1;
         fx.params.forEach((p, j) => {
             const pw = `effects[${i}].params[${j}]`;
-            if (!Number.isInteger(p.port) || p.port < 0 || p.port >= FX_SLOT_PARAMS) problems.push(`${pw}.port must be in 0..${FX_SLOT_PARAMS - 1}`);
+            if (!Number.isInteger(p.port) || p.port < 0 || p.port >= FX_PORT_MAX) problems.push(`${pw}.port must be in 0..${FX_PORT_MAX - 1}`);
             if (p.port <= prevPort) problems.push(`${pw}.port breaks ascending order`);
             prevPort = p.port;
             for (const f of ['default', 'min', 'max', 'step']) {

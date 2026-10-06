@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(82);
+        expect(FX_COUNT).toBe(83);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -130,6 +130,8 @@ describe("gxfx-params — layout invariants", () => {
             "special",                                     // detune (smbPitchShift over the fftw shim)
             // Phase 2-d tuner (81)
             "special",                                     // tuner (inline NSDF pitch tracker, FREQ out port)
+            // Phase 3 looper (82)
+            "special",                                     // livelooper (64 MiB lazy tapes, 8 meter out ports)
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -137,14 +139,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 481", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 520", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(481);
-        expect(FX_TOTAL_PARAMS).toBe(481);
+        expect(running).toBe(520);
+        expect(FX_TOTAL_PARAMS).toBe(520);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -214,16 +216,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..81", () => {
-        for (let i = 0; i < 82; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..82", () => {
+        for (let i = 0; i < 83; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(82)).toBe(false);
+        expect(isFxId(83)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(82, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(83, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -983,5 +985,68 @@ describe("gxfx-params — Phase 2-c detune additions", () => {
         // never in the param mirror.
         expect(spec.effects[80].out_ports.map((p) => p.symbol)).toEqual(["latency"]);
         expect(fx.params.some((p) => p.symbol === "BYPASS" || p.symbol === "latency")).toBe(false);
+    });
+});
+
+describe("gxfx-params — Phase 3 looper additions", () => {
+    it("livelooper (ttl-parsed): 39 params at ttl ports 2..48 incl. keepPorts-rescued reset/rback, mono, 8 meter out ports", () => {
+        const fx = FX_EFFECTS[82];
+        expect(fx.key).toBe("livelooper");
+        expect(fx.label).toBe("Live Looper");
+        expect(fx.category).toBe("special");
+        expect(fx.stereo).toBe(false); // one ttl audio input — dual-mono host (2 x 64 MiB tapes per enabled slot)
+        expect(fx.params).toHaveLength(39); // tree's largest effect
+        expect(fx.params.map((p) => p.symbol)).toEqual([
+            "clip1", "clip2", "clip3", "clip4",
+            "clips1", "clips2", "clips3", "clips4",
+            "speed1", "speed2", "speed3", "speed4",
+            "gain", "level1", "level2", "level3", "level4", "mix",
+            "play1", "play2", "play3", "play4",
+            "rplay1", "rplay2", "rplay3", "rplay4",
+            "rec1", "rec2", "rec3", "rec4",
+            "reset1", "reset2", "reset3", "reset4",
+            "rback1", "rback2", "rback3", "rback4",
+            "synct",
+        ]);
+        expect(fx.params.map((p) => p.port)).toEqual([
+            2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+            18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31,
+            36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+        ]);
+        expect(fx.params.map((p) => p.name)).toEqual([
+            "Clip 1", "Clip 2", "Clip 3", "Clip 4",
+            "Clip Size 1", "Clip Size 2", "Clip Size 3", "Clip Size 4",
+            "Speed 1", "Speed 2", "Speed 3", "Speed 4",
+            "Gain", "Level 1", "Level 2", "Level 3", "Level 4", "Mix",
+            "Play 1", "Play 2", "Play 3", "Play 4",
+            "Rev Play 1", "Rev Play 2", "Rev Play 3", "Rev Play 4",
+            "Rec 1", "Rec 2", "Rec 3", "Rec 4",
+            "Reset 1", "Reset 2", "Reset 3", "Reset 4",
+            "Rewind 1", "Rewind 2", "Rewind 3", "Rewind 4",
+            "Sync Tapes",
+        ]);
+        // ttl ranges/defaults: gain dB (span 32 → derived step 1), mix %, toggles step 1.
+        expect(fx.params[12]).toMatchObject({ symbol: "gain", default: 0, min: -20, max: 12, step: 1 });
+        expect(fx.params[13]).toMatchObject({ symbol: "level1", default: 50, min: 0, max: 100, step: 1 });
+        expect(fx.params[17]).toMatchObject({ symbol: "mix", default: 100, min: 0, max: 150, step: 1 });
+        expect(fx.params[18]).toMatchObject({ symbol: "play1", default: 0, min: 0, max: 1, step: 1 }); // toggled
+        expect(fx.params[26]).toMatchObject({ symbol: "rec1", default: 0, min: 0, max: 1, step: 1 }); // toggled
+        expect(fx.params[30]).toMatchObject({ symbol: "reset1", default: 0, min: 0, max: 1, step: 1 }); // toggled + pprop:trigger (keepPorts-rescued)
+        expect(fx.params[38]).toMatchObject({ symbol: "synct", default: 0, min: 0, max: 1, step: 1 }); // toggled
+        // the transport toggles carry lv2:toggled in the spec (step-1 buttons)
+        const toggleSyms = ["play1", "rplay2", "rec3", "reset4", "rback1", "synct"];
+        for (const sym of toggleSyms) {
+            const sp = spec.effects[82].params.find((p) => p.symbol === sym);
+            if (sp?.toggled !== true) throw new Error(`${sym} missing lv2:toggled in spec`);
+        }
+        // The 8 control OUTPUT meters (bar = remaining record time,
+        // playh = play-head per-mille) land in out_ports — never params.
+        const specFx = spec.effects[82];
+        expect(specFx.out_ports.map((p) => p.symbol)).toEqual([
+            "bar1", "bar2", "bar3", "bar4", "playh1", "playh2", "playh3", "playh4",
+        ]);
+        expect(specFx.out_ports.map((p) => p.port)).toEqual([14, 15, 16, 17, 32, 33, 34, 35]);
+        expect(fx.params.some((p) => p.symbol.startsWith("bar") || p.symbol.startsWith("playh"))).toBe(false);
     });
 });

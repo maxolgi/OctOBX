@@ -25,7 +25,7 @@ Emscripten pthreads), not ALSA/winmm.
   AudioWorklet. Driven by Octopus MIDI channels 1–10 (reassignable per
   instance). 32-voice polyphony per instance, second LFO, MPE matrix, and the
   full OB-Xf editor UI (104 parameter-bound controls).
-- **Guitarix FX chains** — a catalog of 82 guitarix effects (481 params
+- **Guitarix FX chains** — a catalog of 83 guitarix effects (520 params
   across wah, drive, dynamics, eq, modulation, delay, reverb, amp,
   tonestack, multiband, utility, special) loadable into 11 user-assignable
   slots per synth instance (duplicates allowed, per-slot params), inserted
@@ -62,9 +62,10 @@ Emscripten pthreads), not ALSA/winmm.
 │   ├── obxd/
 │   │   ├── main_obxd.cpp       multi-instance OB-Xf SynthEngine wrapper (10 instances)
 │   │   ├── juce_amalgam.cpp    single-TU JUCE core + events + audio_basics + processors_headless
-│   │   ├── gxfx_dsp*.cpp       82 guitarix FX DSP classes, namespace-wrapped
+│   │   ├── gxfx_dsp*.cpp       83 guitarix FX DSP classes, namespace-wrapped
 │   │   │                        (faust family TUs incl. gxfx_mb.cpp + Phase-2
-│   │   │                        gxfx_dsp_{conv,detune,tuner}.cpp)
+│   │   │                        gxfx_dsp_{conv,detune,tuner}.cpp + Phase-3
+│   │   │                        gxfx_dsp_looper.cpp over the sndfile.hh stub)
 │   │   ├── gxfx_host.cpp       10 per-instance FX chains (11 slots each) + fx_* exports
 │   │   ├── gxfx_defaults.h     GENERATED FX catalog tables (tools/gen-gxfx-params.mjs)
 │   │   ├── gxfx_prelude.h      headless stand-in for gx_common.h/gx_compiler.h
@@ -700,7 +701,7 @@ breakdown and return codes.
 | `obxd_clear_pcm(id)` | Free all PCM samples + reset state |
 | `obxd_set_drum_layer_param(pad, layer, idx, v)` | Per-layer voice-level param mirror (global params route live via `apply_param_instance(9, …)`) |
 | `obxd_get_drum_layer_param(pad, layer, idx)` | Read per-layer param from mirror |
-| `fx_effect_count()` / `fx_slot_params()` | Guitarix FX rack shape: 82 effects / 48 params per slot |
+| `fx_effect_count()` / `fx_slot_params()` | Guitarix FX rack shape: 83 effects / 48 params per slot |
 | `fx_param_count(id)` / `fx_is_stereo(id)` / `fx_default(id, p)` | Per-effect param layout, stereo flag, default value (ENGINE units) |
 | `fx_set_param(inst, slot, param, v)` / `fx_get_param(…)` | Per-slot FX param (ENGINE units — ttl ranges, not 0..1; TS layer converts) |
 | `fx_set_enabled(inst, slot, on)` / `fx_get_enabled(…)` | Per-slot IN/BYP (lazy `activate()` on first render after enable) |
@@ -786,7 +787,7 @@ for fast include-chain error surfacing without a full codegen/link.
 
 ### Guitarix FX chains (`gxfx_dsp*.cpp` + `gxfx_mb.cpp` + `gxfx_host.cpp`)
 
-Per-instance insert chains: a catalog of **82 guitarix effects (481
+Per-instance insert chains: a catalog of **83 guitarix effects (520
 params)** — categories wah, drive, dynamics, eq, modulation, delay,
 reverb, amp, tonestack, multiband, utility, special — loaded into **11
 user-assignable slots** per OB-Xf instance. A slot holds any effect type
@@ -824,6 +825,19 @@ chorus → flanger → phaser → tremolo → delay → echo → reverb).
   `gxfx_shims/fftw3.h`, a shim mapping the fftw3 API onto the same
   vendored kissfft; the tuner's pitch readout is polled from the UI via
   the per-slot `fx_get_out_param` out-param export.
+- **Phase 3 live looper** — `gxfx_dsp_looper.cpp` wraps
+  gx_livelooper.lv2's bundle-local `livelooper.cc` (hand-tweaked faust,
+  NOT the gx_head engine class) with the `gxfx_shims/sndfile.hh` stub:
+  its `sf_open` always fails, so the wave save/load paths (`load_array`/
+  `save_to_wave`) return early and loops start EMPTY each session (no
+  fork, no libsndfile, zero guitarix source edits — `getenv("HOME")`
+  inside those paths stays unshimmed and degrades harmlessly under wasm).
+  39 params (rec/play/rplay toggles per tape, clip windows, speeds,
+  levels; the ttl's `pprop:trigger` reset/rback buttons are rescued into
+  the param mirror via the generator's `keepPorts`) + 8 meter OUTPUT
+  ports (bar1..4 remaining record time, playh1..4 play-head per-mille)
+  connected into `g_fx_out` and polled like the tuner's FREQ. See Known
+  Issues for the 64 MB-per-instance lazy tape cost.
 - `gxfx_host.cpp` owns the runtime: each chain is 11 slots (slot index =
   chain position; each slot holds ANY effect type — duplicates allowed —
   or -1 = empty, default chain = canonical 11); params/enabled/DSP
@@ -873,7 +887,7 @@ chorus → flanger → phaser → tremolo → delay → echo → reverb).
 | `transport-sync.ts` | Wires PLAY/STOP/BPM to the Octopus engine (controller `oct_*` messages) and updates the on-screen transport indicator; seeds the tempo display from the shared status block. |
 | `state-persistence.ts` | Octopus sequencer state save/load as BYTES through the worklet (`ctl.saveState()`/`ctl.loadState()`), stored in the octobx projects IndexedDB (idb-projects.ts); localStorage holds only the project index + active-project name. Internal GRID+PGM saves arrive as `oct_state_saved` bytes → `onStateSavedBytes` (auto-save + download). LOAD imports `.bin` files via `ctl.loadState()`. Shift+LOAD purges legacy `EM_FS_*` IDBFS leftovers + clears app state (recovery). Boot auto-load comes from the active project inside `bootOctopusEngine()`. |
 | `app-state.ts` | Synth + drum + FX state persistence. Dumps all synth (10×108) and drum (8×4×108) params from the AWP in bulk, plus per-instance settings (power, polyphony, channel, MPE, bend range), drum kit, and the guitarix FX rack (optional `fx` field; absent = engine defaults), to localStorage JSON. Restores after AWP ready via `onAWPReady` callback. |
-| `gxfx-params.ts` | Guitarix FX param tables — 82 effects / 481 params across 12 categories, 10 instances × 11 slots. AUTO-GENERATED by `tools/gen-gxfx-params.mjs` (v1 eleven + six Phase-2 conv/FFT effects pinned in `tools/gxfx-param-spec.json`; Phase-1 additions parsed from the guitarix ttl). Ports, min/max/step/default in ENGINE units + the 0..1 ↔ engine transforms the knob UI uses. Cross-checked by `test/gxfx-params.test.ts`. |
+| `gxfx-params.ts` | Guitarix FX param tables — 83 effects / 520 params across 12 categories, 10 instances × 11 slots. AUTO-GENERATED by `tools/gen-gxfx-params.mjs` (v1 eleven + six Phase-2 conv/FFT effects pinned in `tools/gxfx-param-spec.json`; Phase-1 additions parsed from the guitarix ttl). Ports, min/max/step/default in ENGINE units + the 0..1 ↔ engine transforms the knob UI uses. Cross-checked by `test/gxfx-params.test.ts`. |
 | `drum-rack.ts` | Drum module UI: kit selector, 8 pads × 4 layers with dual sample-kit + sample dropdowns (cross-kit sample mixing via `DrumLayer.sourceUrl` + `SAMPLE_CATALOG`), mute/enable toggles, and per-layer knob strips (48 controls: 8 global + 40 per-layer). SVG arc knobs with iOS-style toggle pills and tri-state LFO-routing pills. Layer section has Gain/Pan/Pitch knobs with custom dispatch (bypass `g_drum_layer_params`, update `DrumLayer` object + `pushLayer` → `set_pcm_layer`). `syncEditor`/`syncKnobStrips` re-seed knob positions on pad/layer switch. |
 | `drum-audio.ts` | Main-thread audio bootstrap for the drum module on OB-Xf instance 9 (32 voices). `loadDrumKit` fetches samples from smpldsnds CDN, decodes via `AudioContext.decodeAudioData`, posts float arrays to the worklet via `obxd_load_pcm`. Per-layer URL resolution via `layerSampleUrl(lyr, kitSource)` (`lyr.sourceUrl ?? kitSource`) supports cross-kit sample mixing. Serialized via `kitLoadChain` promise chain (prevents concurrent loads). `sendLayerParams` pushes per-layer params (gain, filter, amp env, pan, pitch). `seedLayerMirror` seeds `g_drum_layer_params` on load. `pushLayer` re-sends one layer's full param set. |
 | `drum-state.ts` | Pure data layer: `DrumLayer` / `DrumPad` / `DrumKit` interfaces + factory functions. No project dependencies. `DrumLayer` fields: enabled, sampleName, sourceUrl (optional — when set, sample loads from this URL prefix instead of the loaded kit's source; enables cross-kit sample mixing), gain, filterCutoff/Resonance/Mode, amp ADSR, pan, pitch (0..1, 0.5=original), muted, `_seeded` flag. |
@@ -1171,13 +1185,14 @@ FX chains (bulk `fx_restore_state`).
 `obxf-dispatch-coverage`, `sentinel-migration`, `dense-layer-index`,
 `awp-task-queue`, `mixer-store`, `gxfx-params`) — 252 tests, no browser
 required. `npm run test:wasm` additionally exercises the built synth WASM
-under Node (`tools/verify-obxd-wasm.mjs`, 39 checks — incl. 19
+under Node (`tools/verify-obxd-wasm.mjs`, 40 checks — incl. 20
 guitarix-FX checks: surface + slot round-trip, duplicate effects with
 independent params, slot move, defaults reset on slot change, tail
 continuation, hard bypass, bulk restore, per-family DSP spot checks
-(multiband/drive/eq/wah/mod/time/reverb/amp), and the Phase 2
+(multiband/drive/eq/wah/mod/time/reverb/amp), the Phase 2
 convolver/detune/tuner checks incl. the `fx_get_out_param` tuner
-readout).
+readout, and the Phase 3 looper record/play round-trip with its 128 MB
+activation-heap probe).
 `npm run test:octopus` drives the built Octopus engine WASM behaviorally in
 headless Chromium (`tools/verify-octopus-wasm.mjs`, playwright-core +
 system Chromium, serving `dist/` with COOP/COEP): 10 manual-grounded
@@ -1250,7 +1265,14 @@ browser console:
 6. **Some FX slots allocate large fixed buffers when assigned** — digital
    delay ≈4 MB per slot (mono, dual-mono ≈8 MB), shimmizita ≈4.8 MB, room
    simulator ≈3.8 MB. WASM heap growth is enabled, but loading many
-   delay-heavy slots grows memory accordingly.
+   delay-heavy slots grows memory accordingly. The **live looper** is the
+   heavyweight: each DSP instance lazily `new`s its 4 tapes on activation
+   (`TAPESIZE` 4,194,304 floats × 4 bytes = **16 MB per tape**, × 4 tapes
+   = **64 MB per DSP instance**), and the looper is mono so the host runs
+   it dual-mono — an enabled looper slot costs **≈128 MB** on the first
+   render after enable. Loops start empty each session (the `sndfile.hh`
+   shim's opens always fail, so wave save/load no-op) and the heap never
+   shrinks — enable looper slots sparingly.
 
 ## License
 

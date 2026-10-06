@@ -142,6 +142,13 @@ PluginLV2* gxfx_create_detune();
 // neutralized by gxfx_shims; the FREQ control OUTPUT port is the first
 // real g_fx_out consumer — audio passes through bit-identical)
 PluginLV2* gxfx_create_tuner();
+// looper (gxfx_dsp_looper.cpp, Phase 3): gx_livelooper.lv2's bundle-local
+// hand-tweaked faust class over the sndfile.hh include-order stub (wave
+// save/load no-op — loops start empty each session). 64 MiB of tapes per
+// DSP instance (4 x TAPESIZE 4194304 floats), lazily new'd on activate —
+// mono → dual-mono → an enabled looper slot costs 128 MiB on the first
+// render after enable; bar1..4/playh1..4 meter outs feed g_fx_out.
+PluginLV2* gxfx_create_livelooper();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -226,7 +233,8 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_metalamp,
     gxfx_create_metalhead,
     gxfx_create_detune,
-    gxfx_create_tuner
+    gxfx_create_tuner,
+    gxfx_create_livelooper
 };
 
 // Generator↔host drift guard: the factory registry above must list every

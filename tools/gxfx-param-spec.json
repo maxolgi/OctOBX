@@ -6682,6 +6682,503 @@
           "integer": false
         }
       ]
+    },
+    {
+      "id": 82,
+      "key": "livelooper",
+      "label": "Live Looper",
+      "dsp": "livelooper",
+      "stereo": false,
+      "category": "special",
+      "out_ports": [
+        {
+          "port": 14,
+          "symbol": "bar1",
+          "name": "Bar1",
+          "min": 0,
+          "max": 96
+        },
+        {
+          "port": 15,
+          "symbol": "bar2",
+          "name": "Bar2",
+          "min": 0,
+          "max": 96
+        },
+        {
+          "port": 16,
+          "symbol": "bar3",
+          "name": "Bar3",
+          "min": 0,
+          "max": 96
+        },
+        {
+          "port": 17,
+          "symbol": "bar4",
+          "name": "Bar4",
+          "min": 0,
+          "max": 96
+        },
+        {
+          "port": 32,
+          "symbol": "playh1",
+          "name": "Playh1",
+          "min": 0,
+          "max": 1000
+        },
+        {
+          "port": 33,
+          "symbol": "playh2",
+          "name": "Playh2",
+          "min": 0,
+          "max": 1000
+        },
+        {
+          "port": 34,
+          "symbol": "playh3",
+          "name": "Playh3",
+          "min": 0,
+          "max": 1000
+        },
+        {
+          "port": 35,
+          "symbol": "playh4",
+          "name": "Playh4",
+          "min": 0,
+          "max": 1000
+        }
+      ],
+      "params": [
+        {
+          "port": 2,
+          "symbol": "clip1",
+          "name": "Clip 1",
+          "default": 100,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "clip2",
+          "name": "Clip 2",
+          "default": 100,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "clip3",
+          "name": "Clip 3",
+          "default": 100,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "clip4",
+          "name": "Clip 4",
+          "default": 100,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "clips1",
+          "name": "Clip Size 1",
+          "default": 0,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "clips2",
+          "name": "Clip Size 2",
+          "default": 0,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "clips3",
+          "name": "Clip Size 3",
+          "default": 0,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "clips4",
+          "name": "Clip Size 4",
+          "default": 0,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "speed1",
+          "name": "Speed 1",
+          "default": 0,
+          "min": -0.9,
+          "max": 0.9,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 11,
+          "symbol": "speed2",
+          "name": "Speed 2",
+          "default": 0,
+          "min": -0.9,
+          "max": 0.9,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 12,
+          "symbol": "speed3",
+          "name": "Speed 3",
+          "default": 0,
+          "min": -0.9,
+          "max": 0.9,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 13,
+          "symbol": "speed4",
+          "name": "Speed 4",
+          "default": 0,
+          "min": -0.9,
+          "max": 0.9,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 18,
+          "symbol": "gain",
+          "name": "Gain",
+          "default": 0,
+          "min": -20,
+          "max": 12,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 19,
+          "symbol": "level1",
+          "name": "Level 1",
+          "default": 50,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 20,
+          "symbol": "level2",
+          "name": "Level 2",
+          "default": 50,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 21,
+          "symbol": "level3",
+          "name": "Level 3",
+          "default": 50,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 22,
+          "symbol": "level4",
+          "name": "Level 4",
+          "default": 50,
+          "min": 0,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 23,
+          "symbol": "mix",
+          "name": "Mix",
+          "default": 100,
+          "min": 0,
+          "max": 150,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 24,
+          "symbol": "play1",
+          "name": "Play 1",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 25,
+          "symbol": "play2",
+          "name": "Play 2",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 26,
+          "symbol": "play3",
+          "name": "Play 3",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 27,
+          "symbol": "play4",
+          "name": "Play 4",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 28,
+          "symbol": "rplay1",
+          "name": "Rev Play 1",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 29,
+          "symbol": "rplay2",
+          "name": "Rev Play 2",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 30,
+          "symbol": "rplay3",
+          "name": "Rev Play 3",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 31,
+          "symbol": "rplay4",
+          "name": "Rev Play 4",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 36,
+          "symbol": "rec1",
+          "name": "Rec 1",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 37,
+          "symbol": "rec2",
+          "name": "Rec 2",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 38,
+          "symbol": "rec3",
+          "name": "Rec 3",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 39,
+          "symbol": "rec4",
+          "name": "Rec 4",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 40,
+          "symbol": "reset1",
+          "name": "Reset 1",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 41,
+          "symbol": "reset2",
+          "name": "Reset 2",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 42,
+          "symbol": "reset3",
+          "name": "Reset 3",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 43,
+          "symbol": "reset4",
+          "name": "Reset 4",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 44,
+          "symbol": "rback1",
+          "name": "Rewind 1",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 45,
+          "symbol": "rback2",
+          "name": "Rewind 2",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 46,
+          "symbol": "rback3",
+          "name": "Rewind 3",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 47,
+          "symbol": "rback4",
+          "name": "Rewind 4",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        },
+        {
+          "port": 48,
+          "symbol": "synct",
+          "name": "Sync Tapes",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": true,
+          "integer": false
+        }
+      ]
     }
   ]
 }
