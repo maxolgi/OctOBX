@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(38);
+        expect(FX_COUNT).toBe(45);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -101,6 +101,9 @@ describe("gxfx-params — layout invariants", () => {
             "eq", "eq", "eq", "eq", "eq", "eq", // graphiceq, selecteq, tonecontroll, moog, low_high_pass, noise_shaper
             // Phase 1-c wah family (34..37)
             "wah", "wah", "wah", "wah",      // wahmodel, crybaby, autowah, dunwah
+            // Phase 1-d modulation family (38..44)
+            "modulation", "modulation", "modulation", "modulation", // vibe, tubetremelo, tubevibrato, switched_tremolo
+            "modulation", "modulation", "modulation", // phaser_st, flanger_st, chorus_mono
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -108,14 +111,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 151", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 197", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(151);
-        expect(FX_TOTAL_PARAMS).toBe(151);
+        expect(running).toBe(197);
+        expect(FX_TOTAL_PARAMS).toBe(197);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -185,16 +188,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..37", () => {
-        for (let i = 0; i < 38; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..44", () => {
+        for (let i = 0; i < 45; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(38)).toBe(false);
+        expect(isFxId(45)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(38, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(45, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -375,5 +378,90 @@ describe("gxfx-params — Phase 1-c wah family additions", () => {
         expect(manual.label).toBe("Classic Wah");
         expect(manual.params).toHaveLength(1);
         expect(manual.params[0]).toMatchObject({ port: 3, symbol: "WAH", name: "Wah", default: 0, min: 0, max: 1, step: 0.01 });
+    });
+});
+
+describe("gxfx-params — Phase 1-d modulation family additions", () => {
+    it("vibe (bundle ttl, STEREO): 8 params at wrapper/ttl ports, default FB -0.6, TEMPO 4.4", () => {
+        const fx = FX_EFFECTS[38];
+        expect(fx.key).toBe("vibe");
+        expect(fx.label).toBe("Vibe");
+        expect(fx.category).toBe("modulation");
+        expect(fx.stereo).toBe(true); // plugin_stereo() — in/in1 in the ttl
+        expect(fx.params.map((p) => p.symbol)).toEqual(["WIDTH", "DEPTH", "WETDRY", "FB", "TEMPO", "DF", "PAN", "CROSS"]);
+        expect(fx.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4, 7, 8, 9]);
+        expect(fx.params.map((p) => p.name)).toEqual(["Width", "Depth", "Dry/Wet", "Feedback", "Tempo", "L/R Phase", "Pan", "Cross"]);
+        expect(fx.params[0]).toMatchObject({ default: 0.5, min: 0, max: 1 });
+        expect(fx.params[3]).toMatchObject({ default: -0.6, min: -1, max: 1 });
+        expect(fx.params[4]).toMatchObject({ default: 4.4, min: 0.1, max: 10 });
+        expect(fx.params[5]).toMatchObject({ default: 0.11, min: -0.5, max: 0.5 });
+        expect(fxParamFrom01(38, 3, 0.5)).toBe(0); // FB midpoint = 0
+    });
+
+    it("tube tremolo/vibrato (ttl): 5 params, SineWave integer 0..1; vibrato output range is ttl's 0..1", () => {
+        const tt = FX_EFFECTS[39];
+        expect(tt.key).toBe("tubetremelo");
+        expect(tt.label).toBe("Tube Tremolo");
+        expect(tt.stereo).toBe(false); // mono -> dual-mono
+        expect(tt.params.map((p) => p.symbol)).toEqual(["sinewave", "depth", "speed", "drive", "output"]);
+        expect(tt.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4]);
+        expect(tt.params[0]).toMatchObject({ name: "Sine Wave", default: 0, min: 0, max: 1, step: 1, integer: true });
+        expect(tt.params[2]).toMatchObject({ default: 3, min: 0.1, max: 14 });
+        expect(tt.params[4]).toMatchObject({ default: 0, min: -20, max: 20 });
+        const tv = FX_EFFECTS[40];
+        expect(tv.key).toBe("tubevibrato");
+        expect(tv.label).toBe("Tube Vibrato");
+        expect(tv.stereo).toBe(false);
+        expect(tv.params.map((p) => p.symbol)).toEqual(["sinewave", "depth", "speed", "drive", "output"]);
+        // ttl ships 0..1 for the vibrato OUTPUT (upstream range change vs the
+        // .cc comment's -20..20) — faithful to the ttl, per generator policy
+        expect(tv.params[4]).toMatchObject({ default: 0.5, min: 0, max: 1 });
+    });
+
+    it("switched tremolo (ttl): 8 params at ttl ports 2..9", () => {
+        const fx = FX_EFFECTS[41];
+        expect(fx.key).toBe("switched_tremolo");
+        expect(fx.label).toBe("Switched Tremolo");
+        expect(fx.stereo).toBe(false);
+        expect(fx.params.map((p) => p.symbol)).toEqual(["DEPTH", "FREQ0", "FREQ1", "FREQ2", "FREQ3", "STEPS", "SWITCHFREQ", "WET_DRY"]);
+        expect(fx.params.map((p) => p.port)).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
+        expect(fx.params.map((p) => p.name)).toEqual(["Depth", "Freq 0", "Freq 1", "Freq 2", "Freq 3", "Steps", "Switch Freq", "Dry/Wet"]);
+        expect(fx.params[5]).toMatchObject({ default: 4, min: 1, max: 4 });
+        expect(fx.params[7]).toMatchObject({ default: 50, min: 0, max: 100 });
+    });
+
+    it("classic phaser/flanger orphans are STEREO; chorus_mono is mono — distinct from v1 ids 4/5/6", () => {
+        const ph = FX_EFFECTS[42];
+        expect(ph.key).toBe("phaser_st");
+        expect(ph.label).toBe("Classic Phaser");
+        expect(ph.stereo).toBe(true);
+        expect(ph.params.map((p) => p.symbol)).toEqual([
+            "MAXNOTCH1FREQ", "MINNOTCH1FREQ", "NOTCHWIDTH", "NOTCHFREQ", "SPEED",
+            "VIBRATOMODE", "DEPTH", "FEEDBACKGAIN", "INVERT", "LEVEL",
+        ]);
+        expect(ph.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        expect(ph.params[0]).toMatchObject({ default: 800, min: 20, max: 10000, step: 1 });
+        expect(ph.params[3]).toMatchObject({ default: 1.5, min: 1.1, max: 4, step: 0.01 });
+        expect(ph.params[9]).toMatchObject({ default: 0, min: -60, max: 10, step: 0.1 });
+        const fl = FX_EFFECTS[43];
+        expect(fl.key).toBe("flanger_st");
+        expect(fl.label).toBe("Classic Flanger");
+        expect(fl.stereo).toBe(true);
+        expect(fl.params.map((p) => p.symbol)).toEqual(["LFOFREQ", "DEPTH", "FEEDBACKGAIN", "DELAY", "DELAYOFFSET", "INVERT", "LEVEL"]);
+        expect(fl.params.map((p) => p.name)).toEqual(["LFO Freq", "Depth", "Feedback Gain", "Delay", "Delay Offset", "Invert", "Level"]);
+        expect(fl.params[0]).toMatchObject({ default: 0.2, min: 0, max: 5, step: 0.01 });
+        expect(fl.params[3]).toMatchObject({ default: 10, min: 0, max: 20, step: 0.01 });
+        const cm = FX_EFFECTS[44];
+        expect(cm.key).toBe("chorus_mono");
+        expect(cm.label).toBe("Chorus Mono");
+        expect(cm.stereo).toBe(false);
+        expect(cm.params.map((p) => p.symbol)).toEqual(["FREQ", "LEVEL", "WET_DRY"]);
+        expect(cm.params.map((p) => p.port)).toEqual([0, 1, 2]);
+        expect(cm.params[0]).toMatchObject({ default: 2, min: 0, max: 10, step: 0.01 });
+        expect(cm.params[2]).toMatchObject({ default: 100, min: 0, max: 100, step: 1 });
+        // distinctness from the v1 entries (chorus id 4 stereo, flanger id 5
+        // gx_flanger class, phaser id 6 phaser_mono class)
+        expect(FX_EFFECTS[5].params.map((p) => p.symbol)).not.toContain("LFOFREQ");
+        expect(FX_EFFECTS[6].params).toHaveLength(3);
     });
 });

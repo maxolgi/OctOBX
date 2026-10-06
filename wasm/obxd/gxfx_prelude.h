@@ -7,6 +7,13 @@
 #include <algorithm>
 #include <cstring>
 #include <unistd.h>
+// Unqualified min/max at global scope: gx_vibe.lv2/vibe.cc's lfo namespaces
+// call min(192000, max(1, rate)) bare (upstream they resolve through the
+// gx_common.h include chain we do not pull). <algorithm> is already included
+// above; these using-declarations expose std::min/std::max globally for all
+// gxfx TUs (Phase 1-d).
+using std::min;
+using std::max;
 #define FAUSTFLOAT float
 #ifndef N_
 #define N_(String) (String)

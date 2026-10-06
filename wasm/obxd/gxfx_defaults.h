@@ -25,7 +25,7 @@
 #ifndef GXFX_DEFAULTS_H
 #define GXFX_DEFAULTS_H
 
-#define GXFX_EFFECT_COUNT 38
+#define GXFX_EFFECT_COUNT 45
 #define GXFX_PORTS_ROW 30
 
 static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
@@ -371,11 +371,74 @@ static const float FX_DEFAULTS[GXFX_EFFECT_COUNT][48] = {
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
             0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
     },
+    /* 38: vibe — 8 params + 40 pad */
+    {
+            0.5f,   0.37f,    1.0f,   -0.6f,    4.4f,   0.11f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 39: tubetremelo — 5 params + 43 pad */
+    {
+            0.0f,    0.5f,    3.0f,    0.5f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 40: tubevibrato — 5 params + 43 pad */
+    {
+            0.0f,    0.5f,    3.0f,    0.5f,    0.5f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 41: switched_tremolo — 8 params + 40 pad */
+    {
+            0.5f,    1.0f,    2.0f,    4.0f,    8.0f,    4.0f,    1.0f,   50.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 42: phaser_st — 10 params + 38 pad */
+    {
+          800.0f,  100.0f, 1000.0f,    1.5f,    0.5f,    0.0f,    1.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 43: flanger_st — 7 params + 41 pad */
+    {
+            0.2f,    1.0f,    0.0f,   10.0f,    1.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
+    /* 44: chorus_mono — 3 params + 45 pad */
+    {
+            2.0f,    0.5f,  100.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+            0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,    0.0f,
+    },
 };
 
-static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2, 11, 30, 5, 2, 6, 1, 5, 3, 0, 1 };
+static const int FX_PARAM_COUNTS[GXFX_EFFECT_COUNT] = { 2, 1, 3, 5, 4, 6, 3, 4, 7, 7, 5, 2, 4, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 5, 2, 11, 30, 5, 2, 6, 1, 5, 3, 0, 1, 8, 5, 5, 8, 10, 7, 3 };
 
-static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0 };
+static const int FX_STEREO[GXFX_EFFECT_COUNT] = { 0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,0,0,0,1,1,0 };
 
 static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     /*  0: wah */
@@ -454,6 +517,20 @@ static const int FX_PORTS[GXFX_EFFECT_COUNT][GXFX_PORTS_ROW] = {
     {  },
     /* 37: dunwah */
     { 3 },
+    /* 38: vibe */
+    { 0,1,2,3,4,7,8,9 },
+    /* 39: tubetremelo */
+    { 0,1,2,3,4 },
+    /* 40: tubevibrato */
+    { 0,1,2,3,4 },
+    /* 41: switched_tremolo */
+    { 2,3,4,5,6,7,8,9 },
+    /* 42: phaser_st */
+    { 0,1,2,3,4,5,6,7,8,9 },
+    /* 43: flanger_st */
+    { 0,1,2,3,4,5,6 },
+    /* 44: chorus_mono */
+    { 0,1,2 },
 };
 
 #endif /* GXFX_DEFAULTS_H */

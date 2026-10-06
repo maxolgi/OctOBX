@@ -32,9 +32,13 @@ function defaultSlotParams(fxId: number): number[] {
 
 function defaultState(): FxInstanceState {
     return {
-        slots: FX_EFFECTS.map((e) => e.id),   // canonical chain: slot i → fx i
+        // canonical chain: slot i → fx i for the first FX_SLOTS (11)
+        // effects — the engine's gxfx_init default, NOT one slot per
+        // catalog entry. Per-instance dims: FX_SLOTS slots ×
+        // FX_SLOTS*FX_SLOT_PARAMS params.
+        slots: FX_EFFECTS.slice(0, FX_SLOTS).map((e) => e.id),
         enabled: new Array<boolean>(FX_SLOTS).fill(false),
-        params: FX_EFFECTS.flatMap((e) => defaultSlotParams(e.id)),
+        params: FX_EFFECTS.slice(0, FX_SLOTS).flatMap((e) => defaultSlotParams(e.id)),
     };
 }
 

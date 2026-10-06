@@ -63,6 +63,16 @@ PluginLV2* gxfx_create_wahmodel();
 PluginLV2* gxfx_create_crybaby();
 PluginLV2* gxfx_create_autowah();
 PluginLV2* gxfx_create_dunwah();
+// modulation family (gxfx_dsp_mod.cpp, Phase 1-d — bundle-local gx_vibe
+// stereo + 12ax7 tube tremolo/vibrato + switched tremolo + the classic
+// stereo phaser / stereo flanger / mono chorus orphans)
+PluginLV2* gxfx_create_vibe();
+PluginLV2* gxfx_create_tubetremelo();
+PluginLV2* gxfx_create_tubevibrato();
+PluginLV2* gxfx_create_switched_tremolo();
+PluginLV2* gxfx_create_phaser_st();
+PluginLV2* gxfx_create_flanger_st();
+PluginLV2* gxfx_create_chorus_mono();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -103,7 +113,14 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_wahmodel,
     gxfx_create_crybaby,
     gxfx_create_autowah,
-    gxfx_create_dunwah
+    gxfx_create_dunwah,
+    gxfx_create_vibe,
+    gxfx_create_tubetremelo,
+    gxfx_create_tubevibrato,
+    gxfx_create_switched_tremolo,
+    gxfx_create_phaser_st,
+    gxfx_create_flanger_st,
+    gxfx_create_chorus_mono
 };
 
 // Generator↔host drift guard: the factory registry above must list every

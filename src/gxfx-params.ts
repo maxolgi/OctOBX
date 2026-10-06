@@ -13,7 +13,7 @@
  * Freshness check:    node tools/gen-gxfx-params.mjs --check   (CI gate)
  */
 
-export const FX_COUNT = 38;
+export const FX_COUNT = 45;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
 export const FX_SLOT_PARAMS = 48;
@@ -40,7 +40,7 @@ export interface FxEffectDef {
     label: string;
     category: FxCategory;
     stereo: boolean;
-    offset: number;    // cumulative param offset into the flat 151-slot mirror
+    offset: number;    // cumulative param offset into the flat 197-slot mirror
     params: FxParamDef[];
 }
 
@@ -48,7 +48,7 @@ export interface FxEffectDef {
  * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →
  * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the
  * Phase-1 additions selectable per slot.
- * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150. */
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194. */
 export const FX_EFFECTS: FxEffectDef[] = [
     {
         id: 0, key: "wah", label: "Wah", category: "wah", stereo: false, offset: 0,
@@ -391,9 +391,90 @@ export const FX_EFFECTS: FxEffectDef[] = [
             { port: 3, symbol: "WAH", name: "Wah", default: 0, min: 0, max: 1, step: 0.01 },
         ],
     },
+    {
+        id: 38, key: "vibe", label: "Vibe", category: "modulation", stereo: true, offset: 151,
+        params: [
+            { port: 0, symbol: "WIDTH", name: "Width", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "DEPTH", name: "Depth", default: 0.37, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "WETDRY", name: "Dry/Wet", default: 1, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "FB", name: "Feedback", default: -0.6, min: -1, max: 1, step: 0.01 },
+            { port: 4, symbol: "TEMPO", name: "Tempo", default: 4.4, min: 0.1, max: 10, step: 0.1 },
+            { port: 7, symbol: "DF", name: "L/R Phase", default: 0.11, min: -0.5, max: 0.5, step: 0.01 },
+            { port: 8, symbol: "PAN", name: "Pan", default: 0, min: -1, max: 1, step: 0.01 },
+            { port: 9, symbol: "CROSS", name: "Cross", default: 0, min: -1, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 39, key: "tubetremelo", label: "Tube Tremolo", category: "modulation", stereo: false, offset: 159,
+        params: [
+            { port: 0, symbol: "sinewave", name: "Sine Wave", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 1, symbol: "depth", name: "Depth", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "speed", name: "Speed", default: 3, min: 0.1, max: 14, step: 0.1 },
+            { port: 3, symbol: "drive", name: "Drive", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 4, symbol: "output", name: "Output", default: 0, min: -20, max: 20, step: 1 },
+        ],
+    },
+    {
+        id: 40, key: "tubevibrato", label: "Tube Vibrato", category: "modulation", stereo: false, offset: 164,
+        params: [
+            { port: 0, symbol: "sinewave", name: "Sine Wave", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 1, symbol: "depth", name: "Depth", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "speed", name: "Speed", default: 3, min: 0.1, max: 14, step: 0.1 },
+            { port: 3, symbol: "drive", name: "Drive", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 4, symbol: "output", name: "Output", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 41, key: "switched_tremolo", label: "Switched Tremolo", category: "modulation", stereo: false, offset: 169,
+        params: [
+            { port: 2, symbol: "DEPTH", name: "Depth", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "FREQ0", name: "Freq 0", default: 1, min: 0.25, max: 15, step: 0.1 },
+            { port: 4, symbol: "FREQ1", name: "Freq 1", default: 2, min: 0.25, max: 15, step: 0.1 },
+            { port: 5, symbol: "FREQ2", name: "Freq 2", default: 4, min: 0.25, max: 15, step: 0.1 },
+            { port: 6, symbol: "FREQ3", name: "Freq 3", default: 8, min: 0.25, max: 15, step: 0.1 },
+            { port: 7, symbol: "STEPS", name: "Steps", default: 4, min: 1, max: 4, step: 0.01 },
+            { port: 8, symbol: "SWITCHFREQ", name: "Switch Freq", default: 1, min: 0.25, max: 5, step: 0.1 },
+            { port: 9, symbol: "WET_DRY", name: "Dry/Wet", default: 50, min: 0, max: 100, step: 1 },
+        ],
+    },
+    {
+        id: 42, key: "phaser_st", label: "Classic Phaser", category: "modulation", stereo: true, offset: 177,
+        params: [
+            { port: 0, symbol: "MAXNOTCH1FREQ", name: "Max Notch Freq", default: 800, min: 20, max: 10000, step: 1 },
+            { port: 1, symbol: "MINNOTCH1FREQ", name: "Min Notch Freq", default: 100, min: 20, max: 5000, step: 1 },
+            { port: 2, symbol: "NOTCHWIDTH", name: "Notch Width", default: 1000, min: 10, max: 5000, step: 1 },
+            { port: 3, symbol: "NOTCHFREQ", name: "Notch Freq", default: 1.5, min: 1.1, max: 4, step: 0.01 },
+            { port: 4, symbol: "SPEED", name: "Speed", default: 0.5, min: 0, max: 10, step: 0.01 },
+            { port: 5, symbol: "VIBRATOMODE", name: "Vibrato Mode", default: 0, min: 0, max: 1, step: 1 },
+            { port: 6, symbol: "DEPTH", name: "Depth", default: 1, min: 0, max: 1, step: 0.01 },
+            { port: 7, symbol: "FEEDBACKGAIN", name: "Feedback Gain", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 8, symbol: "INVERT", name: "Invert", default: 0, min: 0, max: 1, step: 1 },
+            { port: 9, symbol: "LEVEL", name: "Level", default: 0, min: -60, max: 10, step: 0.1 },
+        ],
+    },
+    {
+        id: 43, key: "flanger_st", label: "Classic Flanger", category: "modulation", stereo: true, offset: 187,
+        params: [
+            { port: 0, symbol: "LFOFREQ", name: "LFO Freq", default: 0.2, min: 0, max: 5, step: 0.01 },
+            { port: 1, symbol: "DEPTH", name: "Depth", default: 1, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "FEEDBACKGAIN", name: "Feedback Gain", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "DELAY", name: "Delay", default: 10, min: 0, max: 20, step: 0.01 },
+            { port: 4, symbol: "DELAYOFFSET", name: "Delay Offset", default: 1, min: 0, max: 20, step: 0.01 },
+            { port: 5, symbol: "INVERT", name: "Invert", default: 0, min: 0, max: 1, step: 1 },
+            { port: 6, symbol: "LEVEL", name: "Level", default: 0, min: -60, max: 10, step: 0.1 },
+        ],
+    },
+    {
+        id: 44, key: "chorus_mono", label: "Chorus Mono", category: "modulation", stereo: false, offset: 194,
+        params: [
+            { port: 0, symbol: "FREQ", name: "Freq", default: 2, min: 0, max: 10, step: 0.01 },
+            { port: 1, symbol: "LEVEL", name: "Level", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "WET_DRY", name: "Dry/Wet", default: 100, min: 0, max: 100, step: 1 },
+        ],
+    },
 ];
 
-export const FX_TOTAL_PARAMS = 151;
+export const FX_TOTAL_PARAMS = 197;
 
 // --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
 

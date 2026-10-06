@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ===========================================================================
 // gen-gxfx-params.mjs — generates every consumable artifact of the guitarix
-// FX param spec (fx2plan.md Phase 1-a/1-b/1-c: manifest-driven, ttl-parsing).
+// FX param spec (fx2plan.md Phase 1-a/1-b/1-c/1-d: manifest-driven, ttl-parsing).
 //
 // SOURCE OF TRUTH for param DATA, per effect kind:
 //   - v1 eleven (wah..reverb, ids 0..10): PINNED in
@@ -151,6 +151,18 @@ const V1_KEYS = Object.keys(V1_CATEGORY_BY_KEY);
 // by the bundle's circuit-modelled dunwahauto, per fx2plan "use gxautowah
 // bundle's local dunwahauto.cc"). low_high_cut.cc is a wrapper companion
 // (skip per fx2plan).
+// Phase 1-d ships the modulation family: the bundle-local gx_vibe.lv2
+// vibe.cc STEREO Uni-Vibe-style class (the file also has plugin_mono(); the
+// mono variant stays unshipped), the 12ax7-table gxtubetremelo + gxtubevibrato
+// bundles, the gx_switched_tremolo bundle (multi-step stepped tremolo), and
+// three classic faust orphans — phaser.cc (stereo 10-param, distinct from
+// v1's mono phaser id 6), flanger.cc (stereo, distinct from v1's gx_flanger
+// id 5) and chorus_mono.cc (mono, v1's chorus id 4 is the stereo class).
+// Also present but NOT shipped here: flanger_mono.cc / phaser_mono.cc
+// (phaser_mono IS v1 id 6; flanger_mono duplicates the shipped classic
+// flanger in mono), gx_ampmodul.cc (fx2plan assigns it to the later
+// "utility" additions), gx_vibrochump.cc (a chump preamp — Phase 2
+// convolver redeye family).
 // ---------------------------------------------------------------------------
 const MANIFEST = [
     // --- v1 eleven (ids 0..10) — pinned data, canonical default chain ---
@@ -190,6 +202,21 @@ const MANIFEST = [
     { key: 'crybaby', menuName: 'Crybaby', category: 'wah', orphan: 'crybaby.cc' },
     { key: 'autowah', menuName: 'Auto Wah', category: 'wah', params: [] },
     { key: 'dunwah', menuName: 'Classic Wah', category: 'wah', params: [{ port: 3, symbol: 'WAH', name: 'Wah', default: 0, min: 0, max: 1, step: 0.01 }] },
+
+    // --- Phase 1-d: modulation family ---
+    // vibe: bundle-LOCAL dsp (gx_vibe.lv2/vibe.cc) — the ttl port space is
+    // the wrapper enum from gx_vibe.h, and the class ships plugin_stereo()
+    // + plugin_mono(); we instantiate the STEREO one (ttl declares in/in1).
+    { key: 'vibe', menuName: 'Vibe', category: 'modulation', ttl: 'gx_vibe.lv2/gx_vibe.ttl' },
+    { key: 'tubetremelo', menuName: 'Tube Tremolo', category: 'modulation', ttl: 'gxtubetremelo.lv2/gxtubetremelo.ttl' },
+    { key: 'tubevibrato', menuName: 'Tube Vibrato', category: 'modulation', ttl: 'gxtubevibrato.lv2/gxtubevibrato.ttl' },
+    { key: 'switched_tremolo', menuName: 'Switched Tremolo', category: 'modulation', ttl: 'gx_switched_tremolo.lv2/gx_switched_tremolo.ttl' },
+    // classic faust orphans; phaser/flanger are natively 2-in/2-out classes
+    // (stereo_audio only) — `stereo: true` overrides the orphan default so
+    // the host runs their stereo path instead of a dead dual-mono.
+    { key: 'phaser_st', menuName: 'Classic Phaser', category: 'modulation', orphan: 'phaser.cc', stereo: true },
+    { key: 'flanger_st', menuName: 'Classic Flanger', category: 'modulation', orphan: 'flanger.cc', stereo: true },
+    { key: 'chorus_mono', menuName: 'Chorus Mono', category: 'modulation', orphan: 'chorus_mono.cc' },
 ];
 
 const FX_COUNT = MANIFEST.length;
@@ -373,6 +400,30 @@ const LABEL_OVERRIDES = {
     LOW_FREQ: 'LP Freq',
     HIGH_FREQ: 'HP Freq',
     ON_OFF: 'LP/HP On/Off',
+    // --- Phase 1-d modulation family (ttl WETDRY/FB + dsp2cc-mangled
+    // multi-word symbols; names follow the .dsp tooltips) ---
+    // vibe (gx_vibe.ttl)
+    WETDRY: 'Dry/Wet',
+    FB: 'Feedback',
+    DF: 'L/R Phase',        // lfo phase offset between the two channels (turns)
+    // gxtubetremelo / gxtubevibrato (ttl symbol is lowercase "sinewave")
+    sinewave: 'Sine Wave',
+    SineWave: 'Sine Wave',
+    // switched_tremolo
+    FREQ0: 'Freq 0',
+    FREQ1: 'Freq 1',
+    FREQ2: 'Freq 2',
+    FREQ3: 'Freq 3',
+    SWITCHFREQ: 'Switch Freq',
+    // classic phaser / flanger orphans
+    MAXNOTCH1FREQ: 'Max Notch Freq',
+    MINNOTCH1FREQ: 'Min Notch Freq',
+    NOTCHWIDTH: 'Notch Width',
+    NOTCHFREQ: 'Notch Freq',
+    VIBRATOMODE: 'Vibrato Mode',
+    FEEDBACKGAIN: 'Feedback Gain',
+    LFOFREQ: 'LFO Freq',
+    DELAYOFFSET: 'Delay Offset',
 };
 
 function titleCase(s) {
