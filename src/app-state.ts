@@ -50,7 +50,13 @@ interface SaveStateData {
         selectedLayer: number;
         params: number[] | null;
     } | null;
-    /** Guitarix FX chains — absent/null = engine defaults (schema stays v2). */
+    /** Guitarix FX chains (slot model) — the exact bulk shape carried by
+     * getFxState()/restoreFxState(): `params` flat inst-major
+     * number[10*11*48] in ENGINE units (instance × slot × FX_SLOT_PARAMS),
+     * `slots` number[10*11] (slot → fx id, −1 = empty), `enabled`
+     * number[10*11] (0/1 per slot). Absent/null = engine defaults; payload
+     * shapes that fail restoreFxState's length checks (pre-slot-model fx
+     * saves) are dropped — no migration. */
     fx?: FxBulkState | null;
 }
 

@@ -26,14 +26,22 @@ import { createKnob } from "./knob";
 import { createGrMeter } from "./gr-meter";
 import { createMeterCanvas, type MeterHandle } from "./meter-canvas";
 import { createEqCurve } from "./eq-curve";
-import { FX_EFFECTS, FX_SLOTS, FX_INSTANCE_COUNT, FX_SLOT_PARAMS, fxParamTo01 } from "../gxfx-params";
-import { getFxInstance, setFxParamUI, setFxEnabledUI, moveSlotUI, onFxStateChange, type FxInstanceState } from "./fx-rack";
+import { FX_EFFECTS, FX_SLOTS, FX_INSTANCE_COUNT, FX_SLOT_PARAMS, fxParamTo01, type FxCategory } from "../gxfx-params";
+import { getFxInstance, setFxParamUI, setFxEnabledUI, setSlotUI, moveSlotUI, onFxStateChange, type FxInstanceState } from "./fx-rack";
 
 const fmtDb = (v: number) => v.toFixed(1);
 const fmtRatio = (v: number) => (v >= 20 ? "20:1" : v.toFixed(1) + ":1");
 const fmtHz = (v: number) => (v >= 1000 ? (v / 1000).toFixed(1) + "k" : v.toFixed(0));
 const fmtMs = (v: number) => (v < 1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : v.toFixed(0));
 const fmtFx = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
+
+/** Dropdown category order — derived from FX_EFFECTS (first appearance in
+ * the canonical chain order: wah, drive, dynamics, modulation, delay,
+ * reverb), never hardcoded. */
+const FX_CATEGORIES: FxCategory[] = [];
+for (const fx of FX_EFFECTS) {
+    if (!FX_CATEGORIES.includes(fx.category)) FX_CATEGORIES.push(fx.category);
+}
 
 function fmtPan(p: number): string {
     if (Math.abs(p) < 0.02) return "C";
@@ -356,6 +364,7 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
     if (t < FX_INSTANCE_COUNT) {
         let fxSlot = 0;
         let fxSlotLocked = false;
+        const fxRows: HTMLElement[] = [];   // live chain rows, index = slot
 
         const fxSection = document.createElement("div");
         fxSection.className = "detail-section";
@@ -410,14 +419,66 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
             }
         }
 
+        /** Select a chain slot for the edit area. Class toggle only — no
+         * chain rebuild, which would destroy a <select> the user is
+         * interacting with. */
+        function selectFxSlot(s: number): void {
+            fxSlot = s;
+            fxSlotLocked = true;
+            fxRows.forEach((el, i) => el.classList.toggle("selected", i === fxSlot));
+            renderFxEdit();
+        }
+
+        /** The per-slot effect dropdown: "(none)" above one optgroup per
+         * category (FX_CATEGORIES order), one option per effect. */
+        function buildFxSlotSelect(s: number, fxId: number): HTMLSelectElement {
+            const sel = document.createElement("select");
+            sel.className = "fx-slot-select";
+            sel.title = `Effect in chain slot ${s + 1}`;
+            const none = document.createElement("option");
+            none.value = "-1";
+            none.textContent = "(none)";
+            sel.appendChild(none);
+            for (const cat of FX_CATEGORIES) {
+                const group = document.createElement("optgroup");
+                group.label = cat.charAt(0).toUpperCase() + cat.slice(1);
+                for (const fx of FX_EFFECTS) {
+                    if (fx.category !== cat) continue;
+                    const opt = document.createElement("option");
+                    opt.value = String(fx.id);
+                    opt.textContent = fx.label;
+                    group.appendChild(opt);
+                }
+                sel.appendChild(group);
+            }
+            sel.value = String(fxId);
+            // Interacting with the dropdown picks the slot for the edit
+            // area; stopPropagation keeps the row click handler from
+            // re-rendering the chain while the popup is open.
+            sel.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                selectFxSlot(s);
+            });
+            sel.addEventListener("focus", () => selectFxSlot(s));
+            sel.addEventListener("change", (ev) => {
+                ev.stopPropagation();
+                fxSlot = s;
+                fxSlotLocked = true;
+                // Engine semantics: a slot change resets the slot's params
+                // to the new effect's defaults and clears its enabled flag;
+                // setSlotUI's notify re-renders chain + edit area.
+                setSlotUI(t, s, parseInt(sel.value, 10));
+            });
+            return sel;
+        }
+
         function renderFxChain(): void {
             const st = getFxInstance(t);
             fxChain.textContent = "";
+            fxRows.length = 0;
             for (let s = 0; s < FX_SLOTS; s++) {
                 const fxId = st.slots[s];
-                if (fxId < 0) continue;   // empty slot — no row (moves use slot indices)
-                const fx = FX_EFFECTS[fxId];
-                if (!fx) continue;
+                const fx = fxId >= 0 ? FX_EFFECTS[fxId] : undefined;
                 const row = document.createElement("div");
                 row.className = "fx-row" + (s === fxSlot ? " selected" : "");
                 const up = document.createElement("button");
@@ -439,26 +500,20 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
                     moveSlotUI(t, s, s + 1);
                 });
                 const tg = document.createElement("button");
-                tg.className = "detail-toggle " + (st.enabled[s] ? "active" : "bypassed");
-                tg.textContent = st.enabled[s] ? "IN" : "BYP";
-                tg.title = `${fx.label} in / bypass`;
+                tg.className = "detail-toggle " + (fx && st.enabled[s] ? "active" : "bypassed");
+                tg.textContent = fx && st.enabled[s] ? "IN" : "BYP";
+                tg.title = fx ? `${fx.label} in / bypass` : "Empty slot";
+                tg.disabled = !fx;   // empty slot — nothing to enable
                 tg.addEventListener("click", (ev) => {
                     ev.stopPropagation();
                     setFxEnabledUI(t, s, !st.enabled[s]);
                 });
-                const lbl = document.createElement("span");
-                lbl.className = "fx-row-label";
-                lbl.textContent = fx.label;
                 row.appendChild(up);
                 row.appendChild(dn);
                 row.appendChild(tg);
-                row.appendChild(lbl);
-                row.addEventListener("click", () => {
-                    fxSlot = s;
-                    fxSlotLocked = true;
-                    renderFxChain();
-                    renderFxEdit();
-                });
+                row.appendChild(buildFxSlotSelect(s, fxId));
+                row.addEventListener("click", () => selectFxSlot(s));
+                fxRows.push(row);
                 fxChain.appendChild(row);
             }
         }

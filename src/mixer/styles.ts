@@ -303,7 +303,6 @@ const CSS = `
 #mixer-panel .fx-row.selected {
     background: #142031; border-color: #2a4a6a;
 }
-#mixer-panel .fx-row.selected .fx-row-label { color: #8ab4f8; }
 #mixer-panel .fx-row-btn {
     width: 16px; height: 16px; font-size: 9px; line-height: 1;
     border: 1px solid #2a2a30; border-radius: 2px; background: #16161e;
@@ -312,10 +311,16 @@ const CSS = `
 #mixer-panel .fx-row-btn:hover { border-color: #444; color: #aaa; }
 #mixer-panel .fx-row-btn:disabled { opacity: 0.3; cursor: default; }
 #mixer-panel .fx-row .detail-toggle { padding: 1px 4px; }
-#mixer-panel .fx-row-label {
-    flex: 1; min-width: 0; font-size: 11px; color: #aaa;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+#mixer-panel .fx-row .detail-toggle:disabled { opacity: 0.35; cursor: default; }
+#mixer-panel .fx-slot-select {
+    flex: 1; min-width: 0;
+    background: #11111a; border: 1px solid #222230; border-radius: 3px;
+    color: #ccc; font-size: 11px; padding: 1px 2px; outline: none;
+    cursor: pointer;
 }
+#mixer-panel .fx-slot-select:hover { border-color: #33333f; }
+#mixer-panel .fx-slot-select:focus { border-color: #2a4a6a; }
+#mixer-panel .fx-row.selected .fx-slot-select { color: #8ab4f8; border-color: #2a4a6a; }
 #mixer-panel .fx-edit-area {
     border-top: 1px solid #1a1a25; margin-top: 2px; padding-top: 4px;
 }
