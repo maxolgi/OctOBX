@@ -692,13 +692,15 @@ breakdown and return codes.
 | `obxd_clear_pcm(id)` | Free all PCM samples + reset state |
 | `obxd_set_drum_layer_param(pad, layer, idx, v)` | Per-layer voice-level param mirror (global params route live via `apply_param_instance(9, …)`) |
 | `obxd_get_drum_layer_param(pad, layer, idx)` | Read per-layer param from mirror |
-| `fx_effect_count()` / `fx_total_params()` | Guitarix FX rack shape: 11 effects / 47 params |
-| `fx_param_count(id)` / `fx_param_offset(id)` / `fx_is_stereo(id)` | Per-effect param layout + stereo flag |
-| `fx_set_param(inst, fx_id, param, v)` / `fx_get_param(…)` | Per-instance FX param (ENGINE units — ttl ranges, not 0..1; TS layer converts) |
-| `fx_set_enabled(inst, fx_id, on)` / `fx_get_enabled(…)` | Per-effect IN/BYP (lazy `activate()` on first render after enable) |
-| `fx_set_order_entry(inst, slot, fx_id)` / `fx_get_order_entry(…)` | Chain order slot write/read (duplicate fx_id rejected) |
-| `fx_get_params_ptr()` / `fx_get_order_ptr()` / `fx_get_enabled_ptr()` | Mirror views for the bulk `fx_get_state` pull (470 + 110 + 110) |
-| `fx_restore_ptr(params, order, enabled)` | Bulk restore of the whole 10-instance FX rack |
+| `fx_effect_count()` / `fx_slot_params()` | Guitarix FX rack shape: 11 effects / 48 params per slot |
+| `fx_param_count(id)` / `fx_is_stereo(id)` / `fx_default(id, p)` | Per-effect param layout, stereo flag, default value (ENGINE units) |
+| `fx_set_param(inst, slot, param, v)` / `fx_get_param(…)` | Per-slot FX param (ENGINE units — ttl ranges, not 0..1; TS layer converts) |
+| `fx_set_enabled(inst, slot, on)` / `fx_get_enabled(…)` | Per-slot IN/BYP (lazy `activate()` on first render after enable) |
+| `fx_set_slot(inst, slot, fx_id|-1)` / `fx_get_slot(…)` | Load/empty a chain slot (resets the slot's params to defaults, clears enabled; duplicates allowed) |
+| `fx_move_slot(inst, from, to)` | Array-move a slot's whole content (fx id, params, enabled, DSP) |
+| `fx_get_out_param(inst, slot, i)` | Per-slot output-port storage (meters/tuner — Phase 2/3) |
+| `fx_get_params_ptr()` / `fx_get_slots_ptr()` / `fx_get_enabled_ptr()` | Mirror views for the bulk `fx_get_state` pull (5280 + 110 + 110) |
+| `fx_restore_ptr(params, slots, enabled)` | Bulk restore of the whole 10-instance FX rack |
 
 > **Reserved CCs:** mod wheel (CC 1), sustain pedal (CC 64), all-sound-off
 > (CC 120), and all-notes-off (CC 123) are handled inside `obxd_midi_in()`'s
@@ -790,15 +792,18 @@ delay → echo → reverb), one chain per OB-Xf instance:
   (bundled in the guitarix tree) backs bossds1's oversampler via
   gx_resampler. These TUs must NEVER include JUCE/OB-Xf headers — the
   guitarix include dirs are scoped to them only.
-- `gxfx_host.cpp` owns the runtime: each chain is a user-reorderable
-  `order[11]` (each type at most once, enforced by the duplicate guard in
-  `fx_set_order_entry`); params are keyed by `fx_id` in a flat
-  `g_fx_params[10][47]` mirror, so reordering never moves values; mono
-  effects run dual-mono (L+R `PluginLV2` pairs) while chorus/delay/echo/
-  reverb run their native `stereo_audio` path; effects lazily `activate()`
-  (allocate delay buffers) on the first render after being enabled; a fully
-  disabled chain is a zero-cost no-op; and chains keep processing zero input
-  while the synth idles so delay/echo/reverb tails ring out.
+- `gxfx_host.cpp` owns the runtime: each chain is 11 slots (slot index =
+  chain position; each slot holds ANY effect type — duplicates allowed —
+  or -1 = empty, default chain = canonical 11); params/enabled/DSP
+  runtime are keyed by SLOT in `g_fx_params[10][11][48]`, so
+  `fx_set_slot` resets a slot's 48 params to the new effect's defaults +
+  clears enabled, and `fx_move_slot` relocates values together with the
+  slot; mono effects run dual-mono (L+R `PluginLV2` pairs) while chorus/
+  delay/echo/reverb run their native `stereo_audio` path; effects lazily
+  `activate()` (allocate delay buffers) on the first render after being
+  enabled; a fully disabled chain is a zero-cost no-op; and chains keep
+  processing zero input while the synth idles so delay/echo/reverb tails
+  ring out.
 - **Insert point:** `obxd_render` runs `gxfx_process` per instance between
   the synth output and the track taps — both the CakeMix mixer taps and the
   legacy C-side master sum see the wet signal; per-instance RMS is post-FX.
@@ -1136,8 +1141,9 @@ FX chains (bulk `fx_restore_state`).
 `awp-task-queue`, `mixer-store`, `gxfx-params`) — 215 tests, no browser
 required. `npm run test:wasm` additionally exercises the built synth WASM
 under Node (`tools/verify-obxd-wasm.mjs`, 27 checks — incl. 7 guitarix-FX
-checks: surface, mirror round-trip, order semantics, wet path, tail
-continuation, hard bypass, bulk restore).
+checks: surface + slot round-trip, duplicate effects with independent
+params, slot move, defaults reset on slot change, tail continuation, hard
+bypass, bulk restore).
 `npm run test:octopus` drives the built Octopus engine WASM behaviorally in
 headless Chromium (`tools/verify-octopus-wasm.mjs`, playwright-core +
 system Chromium, serving `dist/` with COOP/COEP): 10 manual-grounded

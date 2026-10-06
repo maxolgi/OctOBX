@@ -526,97 +526,140 @@ async function main() {
   // taps: obxd_render() writes g_track_l/r, gxfx_process() filters them in
   // place (early-out while the whole chain is disabled; runs on ZERO input
   // while the synth idles so delay/echo/reverb tails ring out past the last
-  // note), then the master sum reads the wet rows. obxd_init() is idempotent
-  // and calls gxfx_init(), which resets params to FX_DEFAULTS, order to the
-  // identity 0..10 and every effect to disabled — the behavioral checks
-  // below re-init so they stay independent of each other's side-effects.
+  // note), then the master sum reads the wet rows. v2 slot model: slot index
+  // = chain position, each of the 11 slots holds any effect id or -1 (empty),
+  // params/enabled are keyed by SLOT (10*11*48 floats / 110 bytes), and
+  // duplicates of one effect in several slots are allowed. obxd_init() is
+  // idempotent and calls gxfx_init(), which resets slots to the identity
+  // 0..10 (canonical 11 — default UX unchanged), params to FX_DEFAULTS and
+  // every slot to disabled — the behavioral checks below re-init so they
+  // stay independent of each other's side-effects.
 
-  // (l) FX surface ----------------------------------------------------------
-  expect('l. fx surface: counts, offsets, stereo flags', () => {
+  // (l) FX surface + slot round-trip ----------------------------------------
+  expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
+    mod._obxd_init(48000);
     if (mod._fx_effect_count() !== 11) return `effect_count=${mod._fx_effect_count()}, want 11`;
-    if (mod._fx_total_params() !== 47) return `total_params=${mod._fx_total_params()}, want 47`;
+    if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
     if (mod._fx_param_count(11) !== -1) return `param_count(11)=${mod._fx_param_count(11)}, want -1 (out of range)`;
-    if (mod._fx_param_offset(10) !== 42) return `param_offset(10)=${mod._fx_param_offset(10)}, want 42 (reverb)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
-  });
-
-  // Fresh FX state for the behavioral checks: params = defaults, order =
-  // identity, all effects disabled.
-  mod._obxd_init(48000);
-
-  // (m) Param round-trip + flat-mirror layout -------------------------------
-  expect('m. fx param round-trip via get + HEAPF32 mirror; invalid ids are no-ops', () => {
-    mod._fx_set_param(3, 8, 2, 1234.5); // inst 3, delay R_DELAY -> params[3*47 + 28 + 2]
-    const viaGet = mod._fx_get_param(3, 8, 2);
-    if (viaGet !== f32(1234.5)) return `get=${viaGet}, want ${f32(1234.5)}`;
-    const params = new Float32Array(mod.HEAPF32.buffer, mod._fx_get_params_ptr(), 10 * 47);
-    const viaView = params[3 * 47 + mod._fx_param_offset(8) + 2];
-    if (viaView !== f32(1234.5)) return `mirror view=${viaView}, want ${f32(1234.5)}`;
-    // Neighbor param (R_GAIN, default -10) untouched — offset math is exact.
-    const neighbor = mod._fx_get_param(3, 8, 1);
-    if (neighbor !== f32(-10)) return `neighbor R_GAIN=${neighbor}, want default ${f32(-10)}`;
-    // Invalid inst/fx/param: silent no-ops, get returns 0.0.
-    mod._fx_set_param(10, 0, 0, 9.9);
-    mod._fx_set_param(0, 11, 0, 9.9);
-    mod._fx_set_param(0, 0, 99, 9.9);
-    for (const [i, f, p] of [[10, 0, 0], [0, 11, 0], [0, 0, 99]]) {
-      const got = mod._fx_get_param(i, f, p);
-      if (got !== 0.0) return `get(${i},${f},${p})=${got}, want 0.0`;
-    }
-  });
-
-  // (n) Order semantics -----------------------------------------------------
-  expect('n. fx order: default identity, duplicate rejected, clear+move ok, view updated', () => {
+    if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
+    if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
+    if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
+    if (mod._fx_default(11, 0) !== 0) return `default(11,0)=${mod._fx_default(11, 0)}, want 0 (invalid fx)`;
+    if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
+    // Default chain = canonical 11 (slot s holds fx s).
     for (let s = 0; s < 11; s++) {
-      const v = mod._fx_get_order_entry(0, s);
-      if (v !== s) return `default order slot ${s}=${v}, want ${s}`;
+      const v = mod._fx_get_slot(0, s);
+      if (v !== s) return `default slot ${s}=${v}, want ${s}`;
     }
-    // fx 5 already sits in slot 5 — moving it to slot 0 must be rejected.
-    if (mod._fx_set_order_entry(0, 0, 5) !== 0) return 'duplicate fx 5 accepted into slot 0, want reject (0)';
-    if (mod._fx_set_order_entry(0, 5, -1) !== 1) return 'clearing slot 5 rejected, want 1';
-    if (mod._fx_set_order_entry(0, 0, 5) !== 1) return 'moving fx 5 into freed slot 0 rejected, want 1';
-    if (mod._fx_get_order_entry(0, 0) !== 5) return `order(0,0)=${mod._fx_get_order_entry(0, 0)}, want 5`;
-    if (mod._fx_get_order_entry(0, 5) !== -1) return `order(0,5)=${mod._fx_get_order_entry(0, 5)}, want -1`;
-    // The emcc runtime only attaches HEAPU8/HEAPF32 to Module — wrap our own
-    // Int8Array view for the signed-char order mirror.
-    const op = mod._fx_get_order_ptr(); // signed char[10][11] view
-    const orderView = new Int8Array(mod.HEAPF32.buffer, op, 11);
-    if (orderView[0] !== 5) return `order view [0][0]=${orderView[0]}, want 5`;
-    if (orderView[5] !== -1) return `order view [0][5]=${orderView[5]}, want -1`;
+    // Assign, duplicate, empty — round-trips through fx_get_slot.
+    mod._fx_set_slot(0, 3, 7);
+    if (mod._fx_get_slot(0, 3) !== 7) return `slot(0,3)=${mod._fx_get_slot(0, 3)}, want 7`;
+    mod._fx_set_slot(0, 5, 7); // duplicates allowed in v2
+    if (mod._fx_get_slot(0, 5) !== 7) return `slot(0,5)=${mod._fx_get_slot(0, 5)}, want 7 (duplicate tremolo)`;
+    if (mod._fx_get_slot(0, 3) !== 7) return `slot(0,3)=${mod._fx_get_slot(0, 3)}, want 7 (duplicate did not evict)`;
+    mod._fx_set_slot(0, 3, -1);
+    if (mod._fx_get_slot(0, 3) !== -1) return `slot(0,3)=${mod._fx_get_slot(0, 3)}, want -1 (empty)`;
+    // Out-of-range args: silent no-ops, state untouched.
+    mod._fx_set_slot(10, 0, 5);
+    mod._fx_set_slot(0, 11, 5);
+    mod._fx_set_slot(0, 0, 11);
+    mod._fx_set_slot(0, 0, -2);
+    if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
+    if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
+    if (mod._fx_get_slot(0, 11) !== -1) return `slot(0,11)=${mod._fx_get_slot(0, 11)}, want -1 (invalid slot)`;
   });
 
-  // (o) Wet path ------------------------------------------------------------
-  expect('o. fx wet path: reverb-only chain renders finite, non-silent track', () => {
-    mod._obxd_init(48000); // self-contained: default FX state, no leftover tails
-    mod._obxd_midi_in(0, 0x90, 60, 100);
-    // Dry reference: chain fully disabled -> gxfx_process early-outs, the
-    // track row is the raw synth output (non-silent).
-    let drySq = 0;
-    for (let q = 0; q < 8; q++) {
-      mod._obxd_render(128);
-      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
-      for (let i = 0; i < 128; i++) drySq += l[i] * l[i];
-    }
-    if (!(drySq > 0)) return `dry sum-of-squares = ${drySq} (silent before FX)`;
+  // (m) Duplicated effect, independent per-slot params -----------------------
+  // Instance 1: echo (fx 9) in slots 2 AND 5. Slot-keyed params/enabled must
+  // be fully independent; empty slots reject param/enabled writes.
+  expect('m. fx duplicate effect in two slots: independent params + enabled', () => {
+    mod._fx_set_slot(1, 2, 9);
+    mod._fx_set_slot(1, 5, 9);
+    mod._fx_set_param(1, 2, 4, 0.9); // echo TIME_L (PortIndex: INVERT, PERCENT_R, TIME_R, PERCENT_L, TIME_L)
+    mod._fx_set_param(1, 5, 4, 0.35);
+    if (mod._fx_get_param(1, 2, 4) !== f32(0.9)) return `slot2 TIME_L=${mod._fx_get_param(1, 2, 4)}, want ${f32(0.9)}`;
+    if (mod._fx_get_param(1, 5, 4) !== f32(0.35)) return `slot5 TIME_L=${mod._fx_get_param(1, 5, 4)}, want ${f32(0.35)}`;
+    // Per-slot mirror: params[(inst*11 + slot)*48 + p].
+    const params = new Float32Array(mod.HEAPF32.buffer, mod._fx_get_params_ptr(), 10 * 11 * 48);
+    if (params[(1 * 11 + 2) * 48 + 4] !== f32(0.9)) return `mirror slot2=${params[(1 * 11 + 2) * 48 + 4]}, want ${f32(0.9)}`;
+    if (params[(1 * 11 + 5) * 48 + 4] !== f32(0.35)) return `mirror slot5=${params[(1 * 11 + 5) * 48 + 4]}, want ${f32(0.35)}`;
+    // Neighbor param keeps its default (PERCENT_L = 30).
+    if (mod._fx_get_param(1, 2, 3) !== 30) return `slot2 PERCENT_L=${mod._fx_get_param(1, 2, 3)}, want 30`;
+    // Enabled is per-slot too.
+    mod._fx_set_enabled(1, 2, 1);
+    if (mod._fx_get_enabled(1, 2) !== 1) return 'enabled(1,2) != 1 after set';
+    if (mod._fx_get_enabled(1, 5) !== 0) return 'enabled(1,5) != 0 (must be independent)';
+    // Empty slot: param + enabled writes are silent no-ops, reads 0.0.
+    mod._fx_set_slot(1, 7, -1);
+    mod._fx_set_param(1, 7, 0, 9.9);
+    if (mod._fx_get_param(1, 7, 0) !== 0.0) return `empty slot param=${mod._fx_get_param(1, 7, 0)}, want 0.0`;
+    mod._fx_set_enabled(1, 7, 1);
+    if (mod._fx_get_enabled(1, 7) !== 0) return 'empty slot enabled=1 accepted, want no-op';
+    // Out-of-range param index for the slotted effect: no-op.
+    mod._fx_set_param(1, 2, 7, 5.5); // echo has 7 params (0..6)
+    if (mod._fx_get_param(1, 2, 7) !== 0.0) return `param(1,2,7)=${mod._fx_get_param(1, 2, 7)}, want 0.0 (out of range)`;
+  });
 
-    mod._fx_set_enabled(0, 10, 1); // reverb only on instance 0
-    if (mod._fx_get_enabled(0, 10) !== 1) return 'enabled(0,10) != 1 after set';
-    let wetSq = 0;
-    let finite = true;
-    for (let q = 0; q < 40; q++) {
-      mod._obxd_render(128);
-      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
-      const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
-      for (let i = 0; i < 128; i++) {
-        if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
-        wetSq += l[i] * l[i] + r[i] * r[i];
-      }
+  // (n) Slot move ------------------------------------------------------------
+  // Starting from (m)'s instance 1 layout: [0,1,9,3,4,9,6,-1,8,9,10] with
+  // slot2 echo p4=0.9 ENABLED, slot5 echo p4=0.35 disabled, slot7 empty.
+  expect('n. fx_move_slot: contents (id, params, enabled) travel with the slot', () => {
+    // Move slot 5 -> 0 (up): [9,0,1,9,3,4,6,-1,8,9,10].
+    mod._fx_move_slot(1, 5, 0);
+    const wantUp = [9, 0, 1, 9, 3, 4, 6, -1, 8, 9, 10];
+    for (let s = 0; s < 11; s++) {
+      const v = mod._fx_get_slot(1, s);
+      if (v !== wantUp[s]) return `after 5->0 slot ${s}=${v}, want ${wantUp[s]}`;
     }
-    if (!finite) return 'non-finite sample in wet track row';
-    if (!(wetSq > 0)) return `wet sum-of-squares = ${wetSq} (silent with reverb on)`;
+    if (mod._fx_get_param(1, 0, 4) !== f32(0.35)) return `moved echo p4=${mod._fx_get_param(1, 0, 4)}, want ${f32(0.35)}`;
+    if (mod._fx_get_param(1, 3, 4) !== f32(0.9)) return `shifted echo p4=${mod._fx_get_param(1, 3, 4)}, want ${f32(0.9)}`;
+    if (mod._fx_get_enabled(1, 0) !== 0) return 'moved slot lost its disabled flag';
+    if (mod._fx_get_enabled(1, 3) !== 1) return 'shifted slot lost its enabled flag';
+    // Post-move param writes land in the relocated row.
+    mod._fx_set_param(1, 0, 4, 0.5);
+    if (mod._fx_get_param(1, 0, 4) !== f32(0.5)) return `post-move write=${mod._fx_get_param(1, 0, 4)}, want ${f32(0.5)}`;
+    // Move slot 0 -> 3 (down): [0,1,9,9,3,4,6,-1,8,9,10].
+    mod._fx_move_slot(1, 0, 3);
+    const wantDown = [0, 1, 9, 9, 3, 4, 6, -1, 8, 9, 10];
+    for (let s = 0; s < 11; s++) {
+      const v = mod._fx_get_slot(1, s);
+      if (v !== wantDown[s]) return `after 0->3 slot ${s}=${v}, want ${wantDown[s]}`;
+    }
+    if (mod._fx_get_param(1, 3, 4) !== f32(0.5)) return `re-moved echo p4=${mod._fx_get_param(1, 3, 4)}, want ${f32(0.5)}`;
+    if (mod._fx_get_param(1, 2, 4) !== f32(0.9)) return `other echo p4=${mod._fx_get_param(1, 2, 4)}, want ${f32(0.9)}`;
+    // Moving an empty slot just relocates the hole: 7 -> 10.
+    mod._fx_move_slot(1, 7, 10);
+    if (mod._fx_get_slot(1, 7) !== 8) return `slot 7=${mod._fx_get_slot(1, 7)}, want 8 (shifted up)`;
+    if (mod._fx_get_slot(1, 10) !== -1) return `slot 10=${mod._fx_get_slot(1, 10)}, want -1 (hole moved)`;
+    // Out-of-range moves: silent no-ops (instance 9 stays identity).
+    mod._fx_move_slot(1, -1, 3);
+    mod._fx_move_slot(1, 0, 11);
+    mod._fx_move_slot(10, 0, 5);
+    if (mod._fx_get_slot(1, 3) !== 9) return `slot(1,3)=${mod._fx_get_slot(1, 3)}, want 9 (untouched)`;
+    if (mod._fx_get_slot(9, 0) !== 0) return `slot(9,0)=${mod._fx_get_slot(9, 0)}, want 0 (untouched)`;
+    // The int16 slots mirror view reflects the moves.
+    const slotsView = new Int16Array(mod.HEAPF32.buffer, mod._fx_get_slots_ptr(), 110);
+    if (slotsView[1 * 11 + 10] !== -1) return `slots view [1][10]=${slotsView[1 * 11 + 10]}, want -1`;
+    if (slotsView[9 * 11 + 0] !== 0) return `slots view [9][0]=${slotsView[9 * 11 + 0]}, want 0`;
+    if (slotsView[0 * 11 + 5] !== 7) return `slots view [0][5]=${slotsView[0 * 11 + 5]}, want 7 (from check l)`;
+  });
+
+  // (o) Defaults reset on slot change ----------------------------------------
+  expect('o. fx_set_slot resets params to the new effect defaults + clears enabled', () => {
+    mod._fx_set_param(2, 4, 0, 3.3); // slot 4 holds chorus (default 0.5)
+    mod._fx_set_slot(2, 4, 8); // -> delay
+    if (mod._fx_get_param(2, 4, 0) !== f32(0.0)) return `delay p0=${mod._fx_get_param(2, 4, 0)}, want 0.0 (default)`;
+    if (mod._fx_get_param(2, 4, 2) !== 1000) return `delay p2=${mod._fx_get_param(2, 4, 2)}, want 1000 (default)`;
+    // Re-assigning the SAME effect also resets (fresh slot content).
+    mod._fx_set_enabled(2, 4, 1);
+    mod._fx_set_param(2, 4, 0, 7.7);
+    mod._fx_set_slot(2, 4, 8);
+    if (mod._fx_get_enabled(2, 4) !== 0) return 're-assign did not clear enabled';
+    if (mod._fx_get_param(2, 4, 0) !== f32(0.0)) return `re-assign p0=${mod._fx_get_param(2, 4, 0)}, want 0.0 (reset)`;
   });
 
   // (p) Reverb tail past synth idle -----------------------------------------
@@ -626,7 +669,7 @@ async function main() {
   // FX insert running on zero input.
   expect('p. fx reverb tail continues past synth idle (zero-input insert)', () => {
     mod._obxd_init(48000);
-    mod._fx_set_enabled(0, 10, 1);
+    mod._fx_set_enabled(0, 10, 1); // slot 10 = reverb (default chain)
     mod._obxd_midi_in(0, 0x90, 60, 100);
     const blockRms = () => {
       mod._obxd_render(128);
@@ -657,7 +700,7 @@ async function main() {
   // (q) Hard bypass ---------------------------------------------------------
   expect('q. fx hard bypass: disabling the chain silences the idle track row', () => {
     mod._obxd_init(48000);
-    mod._fx_set_enabled(0, 10, 1);
+    mod._fx_set_enabled(0, 10, 1); // slot 10 = reverb (default chain)
     mod._obxd_midi_in(0, 0x90, 60, 100);
     for (let q = 0; q < 30; q++) mod._obxd_render(128); // seed the reverb
     mod._obxd_midi_in(0, 0x80, 60, 0);
@@ -692,49 +735,67 @@ async function main() {
   });
 
   // (r) Bulk restore --------------------------------------------------------
-  expect('r. fx_restore_ptr bulk-restores params + order + enabled', () => {
-    mod._obxd_init(48000); // known defaults to snapshot
-    // Params: defaults except echo TIME_L (fx 9, param 4 -> flat 35+4) = 0.9.
-    // (Note: 35+4, not 35+3 — the echo PortIndex order is INVERT, PERCENT_R,
-    // TIME_R, PERCENT_L, TIME_L, so TIME_L is param 4.)
-    const paramsArr = new Float32Array(
-      new Float32Array(mod.HEAPF32.buffer, mod._fx_get_params_ptr(), 470),
-    );
-    paramsArr[0 * 47 + 35 + 4] = 0.9;
-    // Order: instance 0 reversed (slot i holds fx 10-i), others identity.
-    const orderArr = new Int8Array(110);
+  expect('r. fx_restore_ptr bulk-restores params + slots + enabled (v2 layout)', () => {
+    mod._obxd_init(48000); // known defaults underneath
+    // Slots: instance 0 reversed (slot s = 10 - s); instance 2 mixes
+    // duplicates + an empty slot ([9,9,-1,3..10]); others identity.
+    const slotsArr = new Int16Array(110);
     for (let e = 0; e < 10; e++) {
-      for (let s = 0; s < 11; s++) orderArr[e * 11 + s] = e === 0 ? 10 - s : s;
+      for (let s = 0; s < 11; s++) slotsArr[e * 11 + s] = s;
     }
-    // Enabled: instance 0 runs ONLY the echo (fx 9); everything else off.
+    for (let s = 0; s < 11; s++) slotsArr[0 * 11 + s] = 10 - s;
+    slotsArr[2 * 11 + 0] = 9;
+    slotsArr[2 * 11 + 1] = 9;
+    slotsArr[2 * 11 + 2] = -1;
+    // Params: per-slot defaults for whatever effect each slot holds, plus
+    // two edits — reverb room size (param 1) on inst 0 slot 0, echo TIME_L
+    // (param 4) on inst 2 slot 0 (but NOT its duplicate in slot 1).
+    const paramsArr = new Float32Array(10 * 11 * 48);
+    for (let e = 0; e < 10; e++) {
+      for (let s = 0; s < 11; s++) {
+        const fx = slotsArr[e * 11 + s];
+        if (fx < 0) continue;
+        for (let p = 0; p < 48; p++) paramsArr[(e * 11 + s) * 48 + p] = mod._fx_default(fx, p);
+      }
+    }
+    paramsArr[(0 * 11 + 0) * 48 + 1] = 0.9; // reverb room size
+    paramsArr[(2 * 11 + 0) * 48 + 4] = 0.9; // echo TIME_L, slot 0 only
+    // Enabled: inst 0 runs only the reverb (slot 0); inst 2 runs both
+    // duplicate echoes (slots 0 + 1); everything else off.
     const enabledArr = new Uint8Array(110);
-    enabledArr[0 * 11 + 9] = 1;
+    enabledArr[0 * 11 + 0] = 1;
+    enabledArr[2 * 11 + 0] = 1;
+    enabledArr[2 * 11 + 1] = 1;
 
-    const pp = mod._malloc(470 * 4);
-    const po = mod._malloc(110);
+    const pp = mod._malloc(10 * 11 * 48 * 4);
+    const po = mod._malloc(110 * 2);
     const pe = mod._malloc(110);
     mod.HEAPF32.set(paramsArr, pp >> 2);
-    new Int8Array(mod.HEAPF32.buffer, po, 110).set(orderArr);
+    new Int16Array(mod.HEAPF32.buffer, po, 110).set(slotsArr);
     mod.HEAPU8.set(enabledArr, pe);
     mod._fx_restore_ptr(pp, po, pe);
     mod._free(pp);
     mod._free(po);
     mod._free(pe);
 
-    if (mod._fx_get_order_entry(0, 0) !== 10) return `order(0,0)=${mod._fx_get_order_entry(0, 0)}, want 10 (reversed)`;
-    if (mod._fx_get_order_entry(0, 5) !== 5) return `order(0,5)=${mod._fx_get_order_entry(0, 5)}, want 5`;
-    if (mod._fx_get_order_entry(5, 3) !== 3) return `order(5,3)=${mod._fx_get_order_entry(5, 3)}, want 3 (other instances untouched)`;
-    if (mod._fx_get_enabled(0, 9) !== 1) return `enabled(0,9)=${mod._fx_get_enabled(0, 9)}, want 1`;
+    if (mod._fx_get_slot(0, 0) !== 10) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 10 (reversed)`;
+    if (mod._fx_get_slot(0, 10) !== 0) return `slot(0,10)=${mod._fx_get_slot(0, 10)}, want 0 (reversed)`;
+    if (mod._fx_get_slot(2, 0) !== 9 || mod._fx_get_slot(2, 1) !== 9) return 'inst 2 duplicate echoes not restored';
+    if (mod._fx_get_slot(2, 2) !== -1) return `slot(2,2)=${mod._fx_get_slot(2, 2)}, want -1 (empty)`;
+    if (mod._fx_get_slot(5, 5) !== 5) return `slot(5,5)=${mod._fx_get_slot(5, 5)}, want 5 (identity instance)`;
+    if (mod._fx_get_enabled(0, 0) !== 1) return `enabled(0,0)=${mod._fx_get_enabled(0, 0)}, want 1`;
     if (mod._fx_get_enabled(0, 10) !== 0) return `enabled(0,10)=${mod._fx_get_enabled(0, 10)}, want 0`;
-    if (mod._fx_get_enabled(1, 9) !== 0) return `enabled(1,9)=${mod._fx_get_enabled(1, 9)}, want 0`;
+    if (mod._fx_get_enabled(2, 0) !== 1 || mod._fx_get_enabled(2, 1) !== 1) return 'inst 2 enables not restored';
+    if (mod._fx_get_enabled(1, 0) !== 0) return `enabled(1,0)=${mod._fx_get_enabled(1, 0)}, want 0`;
+    if (mod._fx_get_param(0, 0, 1) !== f32(0.9)) return `reverb room=${mod._fx_get_param(0, 0, 1)}, want ${f32(0.9)}`;
+    if (mod._fx_get_param(2, 0, 4) !== f32(0.9)) return `echo0 TIME_L=${mod._fx_get_param(2, 0, 4)}, want ${f32(0.9)}`;
+    if (mod._fx_get_param(2, 1, 4) !== 100) return `echo1 TIME_L=${mod._fx_get_param(2, 1, 4)}, want 100 (default — duplicate is independent)`;
+    if (mod._fx_get_param(2, 2, 0) !== 0.0) return `empty slot param=${mod._fx_get_param(2, 2, 0)}, want 0.0`;
+    const slotsView = new Int16Array(mod.HEAPF32.buffer, mod._fx_get_slots_ptr(), 110);
+    if (slotsView[0 * 11 + 0] !== 10 || slotsView[2 * 11 + 2] !== -1) return 'slots mirror view stale after restore';
     const ev = new Uint8Array(mod.HEAPU8.buffer, mod._fx_get_enabled_ptr(), 110);
-    if (ev[0 * 11 + 9] !== 1 || ev[0 * 11 + 10] !== 0) {
-      return `enabled view [0][9]=${ev[9]}, [0][10]=${ev[10]}, want 1 / 0`;
-    }
-    if (mod._fx_get_param(0, 9, 4) !== f32(0.9)) {
-      return `echo TIME_L=${mod._fx_get_param(0, 9, 4)}, want ${f32(0.9)}`;
-    }
-    // Audio: a held note through the restored echo-only chain must render
+    if (ev[0 * 11 + 0] !== 1 || ev[1 * 11 + 0] !== 0) return 'enabled mirror view stale after restore';
+    // Audio: a held note through the restored reverb chain must render
     // finite, non-silent audio.
     mod._obxd_midi_in(0, 0x90, 60, 100);
     let sq = 0;

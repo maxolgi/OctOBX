@@ -12,8 +12,9 @@
  * FX_PARAM_COUNTS[effect] — live params per effect; the rest of each row
  * is padding.
  *
- * Phase 0 (fx2plan.md): emitted but not yet consumed — gxfx_host.cpp
- * still carries its own tables; the slot-model rework switches it over.
+ * Consumed by wasm/obxd/gxfx_host.cpp: fx_set_slot copies a row into the
+ * slot's param array on every slot assign, fx_default() reads single
+ * entries for the bulk state surface.
  */
 #ifndef GXFX_DEFAULTS_H
 #define GXFX_DEFAULTS_H

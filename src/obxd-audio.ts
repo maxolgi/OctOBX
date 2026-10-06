@@ -25,7 +25,7 @@
  * explicitly so a future "multi-select" UI doesn't need an API change.
  */
 
-import { FX_COUNT, FX_EFFECTS, FX_INSTANCE_COUNT, FX_SLOTS, FX_TOTAL_PARAMS, isFxId } from "./gxfx-params";
+import { FX_INSTANCE_COUNT, FX_SLOTS, FX_SLOT_PARAMS, isFxId } from "./gxfx-params";
 
 let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
@@ -730,38 +730,49 @@ export async function dumpAllDrumParams(): Promise<number[] | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Guitarix FX insert chains (per-instance)
+// Guitarix FX insert chains (per-instance, slot model)
 // ---------------------------------------------------------------------------
 
+/** Bulk rack state. `params` is the flat per-SLOT mirror in ENGINE units
+ * (inst-major: instance × slot × FX_SLOT_PARAMS), `slots` maps each chain
+ * slot to an fx id (-1 = empty), `enabled` is per slot. */
 export interface FxBulkState {
     params: number[];
-    order: number[];
+    slots: number[];
     enabled: number[];
 }
 
-export function setFxParam(instanceId: number, fxId: number, param: number, engineValue: number): void {
+export function setFxParam(instanceId: number, slot: number, param: number, engineValue: number): void {
     if (instanceId < 0 || instanceId >= FX_INSTANCE_COUNT) return;
-    if (!isFxId(fxId)) return;
-    const fx = FX_EFFECTS[fxId];
-    if (!Number.isInteger(param) || param < 0 || param >= fx.params.length) return;
-    postWorkletMessage({ type: "fx_set_param", instance_id: instanceId, fx_id: fxId, param, value: engineValue });
+    if (!Number.isInteger(slot) || slot < 0 || slot >= FX_SLOTS) return;
+    if (!Number.isInteger(param) || param < 0 || param >= FX_SLOT_PARAMS) return;
+    postWorkletMessage({ type: "fx_set_param", instance_id: instanceId, slot, param, value: engineValue });
 }
 
-export function setFxEnabled(instanceId: number, fxId: number, enabled: boolean): void {
+export function setFxEnabled(instanceId: number, slot: number, enabled: boolean): void {
     if (instanceId < 0 || instanceId >= FX_INSTANCE_COUNT) return;
-    if (!isFxId(fxId)) return;
-    postWorkletMessage({ type: "fx_set_enabled", instance_id: instanceId, fx_id: fxId, enabled });
+    if (!Number.isInteger(slot) || slot < 0 || slot >= FX_SLOTS) return;
+    postWorkletMessage({ type: "fx_set_enabled", instance_id: instanceId, slot, enabled });
 }
 
-export function setFxOrder(instanceId: number, order: number[]): void {
+/** Load an effect into a chain slot (fxId -1 = empty). Engine-side this
+ * resets the slot's params to the new effect's defaults and clears its
+ * enabled flag; the worklet runs it in the message handler (not in
+ * process()) because the C side creates the DSP objects at set_slot time. */
+export function setFxSlot(instanceId: number, slot: number, fxId: number): void {
     if (instanceId < 0 || instanceId >= FX_INSTANCE_COUNT) return;
-    if (!Array.isArray(order) || order.length !== FX_SLOTS) return;
-    const seen = new Set<number>();
-    for (const v of order) {
-        if (!Number.isInteger(v) || v < 0 || v >= FX_COUNT || seen.has(v)) return;
-        seen.add(v);
-    }
-    postWorkletMessage({ type: "fx_set_order", instance_id: instanceId, order });
+    if (!Number.isInteger(slot) || slot < 0 || slot >= FX_SLOTS) return;
+    if (fxId !== -1 && !isFxId(fxId)) return;
+    postWorkletMessage({ type: "fx_set_slot", instance_id: instanceId, slot, fx_id: fxId });
+}
+
+/** Move a chain slot's whole content (fx id, params, enabled, DSP) from
+ * one chain position to another (array-move, atomic C-side). */
+export function moveFxSlot(instanceId: number, from: number, to: number): void {
+    if (instanceId < 0 || instanceId >= FX_INSTANCE_COUNT) return;
+    if (!Number.isInteger(from) || from < 0 || from >= FX_SLOTS) return;
+    if (!Number.isInteger(to) || to < 0 || to >= FX_SLOTS) return;
+    postWorkletMessage({ type: "fx_move_slot", instance_id: instanceId, from, to });
 }
 
 export async function getFxState(): Promise<FxBulkState | null> {
@@ -775,17 +786,17 @@ export async function getFxState(): Promise<FxBulkState | null> {
     const raw = await replyPromise;
     if (!raw) return null;
     const params = (raw as { params?: number[] }).params;
-    const order = (raw as { order?: number[] }).order;
+    const slots = (raw as { slots?: number[] }).slots;
     const enabled = (raw as { enabled?: number[] }).enabled;
-    if (!Array.isArray(params) || params.length !== FX_INSTANCE_COUNT * FX_TOTAL_PARAMS) return null;
-    if (!Array.isArray(order) || order.length !== FX_INSTANCE_COUNT * FX_SLOTS) return null;
+    if (!Array.isArray(params) || params.length !== FX_INSTANCE_COUNT * FX_SLOTS * FX_SLOT_PARAMS) return null;
+    if (!Array.isArray(slots) || slots.length !== FX_INSTANCE_COUNT * FX_SLOTS) return null;
     if (!Array.isArray(enabled) || enabled.length !== FX_INSTANCE_COUNT * FX_SLOTS) return null;
-    return { params, order, enabled };
+    return { params, slots, enabled };
 }
 
 export async function restoreFxState(state: FxBulkState): Promise<boolean> {
-    if (!Array.isArray(state.params) || state.params.length !== FX_INSTANCE_COUNT * FX_TOTAL_PARAMS) return false;
-    if (!Array.isArray(state.order) || state.order.length !== FX_INSTANCE_COUNT * FX_SLOTS) return false;
+    if (!Array.isArray(state.params) || state.params.length !== FX_INSTANCE_COUNT * FX_SLOTS * FX_SLOT_PARAMS) return false;
+    if (!Array.isArray(state.slots) || state.slots.length !== FX_INSTANCE_COUNT * FX_SLOTS) return false;
     if (!Array.isArray(state.enabled) || state.enabled.length !== FX_INSTANCE_COUNT * FX_SLOTS) return false;
     if (!workletNode) return false;
     const replyPromise = awaitReply(
@@ -793,7 +804,7 @@ export async function restoreFxState(state: FxBulkState): Promise<boolean> {
             && (m as { type?: string }).type === "fx_state_restored",
         10000,
     );
-    workletNode.port.postMessage({ type: "fx_restore_state", params: state.params, order: state.order, enabled: state.enabled });
+    workletNode.port.postMessage({ type: "fx_restore_state", params: state.params, slots: state.slots, enabled: state.enabled });
     const raw = await replyPromise;
     return !!raw;
 }

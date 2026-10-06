@@ -1,19 +1,24 @@
 // gxfx_host.cpp — OctOBX per-instance guitarix FX chains.
-// 10 chains (one per OB-Xf instance), each a user-reorderable sequence of up to
-// 11 effect types (each type at most once). Params live in a flat mirror
-// g_fx_params[10][FX_TOTAL] keyed by fx_id (NOT slot) so reordering never moves
-// values. Mono effects run dual-mono (two PluginLV2 instances, L and R).
+// 10 chains (one per OB-Xf instance), each 11 slots. Slot index = chain
+// position; each slot holds ANY effect type (duplicates allowed) or -1
+// (empty). Params/enabled/DSP runtime are keyed by SLOT, so fx_set_slot
+// resets a slot's 48 params to the new effect's defaults and clears its
+// enabled flag, and fx_move_slot relocates values together with the slot.
+// Mono effects run dual-mono (two PluginLV2 instances, L and R).
 #include "gxfx_prelude.h"
+#include "gxfx_defaults.h"
 #include "../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h"
 #include <emscripten.h>
 
 static const int FX_COUNT = 11;
 static const int FX_SLOTS = 11;
 static const int FX_INSTANCE_COUNT = 10;
-static const int FX_TOTAL = 47;
+static const int FX_SLOT_PARAMS = 48;
+static const int FX_OUT_PORTS = 8;
 
-static const int FX_PARAM_COUNTS[FX_COUNT] = {2,1,3,5,4,6,3,4,7,7,5};
-static const int FX_PARAM_OFFSET[FX_COUNT] = {0,2,3,6,11,15,21,24,28,35,42};
+// Param defaults + per-effect live param counts come from the generated
+// gxfx_defaults.h (tools/gen-gxfx-params.mjs ← tools/gxfx-param-spec.json).
+
 static const int FX_STEREO[FX_COUNT] = {0,0,0,0,1,0,0,0,1,1,1};
 
 static const int FX_PORTS[FX_COUNT][7] = {
@@ -28,20 +33,6 @@ static const int FX_PORTS[FX_COUNT][7] = {
     {0,1,2,3,4,5,6},
     {0,1,2,3,4,5,6},
     {0,1,2,3,4}
-};
-
-static const float FX_DEFAULTS[FX_TOTAL] = {
-    0.0f, 0.5f,
-    0.5f,
-    -2.0f, 0.5f, 0.5f,
-    2.0f, 3.0f, -20.0f, 0.5f, 0.002f,
-    0.5f, 0.02f, 0.02f, 3.0f,
-    0.5f, 5.0f, 0.2f, -0.707f, 100.0f, 0.0f,
-    50.0f, 0.0f, 0.5f,
-    50.0f, 0.0f, 0.5f, 5.0f,
-    0.0f, -10.0f, 1000.0f, -10.0f, 1000.0f, 0.2f, 0.0f,
-    0.0f, 30.0f, 100.0f, 30.0f, 100.0f, 0.2f, 0.0f,
-    50.0f, 0.2f, 0.5f, 0.2f, 0.0f
 };
 
 PluginLV2* gxfx_create_wah();
@@ -78,69 +69,69 @@ struct FxRuntime {
     bool ever_enabled;
 };
 
-struct FxChain {
-    FxRuntime rt[FX_COUNT];
-    int order[FX_SLOTS];
-    unsigned char enabled[FX_COUNT];
-};
-
-static FxChain g_fx[FX_INSTANCE_COUNT];
-static float g_fx_params[FX_INSTANCE_COUNT][FX_TOTAL];
-static signed char g_fx_order_view[FX_INSTANCE_COUNT][FX_SLOTS];
-static unsigned char g_fx_enabled_view[FX_INSTANCE_COUNT][FX_COUNT];
+static int16_t g_fx_slot[FX_INSTANCE_COUNT][FX_SLOTS];          // slot -> fx_id, -1 = empty
+static FxRuntime g_fx_rt[FX_INSTANCE_COUNT][FX_SLOTS];
+static float g_fx_params[FX_INSTANCE_COUNT][FX_SLOTS][FX_SLOT_PARAMS];
+static unsigned char g_fx_enabled[FX_INSTANCE_COUNT][FX_SLOTS];
+// Output-port storage (meters, tuner FREQ — Phase 2/3 effects): per slot,
+// FX_OUT_PORTS floats. TODO(Phase 2): once a spec declares out_ports,
+// connect them in fx_create_one() next to fx_connect_params(); no current
+// effect declares any, so fx_get_out_param reads zeros for now.
+static float g_fx_out[FX_INSTANCE_COUNT][FX_SLOTS][FX_OUT_PORTS];
 static uint32_t g_fx_sample_rate = 48000;
 static bool g_fx_initialized = false;
 
+static void fx_destroy_runtime(FxRuntime& r) {
+    if (r.dsp_r) {
+        if (r.dsp_r->activate_plugin) r.dsp_r->activate_plugin(false, r.dsp_r);
+        if (r.dsp_r->delete_instance) r.dsp_r->delete_instance(r.dsp_r);
+        r.dsp_r = 0;
+    }
+    if (r.dsp) {
+        if (r.dsp->activate_plugin) r.dsp->activate_plugin(false, r.dsp);
+        if (r.dsp->delete_instance) r.dsp->delete_instance(r.dsp);
+        r.dsp = 0;
+    }
+    r.active = false;
+    r.ever_enabled = false;
+}
+
 static void fx_teardown() {
     for (int e = 0; e < FX_INSTANCE_COUNT; ++e) {
-        for (int f = 0; f < FX_COUNT; ++f) {
-            FxRuntime& r = g_fx[e].rt[f];
-            if (r.dsp_r) {
-                if (r.dsp_r->activate_plugin) r.dsp_r->activate_plugin(false, r.dsp_r);
-                if (r.dsp_r->delete_instance) r.dsp_r->delete_instance(r.dsp_r);
-                r.dsp_r = 0;
-            }
-            if (r.dsp) {
-                if (r.dsp->activate_plugin) r.dsp->activate_plugin(false, r.dsp);
-                if (r.dsp->delete_instance) r.dsp->delete_instance(r.dsp);
-                r.dsp = 0;
-            }
-            r.active = false;
-            r.ever_enabled = false;
-        }
         for (int s = 0; s < FX_SLOTS; ++s) {
-            g_fx[e].order[s] = -1;
-            g_fx_order_view[e][s] = -1;
+            fx_destroy_runtime(g_fx_rt[e][s]);
+            g_fx_slot[e][s] = -1;
         }
-        memset(g_fx[e].enabled, 0, sizeof(g_fx[e].enabled));
-        memset(g_fx_enabled_view[e], 0, sizeof(g_fx_enabled_view[e]));
+        memset(g_fx_enabled[e], 0, sizeof(g_fx_enabled[e]));
     }
 }
 
-static void fx_connect_params(int e, int fx, PluginLV2* p) {
+static void fx_connect_params(int e, int s, int fx, PluginLV2* p) {
     if (!p->connect_ports) return;
     for (int i = 0; i < FX_PARAM_COUNTS[fx]; ++i)
         p->connect_ports((uint32_t)FX_PORTS[fx][i],
-                         &g_fx_params[e][FX_PARAM_OFFSET[fx] + i], p);
+                         &g_fx_params[e][s][i], p);
 }
 
-static PluginLV2* fx_create_one(int e, int fx) {
+static PluginLV2* fx_create_one(int e, int s, int fx) {
     PluginLV2* p = FX_FACTORIES[fx]();
     if (!p) return 0;
     if (p->set_samplerate) p->set_samplerate(g_fx_sample_rate, p);
-    fx_connect_params(e, fx, p);
+    fx_connect_params(e, s, fx, p);
     return p;
 }
 
-static void fx_ensure_dsp(int e, int fx) {
-    FxRuntime& r = g_fx[e].rt[fx];
-    if (!r.dsp) r.dsp = fx_create_one(e, fx);
-    if (!FX_STEREO[fx] && !r.dsp_r) r.dsp_r = fx_create_one(e, fx);
+static void fx_ensure_dsp(int e, int s) {
+    int fx = g_fx_slot[e][s];
+    if (fx < 0) return;
+    FxRuntime& r = g_fx_rt[e][s];
+    if (!r.dsp) r.dsp = fx_create_one(e, s, fx);
+    if (!FX_STEREO[fx] && !r.dsp_r) r.dsp_r = fx_create_one(e, s, fx);
 }
 
-static void fx_ensure_active(int e, int fx) {
-    fx_ensure_dsp(e, fx);
-    FxRuntime& r = g_fx[e].rt[fx];
+static void fx_ensure_active(int e, int s) {
+    fx_ensure_dsp(e, s);
+    FxRuntime& r = g_fx_rt[e][s];
     if (!r.active) {
         if (r.dsp && r.dsp->activate_plugin) r.dsp->activate_plugin(true, r.dsp);
         if (r.dsp_r && r.dsp_r->activate_plugin) r.dsp_r->activate_plugin(true, r.dsp_r);
@@ -152,23 +143,22 @@ void gxfx_init(uint32_t sample_rate) {
     fx_teardown();
     g_fx_sample_rate = sample_rate;
     for (int e = 0; e < FX_INSTANCE_COUNT; ++e) {
-        for (int p = 0; p < FX_TOTAL; ++p)
-            g_fx_params[e][p] = FX_DEFAULTS[p];
         for (int s = 0; s < FX_SLOTS; ++s) {
-            g_fx[e].order[s] = s;
-            g_fx_order_view[e][s] = (signed char)s;
+            g_fx_slot[e][s] = (int16_t)s; // canonical 11 — default UX unchanged
+            memcpy(g_fx_params[e][s], FX_DEFAULTS[s], FX_SLOT_PARAMS * sizeof(float));
+            memset(g_fx_out[e][s], 0, sizeof(g_fx_out[e][s]));
         }
     }
     g_fx_initialized = true;
     for (int e = 0; e < FX_INSTANCE_COUNT; ++e)
-        for (int f = 0; f < FX_COUNT; ++f)
-            fx_ensure_dsp(e, f);
+        for (int s = 0; s < FX_SLOTS; ++s)
+            fx_ensure_dsp(e, s);
 }
 
 static inline bool gxfx_chain_active(int e) {
     if (e < 0 || e >= FX_INSTANCE_COUNT) return false;
-    for (int f = 0; f < FX_COUNT; ++f)
-        if (g_fx[e].enabled[f]) return true;
+    for (int s = 0; s < FX_SLOTS; ++s)
+        if (g_fx_enabled[e][s]) return true;
     return false;
 }
 
@@ -177,10 +167,10 @@ void gxfx_process(int e, float* l, float* r, int n) {
     if (!l || !r || n <= 0) return;
     if (!gxfx_chain_active(e)) return;
     for (int s = 0; s < FX_SLOTS; ++s) {
-        int fx = g_fx[e].order[s];
-        if (fx < 0 || fx >= FX_COUNT || !g_fx[e].enabled[fx]) continue;
-        FxRuntime& rt = g_fx[e].rt[fx];
-        fx_ensure_active(e, fx);
+        int fx = g_fx_slot[e][s];
+        if (fx < 0 || fx >= FX_COUNT || !g_fx_enabled[e][s]) continue;
+        FxRuntime& rt = g_fx_rt[e][s];
+        fx_ensure_active(e, s);
         if (!rt.dsp) continue;
         if (FX_STEREO[fx]) {
             if (rt.dsp->stereo_audio)
@@ -209,104 +199,171 @@ int fx_param_count(int fx_id) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int fx_param_offset(int fx_id) {
-    if (fx_id < 0 || fx_id >= FX_COUNT) return -1;
-    return FX_PARAM_OFFSET[fx_id];
-}
-
-EMSCRIPTEN_KEEPALIVE
 int fx_is_stereo(int fx_id) {
     if (fx_id < 0 || fx_id >= FX_COUNT) return 0;
     return FX_STEREO[fx_id];
 }
 
 EMSCRIPTEN_KEEPALIVE
-void fx_set_param(int inst, int fx_id, int param, double value) {
-    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return;
-    if (fx_id < 0 || fx_id >= FX_COUNT) return;
-    if (param < 0 || param >= FX_PARAM_COUNTS[fx_id]) return;
-    g_fx_params[inst][FX_PARAM_OFFSET[fx_id] + param] = (float)value;
-}
+int fx_slot_params() { return FX_SLOT_PARAMS; }
 
 EMSCRIPTEN_KEEPALIVE
-double fx_get_param(int inst, int fx_id, int param) {
-    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return 0.0;
+double fx_default(int fx_id, int param) {
     if (fx_id < 0 || fx_id >= FX_COUNT) return 0.0;
-    if (param < 0 || param >= FX_PARAM_COUNTS[fx_id]) return 0.0;
-    return (double)g_fx_params[inst][FX_PARAM_OFFSET[fx_id] + param];
+    if (param < 0 || param >= FX_SLOT_PARAMS) return 0.0;
+    return (double)FX_DEFAULTS[fx_id][param];
 }
 
 EMSCRIPTEN_KEEPALIVE
-void fx_set_enabled(int inst, int fx_id, int enabled) {
+void fx_set_slot(int inst, int slot, int fx_id) {
     if (inst < 0 || inst >= FX_INSTANCE_COUNT) return;
-    if (fx_id < 0 || fx_id >= FX_COUNT) return;
-    g_fx[inst].enabled[fx_id] = enabled ? 1 : 0;
-    g_fx_enabled_view[inst][fx_id] = g_fx[inst].enabled[fx_id];
-    if (enabled) g_fx[inst].rt[fx_id].ever_enabled = true;
-}
-
-EMSCRIPTEN_KEEPALIVE
-int fx_get_enabled(int inst, int fx_id) {
-    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return 0;
-    if (fx_id < 0 || fx_id >= FX_COUNT) return 0;
-    return g_fx[inst].enabled[fx_id];
-}
-
-EMSCRIPTEN_KEEPALIVE
-int fx_set_order_entry(int inst, int slot, int fx_id) {
-    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return 0;
-    if (slot < 0 || slot >= FX_SLOTS) return 0;
-    if (fx_id < -1 || fx_id >= FX_COUNT) return 0;
-    if (fx_id != -1) {
-        for (int s = 0; s < FX_SLOTS; ++s)
-            if (s != slot && g_fx[inst].order[s] == fx_id) return 0;
+    if (slot < 0 || slot >= FX_SLOTS) return;
+    if (fx_id < -1 || fx_id >= FX_COUNT) return;
+    fx_destroy_runtime(g_fx_rt[inst][slot]);
+    g_fx_slot[inst][slot] = (int16_t)fx_id;
+    g_fx_enabled[inst][slot] = 0;
+    memset(g_fx_out[inst][slot], 0, sizeof(g_fx_out[inst][slot]));
+    if (fx_id >= 0) {
+        memcpy(g_fx_params[inst][slot], FX_DEFAULTS[fx_id], FX_SLOT_PARAMS * sizeof(float));
+        // Eager create: fx_set_slot runs from a worklet task message, never
+        // the render path; activation stays lazy on first render after enable.
+        fx_ensure_dsp(inst, slot);
+    } else {
+        memset(g_fx_params[inst][slot], 0, FX_SLOT_PARAMS * sizeof(float));
     }
-    g_fx[inst].order[slot] = fx_id;
-    g_fx_order_view[inst][slot] = (signed char)fx_id;
-    return 1;
 }
 
 EMSCRIPTEN_KEEPALIVE
-int fx_get_order_entry(int inst, int slot) {
+int fx_get_slot(int inst, int slot) {
     if (inst < 0 || inst >= FX_INSTANCE_COUNT) return -1;
     if (slot < 0 || slot >= FX_SLOTS) return -1;
-    return g_fx[inst].order[slot];
+    return g_fx_slot[inst][slot];
 }
 
 EMSCRIPTEN_KEEPALIVE
-void fx_restore_ptr(const float* params, const signed char* order, const unsigned char* enabled) {
-    if (!params || !order || !enabled) return;
+void fx_move_slot(int inst, int from, int to) {
+    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return;
+    if (from < 0 || from >= FX_SLOTS) return;
+    if (to < 0 || to >= FX_SLOTS) return;
+    if (from == to) return;
+    // Array-move (remove at `from`, insert at `to`): the whole slot content
+    // — fx id, DSP pointers, params, enabled — travels together.
+    const int16_t slot_id = g_fx_slot[inst][from];
+    const FxRuntime rt = g_fx_rt[inst][from];
+    const unsigned char enabled = g_fx_enabled[inst][from];
+    float params[FX_SLOT_PARAMS];
+    float outs[FX_OUT_PORTS];
+    memcpy(params, g_fx_params[inst][from], sizeof(params));
+    memcpy(outs, g_fx_out[inst][from], sizeof(outs));
+    if (from < to) {
+        memmove(&g_fx_slot[inst][from], &g_fx_slot[inst][from + 1], (size_t)(to - from) * sizeof(int16_t));
+        memmove(g_fx_rt[inst] + from, g_fx_rt[inst] + from + 1, (size_t)(to - from) * sizeof(FxRuntime));
+        memmove(&g_fx_enabled[inst][from], &g_fx_enabled[inst][from + 1], (size_t)(to - from));
+        memmove(g_fx_params[inst][from], g_fx_params[inst][from + 1], (size_t)(to - from) * sizeof(g_fx_params[inst][0]));
+        memmove(g_fx_out[inst][from], g_fx_out[inst][from + 1], (size_t)(to - from) * sizeof(g_fx_out[inst][0]));
+    } else {
+        memmove(&g_fx_slot[inst][to + 1], &g_fx_slot[inst][to], (size_t)(from - to) * sizeof(int16_t));
+        memmove(g_fx_rt[inst] + to + 1, g_fx_rt[inst] + to, (size_t)(from - to) * sizeof(FxRuntime));
+        memmove(&g_fx_enabled[inst][to + 1], &g_fx_enabled[inst][to], (size_t)(from - to));
+        memmove(g_fx_params[inst][to + 1], g_fx_params[inst][to], (size_t)(from - to) * sizeof(g_fx_params[inst][0]));
+        memmove(g_fx_out[inst][to + 1], g_fx_out[inst][to], (size_t)(from - to) * sizeof(g_fx_out[inst][0]));
+    }
+    g_fx_slot[inst][to] = slot_id;
+    g_fx_rt[inst][to] = rt;
+    g_fx_enabled[inst][to] = enabled;
+    memcpy(g_fx_params[inst][to], params, sizeof(params));
+    memcpy(g_fx_out[inst][to], outs, sizeof(outs));
+    // The moved DSP instances keep the connect_ports() pointers they were
+    // created with — they still reference their OLD param rows. Re-point
+    // every shifted slot's DSP at its new row (pointer stores only; no
+    // processing state is touched, so no audio glitch).
+    const int lo = from < to ? from : to;
+    const int hi = from < to ? to : from;
+    for (int s = lo; s <= hi; ++s) {
+        int fx = g_fx_slot[inst][s];
+        if (fx < 0) continue;
+        FxRuntime& r = g_fx_rt[inst][s];
+        if (r.dsp) fx_connect_params(inst, s, fx, r.dsp);
+        if (r.dsp_r) fx_connect_params(inst, s, fx, r.dsp_r);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void fx_set_param(int inst, int slot, int param, double value) {
+    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return;
+    if (slot < 0 || slot >= FX_SLOTS) return;
+    int fx = g_fx_slot[inst][slot];
+    if (fx < 0) return;
+    if (param < 0 || param >= FX_PARAM_COUNTS[fx]) return;
+    g_fx_params[inst][slot][param] = (float)value;
+}
+
+EMSCRIPTEN_KEEPALIVE
+double fx_get_param(int inst, int slot, int param) {
+    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return 0.0;
+    if (slot < 0 || slot >= FX_SLOTS) return 0.0;
+    int fx = g_fx_slot[inst][slot];
+    if (fx < 0) return 0.0;
+    if (param < 0 || param >= FX_PARAM_COUNTS[fx]) return 0.0;
+    return (double)g_fx_params[inst][slot][param];
+}
+
+EMSCRIPTEN_KEEPALIVE
+void fx_set_enabled(int inst, int slot, int enabled) {
+    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return;
+    if (slot < 0 || slot >= FX_SLOTS) return;
+    if (g_fx_slot[inst][slot] < 0) return; // nothing to enable
+    g_fx_enabled[inst][slot] = enabled ? 1 : 0;
+    if (enabled) g_fx_rt[inst][slot].ever_enabled = true;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int fx_get_enabled(int inst, int slot) {
+    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return 0;
+    if (slot < 0 || slot >= FX_SLOTS) return 0;
+    return g_fx_enabled[inst][slot];
+}
+
+EMSCRIPTEN_KEEPALIVE
+double fx_get_out_param(int inst, int slot, int i) {
+    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return 0.0;
+    if (slot < 0 || slot >= FX_SLOTS) return 0.0;
+    if (i < 0 || i >= FX_OUT_PORTS) return 0.0;
+    return (double)g_fx_out[inst][slot][i];
+}
+
+EMSCRIPTEN_KEEPALIVE
+void fx_restore_ptr(const float* params, const int16_t* slots, const unsigned char* enabled) {
+    if (!params || !slots || !enabled) return;
     memcpy(g_fx_params, params, sizeof(g_fx_params));
     for (int e = 0; e < FX_INSTANCE_COUNT; ++e) {
         for (int s = 0; s < FX_SLOTS; ++s) {
-            int v = (int)order[e * FX_SLOTS + s];
+            fx_destroy_runtime(g_fx_rt[e][s]);
+            int v = (int)slots[e * FX_SLOTS + s];
             if (v < -1 || v >= FX_COUNT) v = -1;
-            g_fx[e].order[s] = v;
-            g_fx_order_view[e][s] = (signed char)v;
+            g_fx_slot[e][s] = (int16_t)v;
+            memset(g_fx_out[e][s], 0, sizeof(g_fx_out[e][s]));
+            if (v >= 0) fx_ensure_dsp(e, s);
         }
-        for (int f = 0; f < FX_COUNT; ++f) {
-            g_fx[e].enabled[f] = enabled[e * FX_COUNT + f] ? 1 : 0;
-            g_fx_enabled_view[e][f] = g_fx[e].enabled[f];
-            if (g_fx[e].enabled[f]) {
-                g_fx[e].rt[f].ever_enabled = true;
-                fx_ensure_active(e, f);
+        for (int s = 0; s < FX_SLOTS; ++s) {
+            unsigned char en = enabled[e * FX_SLOTS + s] ? 1 : 0;
+            if (g_fx_slot[e][s] < 0) en = 0;
+            g_fx_enabled[e][s] = en;
+            if (en) {
+                g_fx_rt[e][s].ever_enabled = true;
+                fx_ensure_active(e, s);
             }
         }
-        for (int f = 0; f < FX_COUNT; ++f)
-            fx_ensure_dsp(e, f);
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
-float* fx_get_params_ptr() { return &g_fx_params[0][0]; }
+float* fx_get_params_ptr() { return &g_fx_params[0][0][0]; }
 
 EMSCRIPTEN_KEEPALIVE
-signed char* fx_get_order_ptr() { return &g_fx_order_view[0][0]; }
+int16_t* fx_get_slots_ptr() { return &g_fx_slot[0][0]; }
 
 EMSCRIPTEN_KEEPALIVE
-unsigned char* fx_get_enabled_ptr() { return &g_fx_enabled_view[0][0]; }
-
-EMSCRIPTEN_KEEPALIVE
-int fx_total_params() { return FX_TOTAL; }
+unsigned char* fx_get_enabled_ptr() { return &g_fx_enabled[0][0]; }
 
 }

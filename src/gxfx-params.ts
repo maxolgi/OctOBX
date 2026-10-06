@@ -14,6 +14,7 @@
 export const FX_COUNT = 11;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
+export const FX_SLOT_PARAMS = 48;
 
 export interface FxParamDef {
     port: number;      // PortIndex value passed to fx_set_param's `param`

@@ -129,7 +129,7 @@ let mixerMeterInterval = 0;       // ~10-block meter post cadence (like CakeMix)
 // 110 enabled flags. Rebuilt by ensureFxViews() at init and on heap
 // growth, like the mixer track taps.
 let fxParamsView = null;          // Float32Array view over the params block
-let fxOrderView = null;           // Int8Array view over the order block
+let fxSlotsView = null;           // Int16Array view over the slots block
 let fxEnabledView = null;         // Uint8Array view over the enabled block
 
 // The pristine WebAssembly.instantiate, captured the first time any of our
@@ -416,10 +416,12 @@ function initMixer(bytes, port) {
 // (Re)build the FX rack state views over the CURRENT obxd heap. emcc swaps
 // the HEAPF32/HEAPU8 buffers under ALLOW_MEMORY_GROWTH, so — like the master
 // and mixer-tap views — these must be recreated whenever the heap grows.
+// Sizes: 10*11*48 floats (per-slot params) + 10*11 int16 (slot → fx id,
+// -1 = empty) + 10*11 bytes (per-slot enabled).
 function ensureFxViews() {
     if (!wasmModule || !wasmModule._fx_get_params_ptr) return;
-    fxParamsView = new Float32Array(wasmModule.HEAPF32.buffer, wasmModule._fx_get_params_ptr(), 470);
-    fxOrderView = new Int8Array(wasmModule.HEAPU8.buffer, wasmModule._fx_get_order_ptr(), 110);
+    fxParamsView = new Float32Array(wasmModule.HEAPF32.buffer, wasmModule._fx_get_params_ptr(), 5280);
+    fxSlotsView = new Int16Array(wasmModule.HEAPU8.buffer, wasmModule._fx_get_slots_ptr(), 110);
     fxEnabledView = new Uint8Array(wasmModule.HEAPU8.buffer, wasmModule._fx_get_enabled_ptr(), 110);
 }
 
@@ -887,15 +889,20 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     }, true);
                     break;
                 // ------------------------------------------------------------------
-                // gxtfx FX rack (shared param block in the obxd heap, all
-                // 10 instances). `value` is in ENGINE units — the TS layer
-                // converts before posting. Light setters queue like
-                // set_param; only the bulk restore is HEAVY.
+                // gxtfx FX rack, slot model (shared param block in the obxd
+                // heap, all 10 instances). Slot index = chain position; a
+                // slot holds any fx id (-1 = empty). `value` is in ENGINE
+                // units — the TS layer converts before posting.
+                // fx_set_param/fx_set_enabled are light queued setters.
+                // fx_set_slot/fx_move_slot run HERE in the message handler,
+                // NOT via the task queue: their C side creates/destroys
+                // DSP objects, which must never land inside process().
+                // Only the bulk pull/restore ride the task queue.
                 // ------------------------------------------------------------------
                 case 'fx_set_param':
                     taskQueue.push(() => {
                         if (wasmModule && wasmModule._fx_set_param) {
-                            wasmModule._fx_set_param(id, msg.fx_id | 0, msg.param | 0, +msg.value);
+                            wasmModule._fx_set_param(id, msg.slot | 0, msg.param | 0, +msg.value);
                         }
                     });
                     break;
@@ -905,42 +912,37 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     // this stays a light task).
                     taskQueue.push(() => {
                         if (wasmModule && wasmModule._fx_set_enabled) {
-                            wasmModule._fx_set_enabled(id, msg.fx_id | 0, msg.enabled ? 1 : 0);
+                            wasmModule._fx_set_enabled(id, msg.slot | 0, msg.enabled ? 1 : 0);
                         }
                     });
                     break;
-                case 'fx_set_order': {
-                    // order = 11 fx_ids (or -1): a full valid slot→fx_id
-                    // permutation from the TS layer. Applied clear-then-set
-                    // so the C-side duplicate guard (an fx_id may live in
-                    // only one slot) accepts it; on any rejection we
-                    // re-clear all slots so state stays consistent.
-                    // Belt-and-braces — the TS layer always sends valid
-                    // permutations.
-                    const order = msg.order;
-                    taskQueue.push(() => {
-                        if (!wasmModule || !wasmModule._fx_set_order_entry) return;
-                        if (!Array.isArray(order) || order.length !== 11) return;
-                        for (let s = 0; s < 11; s++) wasmModule._fx_set_order_entry(id, s, -1);
-                        for (let s = 0; s < 11; s++) {
-                            if (wasmModule._fx_set_order_entry(id, s, order[s] | 0) !== 1) {
-                                for (let s2 = 0; s2 < 11; s2++) wasmModule._fx_set_order_entry(id, s2, -1);
-                                break;
-                            }
-                        }
-                    });
+                case 'fx_set_slot':
+                    // Load fx id (-1 = empty) into a chain slot. The C side
+                    // resets the slot's params to the new effect's defaults,
+                    // clears enabled, and eagerly creates the DSP (safe here
+                    // — this runs between quanta, not in the render path;
+                    // activation stays lazy on first render after enable).
+                    if (wasmModule && wasmModule._fx_set_slot) {
+                        wasmModule._fx_set_slot(id, msg.slot | 0, msg.fx_id | 0);
+                    }
                     break;
-                }
+                case 'fx_move_slot':
+                    // Array-move a slot's whole content (fx id, params,
+                    // enabled, DSP runtime) to another chain position.
+                    if (wasmModule && wasmModule._fx_move_slot) {
+                        wasmModule._fx_move_slot(id, msg.from | 0, msg.to | 0);
+                    }
+                    break;
                 case 'fx_get_state':
-                    // Full rack pull: 470 params + 110 order + 110 enabled.
+                    // Full rack pull: 5280 params + 110 slots + 110 enabled.
                     taskQueue.push(() => {
                         if (!wasmModule || !wasmModule._fx_get_params_ptr) return;
                         ensureFxViews();
-                        if (!fxParamsView || !fxOrderView || !fxEnabledView) return;
+                        if (!fxParamsView || !fxSlotsView || !fxEnabledView) return;
                         this.port.postMessage({
                             type: 'fx_state',
                             params: Array.from(fxParamsView),
-                            order: Array.from(fxOrderView),
+                            slots: Array.from(fxSlotsView),
                             enabled: Array.from(fxEnabledView),
                         });
                     });
@@ -949,26 +951,26 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     // HEAVY: _malloc + heap copies + _fx_restore_ptr —
                     // deferred, one per drain.
                     const fxParams = msg.params;
-                    const fxOrder = msg.order;
+                    const fxSlots = msg.slots;
                     const fxEnabled = msg.enabled;
                     taskQueue.push(() => {
                         if (!wasmModule || !wasmModule._fx_restore_ptr
-                                || !Array.isArray(fxParams) || fxParams.length !== 470
-                                || !Array.isArray(fxOrder) || fxOrder.length !== 110
+                                || !Array.isArray(fxParams) || fxParams.length !== 5280
+                                || !Array.isArray(fxSlots) || fxSlots.length !== 110
                                 || !Array.isArray(fxEnabled) || fxEnabled.length !== 110) {
                             this.port.postMessage({ type: 'fx_state_error', message: 'fx_restore_state: invalid payload' });
                             return;
                         }
                         try {
-                            const pPtr = wasmModule._malloc(470 * 4);
-                            const oPtr = wasmModule._malloc(110);
+                            const pPtr = wasmModule._malloc(5280 * 4);
+                            const sPtr = wasmModule._malloc(110 * 2);
                             const ePtr = wasmModule._malloc(110);
-                            new Float32Array(wasmModule.HEAPU8.buffer, pPtr, 470).set(fxParams);
-                            new Int8Array(wasmModule.HEAPU8.buffer, oPtr, 110).set(fxOrder);
+                            new Float32Array(wasmModule.HEAPU8.buffer, pPtr, 5280).set(fxParams);
+                            new Int16Array(wasmModule.HEAPU8.buffer, sPtr, 110).set(fxSlots);
                             new Uint8Array(wasmModule.HEAPU8.buffer, ePtr, 110).set(fxEnabled);
-                            wasmModule._fx_restore_ptr(pPtr, oPtr, ePtr);
+                            wasmModule._fx_restore_ptr(pPtr, sPtr, ePtr);
                             wasmModule._free(pPtr);
-                            wasmModule._free(oPtr);
+                            wasmModule._free(sPtr);
                             wasmModule._free(ePtr);
                             this.port.postMessage({ type: 'fx_state_restored' });
                         } catch (e) {

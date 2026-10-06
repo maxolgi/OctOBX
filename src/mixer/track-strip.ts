@@ -26,8 +26,8 @@ import { createKnob } from "./knob";
 import { createGrMeter } from "./gr-meter";
 import { createMeterCanvas, type MeterHandle } from "./meter-canvas";
 import { createEqCurve } from "./eq-curve";
-import { FX_EFFECTS, FX_SLOTS, FX_INSTANCE_COUNT, fxParamTo01 } from "../gxfx-params";
-import { getFxInstance, setFxParamUI, setFxEnabledUI, moveFxSlot, onFxStateChange, type FxInstanceState } from "./fx-rack";
+import { FX_EFFECTS, FX_SLOTS, FX_INSTANCE_COUNT, FX_SLOT_PARAMS, fxParamTo01 } from "../gxfx-params";
+import { getFxInstance, setFxParamUI, setFxEnabledUI, moveSlotUI, onFxStateChange, type FxInstanceState } from "./fx-rack";
 
 const fmtDb = (v: number) => v.toFixed(1);
 const fmtRatio = (v: number) => (v >= 20 ? "20:1" : v.toFixed(1) + ":1");
@@ -390,7 +390,7 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
 
         function defaultFxSlot(st: FxInstanceState): number {
             for (let s = 0; s < FX_SLOTS; s++) {
-                if (st.enabled[st.order[s]]) return s;
+                if (st.slots[s] >= 0 && st.enabled[s]) return s;
             }
             return 0;
         }
@@ -399,11 +399,13 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
             const st = getFxInstance(t);
             fxLeds.textContent = "";
             for (let s = 0; s < FX_SLOTS; s++) {
-                const fxId = st.order[s];
-                const on = st.enabled[fxId];
+                const fxId = st.slots[s];
+                const on = fxId >= 0 && st.enabled[s];
                 const dot = document.createElement("span");
                 dot.className = "fx-led" + (on ? " on" : "");
-                dot.title = `${s + 1}. ${FX_EFFECTS[fxId]?.label ?? "?"}${on ? "" : " (off)"}`;
+                dot.title = fxId >= 0
+                    ? `${s + 1}. ${FX_EFFECTS[fxId]?.label ?? "?"}${on ? "" : " (off)"}`
+                    : `${s + 1}. (empty)`;
                 fxLeds.appendChild(dot);
             }
         }
@@ -412,7 +414,8 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
             const st = getFxInstance(t);
             fxChain.textContent = "";
             for (let s = 0; s < FX_SLOTS; s++) {
-                const fxId = st.order[s];
+                const fxId = st.slots[s];
+                if (fxId < 0) continue;   // empty slot — no row (moves use slot indices)
                 const fx = FX_EFFECTS[fxId];
                 if (!fx) continue;
                 const row = document.createElement("div");
@@ -424,7 +427,7 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
                 up.disabled = s === 0;
                 up.addEventListener("click", (ev) => {
                     ev.stopPropagation();
-                    moveFxSlot(t, s, s - 1);
+                    moveSlotUI(t, s, s - 1);
                 });
                 const dn = document.createElement("button");
                 dn.className = "fx-row-btn";
@@ -433,15 +436,15 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
                 dn.disabled = s === FX_SLOTS - 1;
                 dn.addEventListener("click", (ev) => {
                     ev.stopPropagation();
-                    moveFxSlot(t, s, s + 1);
+                    moveSlotUI(t, s, s + 1);
                 });
                 const tg = document.createElement("button");
-                tg.className = "detail-toggle " + (st.enabled[fxId] ? "active" : "bypassed");
-                tg.textContent = st.enabled[fxId] ? "IN" : "BYP";
+                tg.className = "detail-toggle " + (st.enabled[s] ? "active" : "bypassed");
+                tg.textContent = st.enabled[s] ? "IN" : "BYP";
                 tg.title = `${fx.label} in / bypass`;
                 tg.addEventListener("click", (ev) => {
                     ev.stopPropagation();
-                    setFxEnabledUI(t, fxId, !st.enabled[fxId]);
+                    setFxEnabledUI(t, s, !st.enabled[s]);
                 });
                 const lbl = document.createElement("span");
                 lbl.className = "fx-row-label";
@@ -462,10 +465,16 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
 
         function renderFxEdit(): void {
             const st = getFxInstance(t);
-            const fxId = st.order[fxSlot] ?? 0;
-            const fx = FX_EFFECTS[fxId];
-            if (!fx) return;
+            const fxId = st.slots[fxSlot] ?? -1;
+            const fx = fxId >= 0 ? FX_EFFECTS[fxId] : undefined;
             fxEdit.textContent = "";
+            if (!fx) {
+                const title = document.createElement("div");
+                title.className = "fx-edit-title";
+                title.textContent = "empty slot";
+                fxEdit.appendChild(title);
+                return;
+            }
             const title = document.createElement("div");
             title.className = "fx-edit-title";
             title.textContent = `${fx.label} · ${fx.stereo ? "stereo" : "mono"}`;
@@ -474,9 +483,9 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
             row.className = "knob-row";
             fx.params.forEach((p, pi) => {
                 row.appendChild(createKnob({
-                    label: p.name, value: st.params[fx.offset + pi], min: p.min, max: p.max,
+                    label: p.name, value: st.params[fxSlot * FX_SLOT_PARAMS + pi], min: p.min, max: p.max,
                     defaultValue: p.default, format: fmtFx, size: 28,
-                    onChange: (v) => setFxParamUI(t, fxId, pi, fxParamTo01(fxId, pi, v)),
+                    onChange: (v) => setFxParamUI(t, fxSlot, pi, fxParamTo01(fxId, pi, v)),
                 }).element);
             });
             fxEdit.appendChild(row);
