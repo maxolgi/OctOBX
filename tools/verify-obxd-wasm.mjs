@@ -948,52 +948,35 @@ async function main() {
   });
 
   // (s) Multiband spot check: mb param sweep reaches the DSP ---------------
-  // mbcompressor (fx 66) in instance 3 slot 4, enabled, fed by a held note.
-  // The RATIO3 sweep must change the track RMS (band 3 spans 210..1700 Hz —
-  // the note's fundamental at 261 Hz lives there), and a MAKEUP3 swing must
-  // change it a lot; everything stays finite (the meter-scratch parking in
-  // gxfx_mb.cpp keeps the V1..V10 writes off uninitialized pointers).
+  // mbcompressor (fx 66) in instance 3 slot 4, enabled, driven by the
+  // deterministic LCG ramp (fx_test_slot_rms — the old synth-fed gate had a
+  // 0.5% margin against ~0.3% per-init juce::Random slop and flaked; on the
+  // ramp the deltas are exact). The RATIO3 sweep must change the track RMS
+  // (band 3 spans 210..1700 Hz — broadband ramp energy lives there), and a
+  // MAKEUP3 swing must change it; everything stays finite (the meter-scratch
+  // parking in gxfx_mb.cpp keeps the V1..V10 writes off uninitialized
+  // pointers).
   expect('s. fx mbcompressor: ratio-based param sweep reaches the DSP (finite)', () => {
     mod._obxd_init(48000);
     mod._fx_set_slot(3, 4, 66);
     mod._fx_set_enabled(3, 4, 1);
-    mod._obxd_midi_in(3, 0x90, 60, 110);
-    const renderRms = (quanta) => {
-      let s = 0;
-      for (let q = 0; q < quanta; q++) {
-        mod._obxd_render(128);
-        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(3), 128);
-        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(3), 128);
-        for (let i = 0; i < 128; i++) {
-          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) return NaN;
-          s += l[i] * l[i] + r[i] * r[i];
-        }
-      }
-      return Math.sqrt(s / (quanta * 256));
-    };
-    const settle = () => renderRms(30); // ~80 ms: attack/release detectors settle
     // Ratio sweep: RATIO3 (param 17, port 17) 1 (bypass-ish) vs 100 (max).
     mod._fx_set_param(3, 4, 17, 1);
-    settle();
-    const rmsRatio1 = renderRms(30);
+    const rmsRatio1 = mod._fx_test_slot_rms(3, 4);
     mod._fx_set_param(3, 4, 17, 100);
-    settle();
-    const rmsRatio100 = renderRms(30);
+    const rmsRatio100 = mod._fx_test_slot_rms(3, 4);
     if (!Number.isFinite(rmsRatio1) || !Number.isFinite(rmsRatio100)) {
       return `non-finite mb output (ratio 1: ${rmsRatio1}, ratio 100: ${rmsRatio100}) — meter parking broken?`;
     }
     if (!(rmsRatio1 > 1e-4)) return `rms at RATIO3=1 too quiet to test: ${rmsRatio1}`;
     const rel = Math.abs(rmsRatio1 - rmsRatio100) / rmsRatio1;
-    if (!(rel > 0.005)) return `RATIO3 sweep 1→100 changed RMS by only ${(rel * 100).toFixed(3)}% (${rmsRatio1} → ${rmsRatio100}) — param not reaching the DSP`;
+    if (!(rel > 0.05)) return `RATIO3 sweep 1→100 changed ramp RMS by only ${(rel * 100).toFixed(3)}% (${rmsRatio1} → ${rmsRatio100}) — param not reaching the DSP`;
     // Makeup sweep: MAKEUP3 (param 7) 10 dB → -40 dB must audibly cut band 3
-    // (210..1700 Hz). Not a halving — higher harmonics live in bands 4/5 —
-    // but a clear drop that proves the makeup port reaches the DSP too.
+    // (210..1700 Hz). Not a halving — the other bands carry energy too —
+    // but a clear drop that proves the makeup port reaches the DSP as well.
     mod._fx_set_param(3, 4, 7, -40);
-    settle();
-    const rmsCut = renderRms(30);
+    const rmsCut = mod._fx_test_slot_rms(3, 4);
     if (!(rmsCut < rmsRatio100 * 0.95)) return `MAKEUP3 -40 dB left RMS at ${((rmsCut / rmsRatio100) * 100).toFixed(1)}% of loud RMS (${rmsRatio100} → ${rmsCut}) — makeup not reaching the DSP`;
-    mod._obxd_midi_in(3, 0x80, 60, 0);
-    mod._obxd_panic(3);
   });
 
   // (s) Drive family spot check (Phase 1-a) ---------------------------------
@@ -1698,13 +1681,18 @@ async function main() {
   // Redeye (id 77) folds gx_redeye.lv2's three descriptors (chump/bigchump/
   // vibrochump preamps, each with its FIXED speaker IR: 1x8 / 2x12 / 2x12,
   // scaled ×0.01 per upstream's Impf(1.0)) into MODEL 0..2. Checked: param
-  // round-trip incl. MODEL, MODEL 0 vs 2 produce different RMS on a burst
-  // (different preamp AND cab), mid-render model swaps stay finite/alive.
-  // Metal amp (id 78) wraps the faust preamp + FIXED 4x12 cab (no cab param
-  // upstream — the cabinet effect's c_model check covers IR switching):
-  // params round-trip, the wet (enabled) vs bypassed (disabled) RMS delta
-  // proves the preamp+IR chain is in the audio path, and the DRIVE knob
-  // changes the output. Metal head (id 79) gets the surface round-trip.
+  // round-trip incl. MODEL, MODEL 0 vs 2 produce different RMS on a
+  // DETERMINISTIC LCG ramp through the real slot runtime
+  // (fx_test_slot_rms — fx_set_param's mirror row → connected MODEL pointer
+  // → per-block aggregate swap → cab IR re-push → convolver; a synth-fed
+  // A/B flaked in CI because per-init juce::Random voice slop deflated the
+  // MODEL delta to 9.6% against the 25% gate), mid-render model swaps stay
+  // finite/alive. Metal amp (id 78) wraps the faust preamp + FIXED 4x12 cab
+  // (no cab param upstream — the cabinet effect's c_model check covers IR
+  // switching): params round-trip, the wet (enabled) vs bypassed (disabled)
+  // RMS delta — also on the deterministic ramp — proves the preamp+IR chain
+  // is in the audio path, and the DRIVE knob changes the output. Metal head
+  // (id 79) gets the surface round-trip.
   expect('z2. conv family: redeye MODEL 0 vs 2 differ; model swaps finite; metal amp wet/DRIVE respond; params round-trip', () => {
     // param round-trips
     mod._obxd_init(48000);
@@ -1723,41 +1711,20 @@ async function main() {
       mod._fx_set_param(0, 0, p, v);
       if (mod._fx_get_param(0, 0, p) !== f32(v)) return `metalhead param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
     }
-    // burst RMS helper (cabinet-check shape; the redeye IR rides upstream's
-    // ×0.01 Impf scale, so its floor is 1e-6, not the cabinet's 1e-4)
-    const burstRms = (fx, param, value) => {
-      mod._obxd_init(48000);
-      mod._obxd_set_factory_patch(0, 6); // "Acoustic Bass" — init-stable
-      mod._fx_set_slot(0, 0, fx);
-      mod._fx_set_enabled(0, 0, 1);
-      if (param >= 0) mod._fx_set_param(0, 0, param, value);
-      mod._obxd_midi_in(0, 0x90, 48, 127);
-      let s = 0;
-      let finite = true;
-      for (let q = 0; q < 40; q++) {
-        mod._obxd_render(128);
-        if (q < 25) continue;
-        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
-        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
-        for (let i = 0; i < 128; i++) {
-          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
-          s += l[i] * l[i] + r[i] * r[i];
-        }
-      }
-      mod._obxd_midi_in(0, 0x80, 48, 0);
-      mod._obxd_panic(0);
-      if (!finite) return { err: `non-finite sample (fx ${fx})` };
-      return { rms: Math.sqrt(s / (15 * 256)) };
-    };
-    // redeye MODEL 0 (chump + 1x8) vs 2 (vibrochump + 2x12)
-    const rd0 = burstRms(77, 8, 0);
-    if (rd0.err) return rd0.err;
-    const rd2 = burstRms(77, 8, 2);
-    if (rd2.err) return rd2.err;
-    if (!(rd0.rms > 1e-6)) return `redeye MODEL=0 too quiet to test (rms=${rd0.rms.toExponential(3)})`;
-    const rdRel = Math.abs(rd0.rms - rd2.rms) / Math.max(rd0.rms, rd2.rms);
+    // redeye MODEL 0 (chump + 1x8) vs 2 (vibrochump + 2x12) on the
+    // deterministic ramp (the redeye IR rides upstream's ×0.01 Impf scale,
+    // so its floor is 1e-4, not the cabinet's dry-signal scale)
+    mod._fx_set_slot(0, 0, 77);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 8, 0);
+    const rd0 = mod._fx_test_slot_rms(0, 0);
+    mod._fx_set_param(0, 0, 8, 2);
+    const rd2 = mod._fx_test_slot_rms(0, 0);
+    if (!(rd0 > 1e-4)) return `redeye MODEL=0 too quiet to test (rms=${rd0.toExponential(3)})`;
+    if (!(rd2 > 1e-4)) return `redeye MODEL=2 too quiet to test (rms=${rd2.toExponential(3)})`;
+    const rdRel = Math.abs(rd0 - rd2) / Math.max(rd0, rd2);
     if (!(rdRel > 0.25)) {
-      return `redeye MODEL 0↔2 changed RMS by only ${(rdRel * 100).toFixed(1)}% (${rd0.rms.toExponential(4)} vs ${rd2.rms.toExponential(4)}) — MODEL not reaching the aggregate`;
+      return `redeye MODEL 0↔2 changed ramp RMS by only ${(rdRel * 100).toFixed(1)}% (${rd0.toExponential(4)} vs ${rd2.toExponential(4)}) — MODEL not reaching the aggregate`;
     }
     // redeye mid-render model swaps (preamp swap + cab IR re-push per quantum)
     mod._obxd_init(48000);
@@ -1783,41 +1750,28 @@ async function main() {
     mod._obxd_panic(0);
     if (!rdFinite) return 'non-finite sample during the redeye model swap walk';
     if (!(Math.sqrt(rdSq / (4 * 6 * 256)) > 1e-6)) return 'redeye model swap walk silent';
-    // metal amp: wet (enabled) vs bypassed proves the preamp+4x12 IR chain
-    // is in the audio path; DRIVE 1 vs 20 proves the params reach the DSP
-    const mwet = burstRms(78, -1, 0);
-    if (mwet.err) return mwet.err;
-    const mdry = (() => {
-      mod._obxd_init(48000);
-      mod._obxd_set_factory_patch(0, 6);
-      mod._fx_set_slot(0, 0, 78); // assigned but NOT enabled → dry
-      mod._obxd_midi_in(0, 0x90, 48, 127);
-      let s = 0;
-      for (let q = 0; q < 40; q++) {
-        mod._obxd_render(128);
-        if (q < 25) continue;
-        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
-        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
-        for (let i = 0; i < 128; i++) s += l[i] * l[i] + r[i] * r[i];
-      }
-      mod._obxd_midi_in(0, 0x80, 48, 0);
-      mod._obxd_panic(0);
-      return Math.sqrt(s / (15 * 256));
-    })();
-    if (!(mwet.rms > 1e-6)) return `metal amp wet output too quiet to test (rms=${mwet.rms.toExponential(3)})`;
-    const mRel = Math.abs(mwet.rms - mdry) / Math.max(mwet.rms, mdry);
+    // metal amp on the deterministic ramp: wet (enabled) vs bypassed (a
+    // disabled slot returns the dry ramp RMS, mirroring the chain bypass)
+    // proves the preamp+4x12 IR chain is in the audio path; DRIVE 1 vs 20
+    // proves the params reach the DSP
+    mod._fx_set_slot(0, 0, 78);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._fx_set_param(0, 0, 1, 1);
+    const mDriveLo = mod._fx_test_slot_rms(0, 0);
+    mod._fx_set_param(0, 0, 1, 20);
+    const mDriveHi = mod._fx_test_slot_rms(0, 0);
+    mod._fx_set_enabled(0, 0, 0);
+    const mdry = mod._fx_test_slot_rms(0, 0);
+    if (!(mDriveLo > 1e-4)) return `metal amp wet output too quiet to test (rms=${mDriveLo.toExponential(3)})`;
+    const mRel = Math.abs(mDriveLo - mdry) / Math.max(mDriveLo, mdry);
     if (!(mRel > 0.25)) {
-      return `metal amp wet vs bypassed changed RMS by only ${(mRel * 100).toFixed(1)}% (${mwet.rms.toExponential(4)} vs ${mdry.toExponential(4)}) — preamp/IR chain not in the path`;
+      return `metal amp wet vs bypassed changed ramp RMS by only ${(mRel * 100).toFixed(1)}% (${mDriveLo.toExponential(4)} vs ${mdry.toExponential(4)}) — preamp/IR chain not in the path`;
     }
-    const mDriveLo = burstRms(78, 1, 1);
-    if (mDriveLo.err) return mDriveLo.err;
-    const mDriveHi = burstRms(78, 1, 20);
-    if (mDriveHi.err) return mDriveHi.err;
-    const dRel = Math.abs(mDriveLo.rms - mDriveHi.rms) / Math.max(mDriveLo.rms, mDriveHi.rms);
+    const dRel = Math.abs(mDriveLo - mDriveHi) / Math.max(mDriveLo, mDriveHi);
     if (!(dRel > 0.25)) {
-      return `metal amp DRIVE 1↔20 changed RMS by only ${(dRel * 100).toFixed(1)}% (${mDriveLo.rms.toExponential(4)} vs ${mDriveHi.rms.toExponential(4)}) — DRIVE not reaching the preamp`;
+      return `metal amp DRIVE 1↔20 changed ramp RMS by only ${(dRel * 100).toFixed(1)}% (${mDriveLo.toExponential(4)} vs ${mDriveHi.toExponential(4)}) — DRIVE not reaching the preamp`;
     }
-    console.log(`    redeye selectivity: MODEL 0↔2 rms ${rd0.rms.toExponential(4)} vs ${rd2.rms.toExponential(4)} (${(rdRel * 100).toFixed(1)}% delta); swap walk finite; metal amp wet/bypassed ${(mRel * 100).toFixed(1)}% delta, DRIVE 1↔20 ${(dRel * 100).toFixed(1)}% delta`);
+    console.log(`    redeye selectivity (deterministic ramp): MODEL 0↔2 rms ${rd0.toExponential(4)} vs ${rd2.toExponential(4)} (${(rdRel * 100).toFixed(1)}% delta); swap walk finite; metal amp wet/bypassed ${(mRel * 100).toFixed(1)}% delta, DRIVE 1↔20 ${(dRel * 100).toFixed(1)}% delta`);
   });
 
   // (z3) Phase 2-c: detune (id 80) — smbPitchShift over the fftw shim ------

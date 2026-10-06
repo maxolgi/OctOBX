@@ -598,4 +598,56 @@ int fx_test_bittransparent(int fx_id) {
     return 0;
 }
 
+// Test surface (verify-obxd-wasm only — same pattern as
+// fx_test_bittransparent: Makefile EXPORTS entry, no worklet message case).
+// Renders a deterministic fixed-seed LCG ramp (state advances across all
+// blocks, so the input is not block-periodic) through the REAL slot
+// runtime (inst,slot) — the exact gxfx_process path: fx_set_param's mirror
+// row feeds the connected param pointers, a mono slot renders its L dsp
+// in-place, a stereo slot renders two independent ramp streams through
+// stereo_audio — and returns the RMS over the last 48 of 64 x 128-sample
+// blocks (first 16 skipped as warmup; convolver IRs are <= 4096 taps).
+// A disabled / empty slot returns the DRY ramp RMS, mirroring the chain's
+// bypass semantics. Exists because a synth-fed A/B flakes: the engine
+// reseeds per-voice slop from juce::Random::getSystemRandom() (time +
+// address seeded) at every init, so absolute RMS gates drift across runs
+// and CI machines (see the redeye MODEL check's history).
+EMSCRIPTEN_KEEPALIVE
+double fx_test_slot_rms(int inst, int slot) {
+    if (inst < 0 || inst >= FX_INSTANCE_COUNT) return -1.0;
+    if (slot < 0 || slot >= FX_SLOTS) return -1.0;
+    enum { BLOCKS = 64, WARMUP = 16, N = 128 };
+    float l[N], r[N];
+    uint32_t lg = 0x12345678u, rg = 0x9e3779b9u;
+    FxRuntime& rt = g_fx_rt[inst][slot];
+    const bool run = g_fx_enabled[inst][slot] && g_fx_slot[inst][slot] >= 0;
+    if (run) fx_ensure_active(inst, slot);
+    double sum = 0.0;
+    unsigned cnt = 0;
+    for (int b = 0; b < BLOCKS; ++b) {
+        for (int i = 0; i < N; ++i) {
+            lg = lg * 1664525u + 1013904223u;
+            rg = rg * 1664525u + 1013904223u;
+            l[i] = (float)(int32_t)lg / 2147483648.0f;
+            r[i] = (float)(int32_t)rg / 2147483648.0f;
+        }
+        if (run && rt.dsp) {
+            int fx = g_fx_slot[inst][slot];
+            if (FX_STEREO[fx]) {
+                if (rt.dsp->stereo_audio)
+                    rt.dsp->stereo_audio(N, l, r, l, r, rt.dsp);
+            } else {
+                if (rt.dsp->mono_audio)
+                    rt.dsp->mono_audio(N, l, l, rt.dsp);
+            }
+        }
+        if (b < WARMUP) continue;
+        for (int i = 0; i < N; ++i) {
+            sum += (double)l[i] * l[i];
+            ++cnt;
+        }
+    }
+    return sqrt(sum / (double)cnt);
+}
+
 }
