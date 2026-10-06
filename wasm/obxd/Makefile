@@ -39,8 +39,13 @@ TARGET = ../build/obxd_wasm
 # variants from the bundle-local dunwahauto.cc). gxfx_dsp_mod.cpp is the
 # Phase 1-d modulation family (bundle-local gx_vibe.lv2/vibe.cc stereo +
 # the 12ax7-table gxtubetremelo/gxtubevibrato + gx_switched_tremolo + the
-# classic stereo phaser/flanger + mono chorus orphans).
-SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_eq.cpp gxfx_dsp_wah.cpp gxfx_dsp_mod.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
+# classic stereo phaser/flanger + mono chorus orphans). gxfx_dsp_time.cpp is
+# the Phase 1-e time/delay family (bundle-local duck_delay(.st) +
+# digital_delay(.st) + the 12au7-table gxtape(.st) + copicat gxechocat +
+# 12ax7 gxtubedelay + the ts9 circuit sim + oc_2 octaver + the classic mono
+# delay/echo orphans; beat.h include-once + digital_delay's 4 MB fVec2 —
+# see that file's header).
+SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_eq.cpp gxfx_dsp_wah.cpp gxfx_dsp_mod.cpp gxfx_dsp_time.cpp gxfx_host.cpp ../../third_party/OB-Xf/src/state/ObxdImporter.cpp
 
 # Header dependencies — most of the engine lives in headers (Voice.h,
 # Motherboard.h, OscillatorBlock.h, Filter.h, Utils.h, ...) #include'd by the
@@ -52,7 +57,7 @@ SRCS = main_obxd.cpp juce_amalgam.cpp gxfx_dsp.cpp gxfx_dsp_drive.cpp gxfx_dsp_e
 # param_table.h is NOT listed — it doesn't exist on a fresh clone before
 # build.sh synth generates it; its staleness is gated separately by
 # gen-param-table.mjs --check in build.sh.)
-HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h gxfx_prelude.h ../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h ../../third_party/guitarix/trunk/src/LV2/DSP/trany.h ../../third_party/guitarix/trunk/src/LV2/DSP/tube_tables/*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/circuit_tables/*.h ../../third_party/guitarix/trunk/src/LV2/gxautowah.lv2/dunwahauto.cc ../../third_party/guitarix/trunk/src/LV2/gx_vibe.lv2/vibe.cc ../../third_party/guitarix/trunk/src/LV2/faust-generated/*.cc ../../third_party/guitarix/trunk/src/LV2/faust/*.h ../../third_party/guitarix/trunk/src/LV2/faust/clipt*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/gx_resampler.* ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0/zita-resampler/*.h)
+HDRS = $(wildcard obxf_stubs/*.h ../../third_party/OB-Xf/src/*.h ../../third_party/OB-Xf/src/*/*.h gxfx_prelude.h ../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h ../../third_party/guitarix/trunk/src/LV2/DSP/trany.h ../../third_party/guitarix/trunk/src/LV2/DSP/beat.h ../../third_party/guitarix/trunk/src/LV2/DSP/tube_tables/*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/circuit_tables/*.h ../../third_party/guitarix/trunk/src/LV2/gxautowah.lv2/dunwahauto.cc ../../third_party/guitarix/trunk/src/LV2/gx_vibe.lv2/vibe.cc ../../third_party/guitarix/trunk/src/LV2/gx_duck_delay.lv2/duck_delay.cc ../../third_party/guitarix/trunk/src/LV2/gx_duck_delay_st.lv2/duck_delay_st.cc ../../third_party/guitarix/trunk/src/LV2/gx_digital_delay.lv2/digital_delay.cc ../../third_party/guitarix/trunk/src/LV2/gx_digital_delay_st.lv2/digital_delay_st.cc ../../third_party/guitarix/trunk/src/LV2/gxts9.lv2/ts9sim.cc ../../third_party/guitarix/trunk/src/LV2/gxts9.lv2/ts9nonlin.cc ../../third_party/guitarix/trunk/src/LV2/gxts9.lv2/ts9nonlin.h ../../third_party/guitarix/trunk/src/LV2/gx_oc_2.lv2/oc_2.cc ../../third_party/guitarix/trunk/src/LV2/gx_oc_2.lv2/triggers_logic.h ../../third_party/guitarix/trunk/src/LV2/faust-generated/*.cc ../../third_party/guitarix/trunk/src/LV2/faust/*.h ../../third_party/guitarix/trunk/src/LV2/faust/clipt*.cc ../../third_party/guitarix/trunk/src/LV2/DSP/gx_resampler.* ../../third_party/guitarix/trunk/src/zita-resampler-1.1.0/zita-resampler/*.h)
 
 # OB-Xf include paths. The engine sources are consumed STRAIGHT from the
 # fork tree at ../../third_party/OB-Xf/src (the maxolgi/OB-Xf fork main,
@@ -94,8 +99,10 @@ OBXF_INCLUDES = \
 # bossds1.cc, DSP/ holds trany.h (tube transfer tables for the fuzzes —
 # included ONCE at global scope in gxfx_dsp_drive.cpp), DSP/tube_tables/
 # holds the KT88/7199P table .cc files trany.h includes, DSP/circuit_tables/
-# holds the 12ax7 headers gxtubetremelo/gxtubevibrato embed per-namespace
-# (no include guards, so no include-once sharing — see gxfx_dsp_mod.cpp),
+# holds the guard-less tube/circuit table headers (12ax7 for the tube
+# tremolo/vibrato/delay, 12au7 for gxtape, copicat for gxechocat) embedded
+# per-namespace in the family TUs (no include guards, so no include-once
+# sharing — see gxfx_dsp_mod.cpp / gxfx_dsp_time.cpp),
 # zita-resampler-1.1.0 backs gx_resampler's FixedRateResampler (bossds1
 # oversampler).
 GXFU_INCLUDES = \

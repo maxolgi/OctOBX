@@ -13,7 +13,7 @@
  * Freshness check:    node tools/gen-gxfx-params.mjs --check   (CI gate)
  */
 
-export const FX_COUNT = 45;
+export const FX_COUNT = 57;
 export const FX_SLOTS = 11;
 export const FX_INSTANCE_COUNT = 10;
 export const FX_SLOT_PARAMS = 48;
@@ -40,7 +40,7 @@ export interface FxEffectDef {
     label: string;
     category: FxCategory;
     stereo: boolean;
-    offset: number;    // cumulative param offset into the flat 197-slot mirror
+    offset: number;    // cumulative param offset into the flat 269-slot mirror
     params: FxParamDef[];
 }
 
@@ -48,7 +48,7 @@ export interface FxEffectDef {
  * chain is ids 0..10 (wah → overdrive → distortion → compressor → chorus →
  * flanger → phaser → tremolo → delay → echo → reverb); ids 11+ are the
  * Phase-1 additions selectable per slot.
- * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194. */
+ * Param counts 2,1,3,5,4,6,3,4,7,7,5,2,4,3,3,2,3,3,2,2,2,2,2,1,1,1,5,2,11,30,5,2,6,1,5,3,0,1,8,5,5,8,10,7,3,5,8,8,8,10,10,8,5,3,3,2,2 → offsets 0,2,3,6,11,15,21,24,28,35,42,47,49,53,56,59,61,64,67,69,71,73,75,77,78,79,80,85,87,98,128,133,135,141,142,147,150,150,151,159,164,169,177,187,194,197,202,210,218,226,236,246,254,259,262,265,267. */
 export const FX_EFFECTS: FxEffectDef[] = [
     {
         id: 0, key: "wah", label: "Wah", category: "wah", stereo: false, offset: 0,
@@ -472,9 +472,141 @@ export const FX_EFFECTS: FxEffectDef[] = [
             { port: 2, symbol: "WET_DRY", name: "Dry/Wet", default: 100, min: 0, max: 100, step: 1 },
         ],
     },
+    {
+        id: 45, key: "duck_delay", label: "Duck Delay", category: "delay", stereo: false, offset: 197,
+        params: [
+            { port: 2, symbol: "AMOUNT", name: "Amount", default: 0.5, min: 0, max: 56, step: 1 },
+            { port: 3, symbol: "ATTACK", name: "Attack", default: 0.1, min: 0.05, max: 0.5, step: 0.01 },
+            { port: 4, symbol: "FEEDBACK", name: "Feedback", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 5, symbol: "RELESE", name: "Release", default: 0.1, min: 0.05, max: 2, step: 0.01 },
+            { port: 6, symbol: "TIME", name: "Time", default: 500, min: 1, max: 2000, step: 10 },
+        ],
+    },
+    {
+        id: 46, key: "duck_delay_st", label: "Duck Delay Stereo", category: "delay", stereo: true, offset: 202,
+        params: [
+            { port: 4, symbol: "AMOUNT", name: "Amount", default: 0.5, min: 0, max: 56, step: 1 },
+            { port: 5, symbol: "ATTACK", name: "Attack", default: 0.1, min: 0.05, max: 0.5, step: 0.01 },
+            { port: 6, symbol: "COLORATION", name: "Coloration", default: 0, min: -1, max: 1, step: 0.01 },
+            { port: 7, symbol: "EFFECT", name: "Effect", default: 0, min: -16, max: 4, step: 0.1 },
+            { port: 8, symbol: "FEEDBACK", name: "Feedback", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 9, symbol: "PINGPONG", name: "Ping-Pong", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 10, symbol: "RELEASE", name: "Release", default: 0.1, min: 0.05, max: 2, step: 0.01 },
+            { port: 11, symbol: "TIME", name: "Time", default: 500, min: 1, max: 2000, step: 10 },
+        ],
+    },
+    {
+        id: 47, key: "digital_delay", label: "Digital Delay", category: "delay", stereo: false, offset: 210,
+        params: [
+            { port: 2, symbol: "BPM", name: "BPM", default: 120, min: 24, max: 360, step: 10 },
+            { port: 3, symbol: "FEEDBACK", name: "Feedback", default: 50, min: 1, max: 100, step: 1 },
+            { port: 4, symbol: "GAIN", name: "Gain", default: 100, min: 0, max: 120, step: 1 },
+            { port: 5, symbol: "HIGHPASS", name: "Highpass", default: 120, min: 20, max: 20000, step: 10 },
+            { port: 6, symbol: "HOWPASS", name: "Lowpass", default: 12000, min: 20, max: 20000, step: 10 },
+            { port: 7, symbol: "LEVEL", name: "Level", default: 50, min: 1, max: 100, step: 1 },
+            { port: 8, symbol: "MODE", name: "Mode", default: 0, min: 0, max: 3, step: 1, integer: true },
+            { port: 9, symbol: "NOTES", name: "Notes", default: 4, min: 0, max: 17, step: 1, integer: true },
+        ],
+    },
+    {
+        id: 48, key: "digital_delay_st", label: "Digital Delay Stereo", category: "delay", stereo: true, offset: 218,
+        params: [
+            { port: 4, symbol: "BPM", name: "BPM", default: 120, min: 24, max: 360, step: 10 },
+            { port: 5, symbol: "FEEDBACK", name: "Feedback", default: 50, min: 1, max: 100, step: 1 },
+            { port: 6, symbol: "GAIN", name: "Gain", default: 100, min: 0, max: 120, step: 1 },
+            { port: 7, symbol: "HIGHPASS", name: "Highpass", default: 120, min: 20, max: 20000, step: 10 },
+            { port: 8, symbol: "HOWPASS", name: "Lowpass", default: 12000, min: 20, max: 20000, step: 10 },
+            { port: 9, symbol: "LEVEL", name: "Level", default: 50, min: 1, max: 100, step: 1 },
+            { port: 10, symbol: "MODE", name: "Mode", default: 0, min: 0, max: 3, step: 1, integer: true },
+            { port: 11, symbol: "NOTES", name: "Notes", default: 4, min: 0, max: 17, step: 1, integer: true },
+        ],
+    },
+    {
+        id: 49, key: "gxtape", label: "Tape", category: "delay", stereo: false, offset: 226,
+        params: [
+            { port: 0, symbol: "on", name: "On", default: 1, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "drive", name: "Drive", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "wowdepth", name: "Wow Depth", default: 0.02, min: 0, max: 0.03, step: 0.01 },
+            { port: 3, symbol: "wowfreq", name: "Wow Freq", default: 1.4, min: 0, max: 4, step: 0.1 },
+            { port: 4, symbol: "flutdepth", name: "Flutter Depth", default: 0.02, min: 0, max: 0.03, step: 0.01 },
+            { port: 5, symbol: "flutfreq", name: "Flutter Freq", default: 20, min: 4, max: 60, step: 1 },
+            { port: 6, symbol: "hiss", name: "Tape Hiss", default: 0.4, min: 0, max: 1, step: 0.01 },
+            { port: 7, symbol: "type", name: "Tape Type", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 8, symbol: "speed", name: "Speed", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 9, symbol: "gain", name: "Gain", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 50, key: "gxtape_st", label: "Tape Stereo", category: "delay", stereo: true, offset: 236,
+        params: [
+            { port: 0, symbol: "on", name: "On", default: 1, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "drive", name: "Drive", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "wowdepth", name: "Wow Depth", default: 0.02, min: 0, max: 0.03, step: 0.01 },
+            { port: 3, symbol: "wowfreq", name: "Wow Freq", default: 1.4, min: 0, max: 4, step: 0.1 },
+            { port: 4, symbol: "flutdepth", name: "Flutter Depth", default: 0.02, min: 0, max: 0.03, step: 0.01 },
+            { port: 5, symbol: "flutfreq", name: "Flutter Freq", default: 20, min: 4, max: 60, step: 1 },
+            { port: 6, symbol: "hiss", name: "Tape Hiss", default: 0.4, min: 0, max: 1, step: 0.01 },
+            { port: 7, symbol: "type", name: "Tape Type", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 8, symbol: "speed", name: "Speed", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 9, symbol: "gain", name: "Gain", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 51, key: "gxechocat", label: "Echo Cat", category: "delay", stereo: false, offset: 246,
+        params: [
+            { port: 0, symbol: "input", name: "Input", default: 0.25, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "swell", name: "Swell", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 2, symbol: "sustain", name: "Sustain", default: 0, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "output", name: "Output", default: 1, min: 0, max: 4, step: 0.1 },
+            { port: 4, symbol: "bpm", name: "BPM", default: 120, min: 24, max: 360, step: 10 },
+            { port: 5, symbol: "head1", name: "Head 1", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 6, symbol: "head2", name: "Head 2", default: 0, min: 0, max: 1, step: 1, integer: true },
+            { port: 7, symbol: "head3", name: "Head 3", default: 0, min: 0, max: 1, step: 1, integer: true },
+        ],
+    },
+    {
+        id: 52, key: "gxtubedelay", label: "Tube Delay", category: "delay", stereo: false, offset: 254,
+        params: [
+            { port: 0, symbol: "drive", name: "Drive", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 1, symbol: "delay", name: "Delay", default: 160, min: 1, max: 2500, step: 10 },
+            { port: 2, symbol: "feedback", name: "Feedback", default: 0.35, min: 0.01, max: 0.7, step: 0.01 },
+            { port: 3, symbol: "level", name: "Level", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 4, symbol: "output", name: "Output", default: 0, min: -20, max: 20, step: 1 },
+        ],
+    },
+    {
+        id: 53, key: "ts9", label: "TS-9", category: "drive", stereo: false, offset: 259,
+        params: [
+            { port: 0, symbol: "fslider0_", name: "Level", default: -16, min: -20, max: 4, step: 0.1 },
+            { port: 1, symbol: "fslider1_", name: "Tone", default: 400, min: 100, max: 1000, step: 10 },
+            { port: 2, symbol: "fslider2_", name: "Drive", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 54, key: "oc_2", label: "OC-2 Octave", category: "special", stereo: false, offset: 262,
+        params: [
+            { port: 2, symbol: "DIRECT", name: "Direct", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 3, symbol: "OCTAVE1", name: "Octave 1", default: 0.5, min: 0, max: 1, step: 0.01 },
+            { port: 4, symbol: "OCTAVE2", name: "Octave 2", default: 0.5, min: 0, max: 1, step: 0.01 },
+        ],
+    },
+    {
+        id: 55, key: "classic_delay", label: "Classic Delay", category: "delay", stereo: false, offset: 265,
+        params: [
+            { port: 0, symbol: "DELAY", name: "Delay", default: 0, min: 0, max: 5000, step: 10 },
+            { port: 1, symbol: "GAIN", name: "Gain", default: 0, min: -20, max: 20, step: 0.1 },
+        ],
+    },
+    {
+        id: 56, key: "classic_echo", label: "Classic Echo", category: "delay", stereo: false, offset: 267,
+        params: [
+            { port: 0, symbol: "PERCENT", name: "Wet %", default: 0, min: 0, max: 100, step: 0.1 },
+            { port: 1, symbol: "TIME", name: "Time", default: 1, min: 1, max: 2000, step: 1 },
+        ],
+    },
 ];
 
-export const FX_TOTAL_PARAMS = 197;
+export const FX_TOTAL_PARAMS = 269;
 
 // --- 0..1 knob space <-> engine space (linear; log knobs would need per-param curves later) ---
 

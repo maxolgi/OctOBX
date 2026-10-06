@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ===========================================================================
 // gen-gxfx-params.mjs — generates every consumable artifact of the guitarix
-// FX param spec (fx2plan.md Phase 1-a/1-b/1-c/1-d: manifest-driven, ttl-parsing).
+// FX param spec (fx2plan.md Phase 1-a..1-e: manifest-driven, ttl-parsing).
 //
 // SOURCE OF TRUTH for param DATA, per effect kind:
 //   - v1 eleven (wah..reverb, ids 0..10): PINNED in
@@ -163,6 +163,24 @@ const V1_KEYS = Object.keys(V1_CATEGORY_BY_KEY);
 // flanger in mono), gx_ampmodul.cc (fx2plan assigns it to the later
 // "utility" additions), gx_vibrochump.cc (a chump preamp — Phase 2
 // convolver redeye family).
+// Phase 1-e ships the time/delay family: the bundle-LOCAL duck_delay(.st)
+// and digital_delay(.st) .cc classes (digital_delay's fVec2[524288] double
+// = 4 MB per object at CREATION — a slot costs 8 MB dual-mono / 4 MB
+// stereo; fine with growth on, documented in the fx2plan Known-Issues
+// line), the 12au7-table gxtape(.st) + copicat-table gxechocat + 12ax7-table
+// gxtubedelay faust classes, the circuit-modelled gxts9 (ts9sim+ts9nonlin,
+// menu category DRIVE — a Tubescreamer-style overdrive, not a delay), the
+// gx_oc_2 octave divider (+triggers_logic.h; menu category SPECIAL — the
+// frozen vocabulary has no pitch group and "special" is where fx2plan parks
+// non-insert-shaped effects), and the classic mono delay.cc/echo.cc
+// orphans ("Classic Delay"/"Classic Echo" — v1 ids 8/9 are the STEREO
+// stereodelay/stereoecho classes). digital_delay(.st) ttl ports SYNC +
+// HOSTBPM are wrapper-level host-tempo-sync controls the DSP class ignores
+// (no LV2 tempo host in OctOBX) — skipped via skipPorts, like BYPASS.
+// Also present but NOT shipped here: reverse delay/echo do not exist in the
+// tree (no other true delay/echo/tape bundles remain — gx_delay.lv2 and
+// gx_echo.lv2 are wrapper-only bundles over stereodelay.cc/stereoecho.cc =
+// v1 ids 8/9, and mbdelay/mbecho are the multiband family, later phase).
 // ---------------------------------------------------------------------------
 const MANIFEST = [
     // --- v1 eleven (ids 0..10) — pinned data, canonical default chain ---
@@ -217,6 +235,35 @@ const MANIFEST = [
     { key: 'phaser_st', menuName: 'Classic Phaser', category: 'modulation', orphan: 'phaser.cc', stereo: true },
     { key: 'flanger_st', menuName: 'Classic Flanger', category: 'modulation', orphan: 'flanger.cc', stereo: true },
     { key: 'chorus_mono', menuName: 'Chorus Mono', category: 'modulation', orphan: 'chorus_mono.cc' },
+
+    // --- Phase 1-e: time/delay family ---
+    // duck/digital delays are bundle-LOCAL dsp (their .lv2 dirs ship the
+    // .cc); ttl port space = the wrapper enums from the gx_*.h headers.
+    // digital_delay(.st): SYNC + HOSTBPM are wrapper-level LV2 host-tempo
+    // ports the faust class ignores — skipPorts drops them from the param
+    // mirror (their port indexes stay holes; the DSP connect() default-case
+    // discards them anyway).
+    { key: 'duck_delay', menuName: 'Duck Delay', category: 'delay', ttl: 'gx_duck_delay.lv2/gx_duck_delay.ttl' },
+    { key: 'duck_delay_st', menuName: 'Duck Delay Stereo', category: 'delay', ttl: 'gx_duck_delay_st.lv2/gx_duck_delay_st.ttl' },
+    { key: 'digital_delay', menuName: 'Digital Delay', category: 'delay', ttl: 'gx_digital_delay.lv2/gx_digital_delay.ttl', skipPorts: ['SYNC', 'HOSTBPM'] },
+    { key: 'digital_delay_st', menuName: 'Digital Delay Stereo', category: 'delay', ttl: 'gx_digital_delay_st.lv2/gx_digital_delay_st.ttl', skipPorts: ['SYNC', 'HOSTBPM'] },
+    // tape sims (12au7 tables) + the Copicat tape-echo circuit sim + the
+    // 12ax7 tube delay — standard faust-generated classes
+    { key: 'gxtape', menuName: 'Tape', category: 'delay', ttl: 'gxtape.lv2/gxtape.ttl' },
+    { key: 'gxtape_st', menuName: 'Tape Stereo', category: 'delay', ttl: 'gxtape_st.lv2/gxtape_st.ttl' },
+    { key: 'gxechocat', menuName: 'Echo Cat', category: 'delay', ttl: 'gxechocat.lv2/gxechocat.ttl' },
+    { key: 'gxtubedelay', menuName: 'Tube Delay', category: 'delay', ttl: 'gxtubedelay.lv2/gxtubedelay.ttl' },
+    // circuit-modelled TS-9: menu category DRIVE (Tubescreamer-style
+    // overdrive) even though its TU is gxfx_dsp_time.cpp
+    { key: 'ts9', menuName: 'TS-9', category: 'drive', ttl: 'gxts9.lv2/gxts9.ttl' },
+    // Boss OC-2 style octave divider — SPECIAL (no pitch category in the
+    // frozen vocabulary; the plan parks octavers there)
+    { key: 'oc_2', menuName: 'OC-2 Octave', category: 'special', ttl: 'gx_oc_2.lv2/gx_oc_2.ttl' },
+    // classic MONO faust orphans — named "Classic ..." to stay distinct
+    // from v1's STEREO delay id 8 (stereodelay.cc) / echo id 9
+    // (stereoecho.cc)
+    { key: 'classic_delay', menuName: 'Classic Delay', category: 'delay', orphan: 'delay.cc' },
+    { key: 'classic_echo', menuName: 'Classic Echo', category: 'delay', orphan: 'echo.cc' },
 ];
 
 const FX_COUNT = MANIFEST.length;
@@ -264,8 +311,10 @@ function ttlEffect(entry) {
         if (!p.symbol) problems.push(`port index ${p.index}: missing lv2:symbol`);
     }
     const audioIns = ports.filter((p) => isA(p, 'AudioPort') && isA(p, 'InputPort'));
+    const skip = new Set(entry.skipPorts || []);
     const paramPorts = ports.filter((p) =>
         isA(p, 'ControlPort') && isA(p, 'InputPort')
+        && !skip.has(p.symbol)
         && !p.designation.some((d) => d.endsWith('enabled'))
         && !p.props.some((x) => x.endsWith('trigger') || x.endsWith('notOnGUI')));
     paramPorts.sort((a, b) => a.index - b.index);
@@ -424,6 +473,33 @@ const LABEL_OVERRIDES = {
     FEEDBACKGAIN: 'Feedback Gain',
     LFOFREQ: 'LFO Freq',
     DELAYOFFSET: 'Delay Offset',
+    // --- Phase 1-e time/delay family (keys chosen to NOT collide with any
+    // symbol/name of effects 0..44 — regeneration keeps those byte-identical;
+    // e.g. there is deliberately NO 'DELAY' override: flanger_st id 43
+    // already carries that symbol) ---
+    // duck_delay / duck_delay_st (ttl names are the upper-case symbols)
+    RELESE: 'Release',      // upstream's misspelling of RELEASE (mono variant)
+    PINGPONG: 'Ping-Pong',
+    // digital_delay / digital_delay_st
+    BPM: 'BPM',
+    bpm: 'BPM',             // gxechocat ttl symbol is lower-case
+    HOWPASS: 'Lowpass',     // upstream's misspelling — it is the low cut
+    // gxtape / gxtape_st (ttl symbols are lower-case camel)
+    wowdepth: 'Wow Depth',
+    wowfreq: 'Wow Freq',
+    flutdepth: 'Flutter Depth',
+    flutfreq: 'Flutter Freq',
+    hiss: 'Tape Hiss',
+    type: 'Tape Type',
+    // gxechocat
+    head1: 'Head 1',
+    head2: 'Head 2',
+    head3: 'Head 3',
+    // gx_oc_2
+    OCTAVE1: 'Octave 1',
+    OCTAVE2: 'Octave 2',
+    // classic echo orphan (PERCENT = wet share)
+    PERCENT: 'Wet %',
 };
 
 function titleCase(s) {

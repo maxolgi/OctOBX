@@ -538,7 +538,7 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 45) return `effect_count=${mod._fx_effect_count()}, want 45 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation)`;
+    if (mod._fx_effect_count() !== 57) return `effect_count=${mod._fx_effect_count()}, want 57 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
@@ -554,7 +554,16 @@ async function main() {
     if (mod._fx_param_count(41) !== 8) return `param_count(41)=${mod._fx_param_count(41)}, want 8 (switched_tremolo)`;
     if (mod._fx_param_count(42) !== 10) return `param_count(42)=${mod._fx_param_count(42)}, want 10 (classic phaser)`;
     if (mod._fx_param_count(44) !== 3) return `param_count(44)=${mod._fx_param_count(44)}, want 3 (chorus_mono)`;
-    if (mod._fx_param_count(45) !== -1) return `param_count(45)=${mod._fx_param_count(45)}, want -1 (out of range)`;
+    if (mod._fx_param_count(45) !== 5) return `param_count(45)=${mod._fx_param_count(45)}, want 5 (duck_delay)`;
+    if (mod._fx_param_count(46) !== 8) return `param_count(46)=${mod._fx_param_count(46)}, want 8 (duck_delay_st)`;
+    if (mod._fx_param_count(47) !== 8) return `param_count(47)=${mod._fx_param_count(47)}, want 8 (digital_delay; SYNC/HOSTBPM skipped)`;
+    if (mod._fx_param_count(49) !== 10) return `param_count(49)=${mod._fx_param_count(49)}, want 10 (gxtape)`;
+    if (mod._fx_param_count(51) !== 8) return `param_count(51)=${mod._fx_param_count(51)}, want 8 (gxechocat)`;
+    if (mod._fx_param_count(53) !== 3) return `param_count(53)=${mod._fx_param_count(53)}, want 3 (ts9)`;
+    if (mod._fx_param_count(54) !== 3) return `param_count(54)=${mod._fx_param_count(54)}, want 3 (oc_2)`;
+    if (mod._fx_param_count(55) !== 2) return `param_count(55)=${mod._fx_param_count(55)}, want 2 (classic_delay)`;
+    if (mod._fx_param_count(56) !== 2) return `param_count(56)=${mod._fx_param_count(56)}, want 2 (classic_echo)`;
+    if (mod._fx_param_count(57) !== -1) return `param_count(57)=${mod._fx_param_count(57)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -562,6 +571,11 @@ async function main() {
     if (mod._fx_is_stereo(39) !== 0) return `is_stereo(39)=${mod._fx_is_stereo(39)}, want 0 (tubetremelo, dual-mono)`;
     if (mod._fx_is_stereo(42) !== 1) return `is_stereo(42)=${mod._fx_is_stereo(42)}, want 1 (classic phaser stereo orphan)`;
     if (mod._fx_is_stereo(30) !== 1) return `is_stereo(30)=${mod._fx_is_stereo(30)}, want 1 (tonecontroll, native stereo faust class)`;
+    if (mod._fx_is_stereo(46) !== 1) return `is_stereo(46)=${mod._fx_is_stereo(46)}, want 1 (duck_delay_st)`;
+    if (mod._fx_is_stereo(48) !== 1) return `is_stereo(48)=${mod._fx_is_stereo(48)}, want 1 (digital_delay_st)`;
+    if (mod._fx_is_stereo(50) !== 1) return `is_stereo(50)=${mod._fx_is_stereo(50)}, want 1 (gxtape_st)`;
+    if (mod._fx_is_stereo(45) !== 0) return `is_stereo(45)=${mod._fx_is_stereo(45)}, want 0 (duck_delay, dual-mono)`;
+    if (mod._fx_is_stereo(53) !== 0) return `is_stereo(53)=${mod._fx_is_stereo(53)}, want 0 (ts9, dual-mono)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
@@ -574,7 +588,16 @@ async function main() {
     if (mod._fx_default(41, 5) !== 4) return `default(41,5)=${mod._fx_default(41, 5)}, want 4 (switched_tremolo STEPS)`;
     if (mod._fx_default(42, 0) !== 800) return `default(42,0)=${mod._fx_default(42, 0)}, want 800 (classic phaser MAXNOTCH1FREQ)`;
     if (mod._fx_default(44, 0) !== 2) return `default(44,0)=${mod._fx_default(44, 0)}, want 2 (chorus_mono FREQ)`;
-    if (mod._fx_default(45, 0) !== 0) return `default(45,0)=${mod._fx_default(45, 0)}, want 0 (invalid fx)`;
+    if (mod._fx_default(45, 4) !== 500) return `default(45,4)=${mod._fx_default(45, 4)}, want 500 (duck_delay TIME)`;
+    if (mod._fx_default(46, 5) !== f32(0.0)) return `default(46,5)=${mod._fx_default(46, 5)}, want 0 (duck_delay_st PINGPONG)`;
+    if (mod._fx_default(47, 0) !== 120) return `default(47,0)=${mod._fx_default(47, 0)}, want 120 (digital_delay BPM)`;
+    if (mod._fx_default(49, 6) !== f32(0.4)) return `default(49,6)=${mod._fx_default(49, 6)}, want ${f32(0.4)} (gxtape hiss)`;
+    if (mod._fx_default(52, 1) !== 160) return `default(52,1)=${mod._fx_default(52, 1)}, want 160 (gxtubedelay delay)`;
+    if (mod._fx_default(53, 0) !== -16) return `default(53,0)=${mod._fx_default(53, 0)}, want -16 (ts9 Level)`;
+    if (mod._fx_default(54, 1) !== f32(0.5)) return `default(54,1)=${mod._fx_default(54, 1)}, want ${f32(0.5)} (oc_2 OCTAVE1)`;
+    if (mod._fx_default(55, 1) !== 0) return `default(55,1)=${mod._fx_default(55, 1)}, want 0 (classic_delay GAIN)`;
+    if (mod._fx_default(56, 1) !== 1) return `default(56,1)=${mod._fx_default(56, 1)}, want 1 (classic_echo TIME)`;
+    if (mod._fx_default(57, 0) !== 0) return `default(57,0)=${mod._fx_default(57, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
     for (let s = 0; s < 11; s++) {
@@ -592,7 +615,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 45); // FX_COUNT == 45 since Phase 1-d
+    mod._fx_set_slot(0, 0, 57); // FX_COUNT == 57 since Phase 1-e
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -1118,6 +1141,123 @@ async function main() {
     if (mod._fx_get_param(0, 0, 0) !== f32(7.5)) return `chorus_mono FREQ round-trip=${mod._fx_get_param(0, 0, 0)}, want ${f32(7.5)}`;
     const params = new Float32Array(mod.HEAPF32.buffer, mod._fx_get_params_ptr(), 10 * 11 * 48);
     if (params[(0 * 11 + 0) * 48 + 0] !== f32(7.5)) return `chorus_mono mirror=${params[(0 * 11 + 0) * 48 + 0]}, want ${f32(7.5)}`;
+  });
+
+  // (w) Time/delay family spot check (Phase 1-e) ----------------------------
+  // Exercises every DSP shape of the family: bundle-local mono (duck_delay)
+  // + STEREO (duck_delay_st) classes, the 4 MB-member digital_delay (mono,
+  // dual-mono pair), the 12au7-table gxtape, the copicat gxechocat, the
+  // 12ax7 gxtubedelay, the ts9 circuit-sim adapter, the oc_2 octaver and
+  // both classic orphans. Renders prove the wrapper-space PortIndex enums
+  // and the circuit tables link; a feedback sweep on duck_delay proves the
+  // generated FX_PORTS row reaches the DSP; the heap-size probe around a
+  // digital_delay slot assign confirms the documented 4 MB-at-creation
+  // member (2 x 4 MB dual-mono, bounded per slot).
+  expect('w. time family: duck/tape/echocat/tubedelay/ts9/oc_2/classics render; duck feedback sweeps; digital_delay heap growth bounded', () => {
+    const renderTrace = (fxId, setParams, quanta = 80, skip = 10) => {
+      mod._obxd_init(48000); // fresh: default chain, slot 0 = wah
+      mod._fx_set_slot(0, 0, fxId);
+      if (mod._fx_get_slot(0, 0) !== fxId) return { err: `slot(0,0)=${mod._fx_get_slot(0, 0)}, want ${fxId}` };
+      setParams.forEach(([p, v]) => mod._fx_set_param(0, 0, p, v));
+      mod._fx_set_enabled(0, 0, 1);
+      mod._obxd_midi_in(0, 0x90, 60, 100);
+      let s = 0;
+      let finite = true;
+      const perQuantum = [];
+      for (let q = 0; q < quanta; q++) {
+        mod._obxd_render(128);
+        if (q < skip) continue; // let the note settle
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        const r = new Float32Array(mod.HEAPF32.buffer, mod._get_track_r_ptr(0), 128);
+        let qs = 0;
+        for (let i = 0; i < 128; i++) {
+          if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) finite = false;
+          qs += l[i] * l[i] + r[i] * r[i];
+        }
+        s += qs;
+        perQuantum.push(Math.sqrt(qs / 256));
+      }
+      mod._obxd_midi_in(0, 0x80, 60, 0);
+      mod._obxd_panic(0);
+      if (!finite) return { err: `non-finite sample through fx ${fxId}` };
+      return { rms: Math.sqrt(s / ((quanta - skip) * 256)), perQuantum };
+    };
+    // dry passes (default wet levels are subtle) — the point is: wrapper
+    // PortIndex links, tables link, adapter runs, output stays finite+alive
+    for (const [fxId, name] of [
+      [45, 'duck_delay'], [46, 'duck_delay_st'], [47, 'digital_delay'],
+      [49, 'gxtape'], [50, 'gxtape_st'], [51, 'gxechocat'], [52, 'gxtubedelay'],
+      [53, 'ts9'], [54, 'oc_2'], [55, 'classic_delay'], [56, 'classic_echo'],
+    ]) {
+      const r = renderTrace(fxId, []);
+      if (r.err) return `${name}: ${r.err}`;
+      if (!(r.rms > 0)) return `${name} output silent (rms=${r.rms.toExponential(3)})`;
+    }
+    // duck_delay FEEDBACK reach: AMOUNT is the envelope-duck DEPTH in dB
+    // (0 = wet always on — duck_delay.dsp gates the wet path by
+    // 1 - amp_follower*db2linear(amount), so a sustained note at amount 56
+    // silences the repeats). With AMOUNT 0 + TIME 30 ms + FEEDBACK 0.9 the
+    // repeats recirculate ~3x per half-window: the intra-run SECOND-half /
+    // FIRST-half energy ratio climbs well above 1, while FEEDBACK 0 stays
+    // flat — an intra-run metric, immune to the run-to-run synth variance
+    // that flakes absolute-RMS comparisons (see check v).
+    const halfRatio = (t) => {
+      const n = t.perQuantum.length;
+      const h = n >> 1;
+      const e = (a, b) => t.perQuantum.slice(a, b).reduce((x, y) => x + y * y, 0);
+      return e(h, n) / e(0, h);
+    };
+    const fb0 = renderTrace(45, [[0, 0], [4, 30], [2, 0]]);   // AMOUNT 0, TIME 30ms, FEEDBACK 0
+    if (fb0.err) return fb0.err;
+    const fb9 = renderTrace(45, [[0, 0], [4, 30], [2, 0.9]]); // same, FEEDBACK 0.9
+    if (fb9.err) return fb9.err;
+    const r0 = halfRatio(fb0);
+    const r9 = halfRatio(fb9);
+    if (!(r9 > Math.max(1.3, r0 + 0.25))) {
+      return `duck_delay FEEDBACK does not reach the DSP: halfRatio(fb0)=${r0.toFixed(3)} halfRatio(fb0.9)=${r9.toFixed(3)} (want fb0.9 > max(1.3, fb0+0.25))`;
+    }
+    // digital_delay heap probe: fVec2[524288] doubles = 4 MB per object,
+    // news EAGERLY in fx_set_slot (dual-mono => 2 objects / 8 MB per slot).
+    // The 256 MB initial heap carries a large free region (observed
+    // ~240 MB post-init), so first exhaust it with 4 MB malloc pads until
+    // the memory grows once — after that the free list holds < 4 MB plus
+    // the growth-increment slack, and ~88 MB of DSP objects must show up as
+    // real growth. 11 slots x 2 objects = 88 MB expected; the [32, 220] MB
+    // window tolerates emscripten's ~64 MB growth granularity (1-2 extra
+    // increments of slack) while catching both failure modes: a
+    // non-allocating class (~0 growth) and unbounded per-object growth
+    // (looper-scale 64 MB/object => ~1.4 GB).
+    mod._obxd_init(48000);
+    const pads = [];
+    const sizeBeforePads = mod.HEAPU8.buffer.byteLength;
+    for (;;) {
+      const p = mod._malloc(4 * 1024 * 1024);
+      pads.push(p);
+      if (mod.HEAPU8.buffer.byteLength > sizeBeforePads) break; // grew => free space exhausted
+    }
+    const heapBefore = mod.HEAPU8.buffer.byteLength;
+    for (let s = 0; s < 11; s++) mod._fx_set_slot(1, s, 47);
+    const heapAfter = mod.HEAPU8.buffer.byteLength;
+    const growth = heapAfter - heapBefore;
+    for (const p of pads) mod._free(p);
+    if (!(growth >= 32 * 1024 * 1024 && growth <= 220 * 1024 * 1024)) {
+      return `digital_delay heap growth ${(growth / 1048576).toFixed(2)} MB for 11 slots outside the expected 32..220 MB window (fVec2[524288] x22)`;
+    }
+    // ...and the slots still render after the growth (views rebuild off the
+    // NEW buffer — memory growth detaches the old one).
+    mod._fx_set_enabled(1, 0, 1);
+    mod._obxd_midi_in(1, 0x91, 60, 100);
+    let s = 0;
+    for (let q = 0; q < 20; q++) {
+      mod._obxd_render(128);
+      if (q < 5) continue;
+      const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(1), 128);
+      for (let i = 0; i < 128; i++) s += l[i] * l[i];
+    }
+    mod._obxd_midi_in(1, 0x81, 60, 0);
+    mod._obxd_panic(1);
+    if (!(s > 0)) return `digital_delay silent after heap growth (sum=${s.toExponential(3)})`;
+    console.log(`    digital_delay heap growth: ${(growth / 1048576).toFixed(1)} MB for 11 slots (~${(growth / 11 / 1048576).toFixed(2)} MB/slot incl. growth-granularity slack; class cost 8 MB/slot dual-mono)`);
   });
 
   // --- summary -------------------------------------------------------------

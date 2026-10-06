@@ -2739,6 +2739,962 @@
           "integer": false
         }
       ]
+    },
+    {
+      "id": 45,
+      "key": "duck_delay",
+      "label": "Duck Delay",
+      "dsp": "duck_delay",
+      "stereo": false,
+      "category": "delay",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 2,
+          "symbol": "AMOUNT",
+          "name": "Amount",
+          "default": 0.5,
+          "min": 0,
+          "max": 56,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "ATTACK",
+          "name": "Attack",
+          "default": 0.1,
+          "min": 0.05,
+          "max": 0.5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "FEEDBACK",
+          "name": "Feedback",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "RELESE",
+          "name": "Release",
+          "default": 0.1,
+          "min": 0.05,
+          "max": 2,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "TIME",
+          "name": "Time",
+          "default": 500,
+          "min": 1,
+          "max": 2000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 46,
+      "key": "duck_delay_st",
+      "label": "Duck Delay Stereo",
+      "dsp": "duck_delay_st",
+      "stereo": true,
+      "category": "delay",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 4,
+          "symbol": "AMOUNT",
+          "name": "Amount",
+          "default": 0.5,
+          "min": 0,
+          "max": 56,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "ATTACK",
+          "name": "Attack",
+          "default": 0.1,
+          "min": 0.05,
+          "max": 0.5,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "COLORATION",
+          "name": "Coloration",
+          "default": 0,
+          "min": -1,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "EFFECT",
+          "name": "Effect",
+          "default": 0,
+          "min": -16,
+          "max": 4,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "FEEDBACK",
+          "name": "Feedback",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "PINGPONG",
+          "name": "Ping-Pong",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "RELEASE",
+          "name": "Release",
+          "default": 0.1,
+          "min": 0.05,
+          "max": 2,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 11,
+          "symbol": "TIME",
+          "name": "Time",
+          "default": 500,
+          "min": 1,
+          "max": 2000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 47,
+      "key": "digital_delay",
+      "label": "Digital Delay",
+      "dsp": "digital_delay",
+      "stereo": false,
+      "category": "delay",
+      "out_ports": [
+        {
+          "port": 11,
+          "symbol": "DD_NOTIFY",
+          "name": "Dd Notify",
+          "min": 24,
+          "max": 360
+        }
+      ],
+      "params": [
+        {
+          "port": 2,
+          "symbol": "BPM",
+          "name": "BPM",
+          "default": 120,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "FEEDBACK",
+          "name": "Feedback",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "GAIN",
+          "name": "Gain",
+          "default": 100,
+          "min": 0,
+          "max": 120,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "HIGHPASS",
+          "name": "Highpass",
+          "default": 120,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "HOWPASS",
+          "name": "Lowpass",
+          "default": 12000,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "LEVEL",
+          "name": "Level",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "MODE",
+          "name": "Mode",
+          "default": 0,
+          "min": 0,
+          "max": 3,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 9,
+          "symbol": "NOTES",
+          "name": "Notes",
+          "default": 4,
+          "min": 0,
+          "max": 17,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        }
+      ]
+    },
+    {
+      "id": 48,
+      "key": "digital_delay_st",
+      "label": "Digital Delay Stereo",
+      "dsp": "digital_delay_st",
+      "stereo": true,
+      "category": "delay",
+      "out_ports": [
+        {
+          "port": 13,
+          "symbol": "DD_NOTIFY",
+          "name": "Dd Notify",
+          "min": 24,
+          "max": 360
+        }
+      ],
+      "params": [
+        {
+          "port": 4,
+          "symbol": "BPM",
+          "name": "BPM",
+          "default": 120,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "FEEDBACK",
+          "name": "Feedback",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "GAIN",
+          "name": "Gain",
+          "default": 100,
+          "min": 0,
+          "max": 120,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "HIGHPASS",
+          "name": "Highpass",
+          "default": 120,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "HOWPASS",
+          "name": "Lowpass",
+          "default": 12000,
+          "min": 20,
+          "max": 20000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "LEVEL",
+          "name": "Level",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 10,
+          "symbol": "MODE",
+          "name": "Mode",
+          "default": 0,
+          "min": 0,
+          "max": 3,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 11,
+          "symbol": "NOTES",
+          "name": "Notes",
+          "default": 4,
+          "min": 0,
+          "max": 17,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        }
+      ]
+    },
+    {
+      "id": 49,
+      "key": "gxtape",
+      "label": "Tape",
+      "dsp": "gxtape",
+      "stereo": false,
+      "category": "delay",
+      "out_ports": [
+        {
+          "port": 12,
+          "symbol": "meterlevel",
+          "name": "Meterlevel",
+          "min": -90,
+          "max": 10
+        }
+      ],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "on",
+          "name": "On",
+          "default": 1,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "drive",
+          "name": "Drive",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "wowdepth",
+          "name": "Wow Depth",
+          "default": 0.02,
+          "min": 0,
+          "max": 0.03,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "wowfreq",
+          "name": "Wow Freq",
+          "default": 1.4,
+          "min": 0,
+          "max": 4,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "flutdepth",
+          "name": "Flutter Depth",
+          "default": 0.02,
+          "min": 0,
+          "max": 0.03,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "flutfreq",
+          "name": "Flutter Freq",
+          "default": 20,
+          "min": 4,
+          "max": 60,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "hiss",
+          "name": "Tape Hiss",
+          "default": 0.4,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "type",
+          "name": "Tape Type",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "speed",
+          "name": "Speed",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "gain",
+          "name": "Gain",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 50,
+      "key": "gxtape_st",
+      "label": "Tape Stereo",
+      "dsp": "gxtape_st",
+      "stereo": true,
+      "category": "delay",
+      "out_ports": [
+        {
+          "port": 14,
+          "symbol": "meterlevel",
+          "name": "Meterlevel",
+          "min": -90,
+          "max": 10
+        }
+      ],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "on",
+          "name": "On",
+          "default": 1,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "drive",
+          "name": "Drive",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "wowdepth",
+          "name": "Wow Depth",
+          "default": 0.02,
+          "min": 0,
+          "max": 0.03,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "wowfreq",
+          "name": "Wow Freq",
+          "default": 1.4,
+          "min": 0,
+          "max": 4,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "flutdepth",
+          "name": "Flutter Depth",
+          "default": 0.02,
+          "min": 0,
+          "max": 0.03,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "flutfreq",
+          "name": "Flutter Freq",
+          "default": 20,
+          "min": 4,
+          "max": 60,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 6,
+          "symbol": "hiss",
+          "name": "Tape Hiss",
+          "default": 0.4,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 7,
+          "symbol": "type",
+          "name": "Tape Type",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 8,
+          "symbol": "speed",
+          "name": "Speed",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 9,
+          "symbol": "gain",
+          "name": "Gain",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 51,
+      "key": "gxechocat",
+      "label": "Echo Cat",
+      "dsp": "gxechocat",
+      "stereo": false,
+      "category": "delay",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "input",
+          "name": "Input",
+          "default": 0.25,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "swell",
+          "name": "Swell",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "sustain",
+          "name": "Sustain",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "output",
+          "name": "Output",
+          "default": 1,
+          "min": 0,
+          "max": 4,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "bpm",
+          "name": "BPM",
+          "default": 120,
+          "min": 24,
+          "max": 360,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 5,
+          "symbol": "head1",
+          "name": "Head 1",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 6,
+          "symbol": "head2",
+          "name": "Head 2",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        },
+        {
+          "port": 7,
+          "symbol": "head3",
+          "name": "Head 3",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 1,
+          "toggled": false,
+          "integer": true
+        }
+      ]
+    },
+    {
+      "id": 52,
+      "key": "gxtubedelay",
+      "label": "Tube Delay",
+      "dsp": "gxtubedelay",
+      "stereo": false,
+      "category": "delay",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "drive",
+          "name": "Drive",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "delay",
+          "name": "Delay",
+          "default": 160,
+          "min": 1,
+          "max": 2500,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "feedback",
+          "name": "Feedback",
+          "default": 0.35,
+          "min": 0.01,
+          "max": 0.7,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "level",
+          "name": "Level",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "output",
+          "name": "Output",
+          "default": 0,
+          "min": -20,
+          "max": 20,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "key": "ts9",
+      "label": "TS-9",
+      "dsp": "ts9",
+      "stereo": false,
+      "category": "drive",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "fslider0_",
+          "name": "Level",
+          "default": -16,
+          "min": -20,
+          "max": 4,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "fslider1_",
+          "name": "Tone",
+          "default": 400,
+          "min": 100,
+          "max": 1000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 2,
+          "symbol": "fslider2_",
+          "name": "Drive",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 54,
+      "key": "oc_2",
+      "label": "OC-2 Octave",
+      "dsp": "oc_2",
+      "stereo": false,
+      "category": "special",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 2,
+          "symbol": "DIRECT",
+          "name": "Direct",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 3,
+          "symbol": "OCTAVE1",
+          "name": "Octave 1",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "OCTAVE2",
+          "name": "Octave 2",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 55,
+      "key": "classic_delay",
+      "label": "Classic Delay",
+      "dsp": "classic_delay",
+      "stereo": false,
+      "category": "delay",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "DELAY",
+          "name": "Delay",
+          "default": 0,
+          "min": 0,
+          "max": 5000,
+          "step": 10,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "GAIN",
+          "name": "Gain",
+          "default": 0,
+          "min": -20,
+          "max": 20,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
+    },
+    {
+      "id": 56,
+      "key": "classic_echo",
+      "label": "Classic Echo",
+      "dsp": "classic_echo",
+      "stereo": false,
+      "category": "delay",
+      "out_ports": [],
+      "params": [
+        {
+          "port": 0,
+          "symbol": "PERCENT",
+          "name": "Wet %",
+          "default": 0,
+          "min": 0,
+          "max": 100,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 1,
+          "symbol": "TIME",
+          "name": "Time",
+          "default": 1,
+          "min": 1,
+          "max": 2000,
+          "step": 1,
+          "toggled": false,
+          "integer": false
+        }
+      ]
     }
   ]
 }

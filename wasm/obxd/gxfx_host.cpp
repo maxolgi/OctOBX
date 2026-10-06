@@ -73,6 +73,22 @@ PluginLV2* gxfx_create_switched_tremolo();
 PluginLV2* gxfx_create_phaser_st();
 PluginLV2* gxfx_create_flanger_st();
 PluginLV2* gxfx_create_chorus_mono();
+// time/delay family (gxfx_dsp_time.cpp, Phase 1-e — bundle-local duck/
+// digital delays + 12au7 gxtape(.st) + copicat gxechocat + 12ax7
+// gxtubedelay + the ts9 circuit sim (menu: drive) + oc_2 octaver (menu:
+// special) + the classic mono delay/echo orphans)
+PluginLV2* gxfx_create_duck_delay();
+PluginLV2* gxfx_create_duck_delay_st();
+PluginLV2* gxfx_create_digital_delay();
+PluginLV2* gxfx_create_digital_delay_st();
+PluginLV2* gxfx_create_gxtape();
+PluginLV2* gxfx_create_gxtape_st();
+PluginLV2* gxfx_create_gxechocat();
+PluginLV2* gxfx_create_gxtubedelay();
+PluginLV2* gxfx_create_ts9();
+PluginLV2* gxfx_create_oc_2();
+PluginLV2* gxfx_create_classic_delay();
+PluginLV2* gxfx_create_classic_echo();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -120,7 +136,19 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_switched_tremolo,
     gxfx_create_phaser_st,
     gxfx_create_flanger_st,
-    gxfx_create_chorus_mono
+    gxfx_create_chorus_mono,
+    gxfx_create_duck_delay,
+    gxfx_create_duck_delay_st,
+    gxfx_create_digital_delay,
+    gxfx_create_digital_delay_st,
+    gxfx_create_gxtape,
+    gxfx_create_gxtape_st,
+    gxfx_create_gxechocat,
+    gxfx_create_gxtubedelay,
+    gxfx_create_ts9,
+    gxfx_create_oc_2,
+    gxfx_create_classic_delay,
+    gxfx_create_classic_echo
 };
 
 // Generator↔host drift guard: the factory registry above must list every

@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(45);
+        expect(FX_COUNT).toBe(57);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -104,6 +104,12 @@ describe("gxfx-params — layout invariants", () => {
             // Phase 1-d modulation family (38..44)
             "modulation", "modulation", "modulation", "modulation", // vibe, tubetremelo, tubevibrato, switched_tremolo
             "modulation", "modulation", "modulation", // phaser_st, flanger_st, chorus_mono
+            // Phase 1-e time/delay family (45..56)
+            "delay", "delay", "delay", "delay",       // duck_delay, duck_delay_st, digital_delay, digital_delay_st
+            "delay", "delay", "delay", "delay",       // gxtape, gxtape_st, gxechocat, gxtubedelay
+            "drive",                                   // ts9 (Tubescreamer — drive, not delay)
+            "special",                                 // oc_2 (octave divider — special)
+            "delay", "delay",                          // classic_delay, classic_echo
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -111,14 +117,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 197", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 269", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(197);
-        expect(FX_TOTAL_PARAMS).toBe(197);
+        expect(running).toBe(269);
+        expect(FX_TOTAL_PARAMS).toBe(269);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -188,16 +194,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..44", () => {
-        for (let i = 0; i < 45; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..56", () => {
+        for (let i = 0; i < 57; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(45)).toBe(false);
+        expect(isFxId(57)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(45, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(57, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);
@@ -463,5 +469,154 @@ describe("gxfx-params — Phase 1-d modulation family additions", () => {
         // gx_flanger class, phaser id 6 phaser_mono class)
         expect(FX_EFFECTS[5].params.map((p) => p.symbol)).not.toContain("LFOFREQ");
         expect(FX_EFFECTS[6].params).toHaveLength(3);
+    });
+});
+
+describe("gxfx-params — Phase 1-e time/delay family additions", () => {
+    it("duck_delay (mono) + duck_delay_st (STEREO): ttl ports, misspelled RELESE labeled Release", () => {
+        const dd = FX_EFFECTS[45];
+        expect(dd.key).toBe("duck_delay");
+        expect(dd.label).toBe("Duck Delay");
+        expect(dd.category).toBe("delay");
+        expect(dd.stereo).toBe(false);
+        expect(dd.params.map((p) => p.symbol)).toEqual(["AMOUNT", "ATTACK", "FEEDBACK", "RELESE", "TIME"]);
+        expect(dd.params.map((p) => p.port)).toEqual([2, 3, 4, 5, 6]);
+        expect(dd.params.map((p) => p.name)).toEqual(["Amount", "Attack", "Feedback", "Release", "Time"]);
+        expect(dd.params[0]).toMatchObject({ default: 0.5, min: 0, max: 56 });
+        expect(dd.params[4]).toMatchObject({ default: 500, min: 1, max: 2000, step: 10 });
+        const ds = FX_EFFECTS[46];
+        expect(ds.key).toBe("duck_delay_st");
+        expect(ds.label).toBe("Duck Delay Stereo");
+        expect(ds.stereo).toBe(true); // in/in1 audio pair in the ttl
+        expect(ds.params.map((p) => p.symbol)).toEqual([
+            "AMOUNT", "ATTACK", "COLORATION", "EFFECT", "FEEDBACK", "PINGPONG", "RELEASE", "TIME",
+        ]);
+        expect(ds.params.map((p) => p.port)).toEqual([4, 5, 6, 7, 8, 9, 10, 11]);
+        expect(ds.params[2]).toMatchObject({ name: "Coloration", default: 0, min: -1, max: 1 });
+        expect(ds.params[5]).toMatchObject({ name: "Ping-Pong", default: 0, min: 0, max: 1 });
+        expect(ds.params[6]).toMatchObject({ name: "Release", default: 0.1, min: 0.05, max: 2 });
+    });
+
+    it("digital_delay(.st): SYNC + HOSTBPM wrapper ports skipped; BPM labeled; HOWPASS -> Lowpass", () => {
+        const dm = FX_EFFECTS[47];
+        expect(dm.key).toBe("digital_delay");
+        expect(dm.label).toBe("Digital Delay");
+        expect(dm.stereo).toBe(false);
+        expect(dm.params.map((p) => p.symbol)).toEqual([
+            "BPM", "FEEDBACK", "GAIN", "HIGHPASS", "HOWPASS", "LEVEL", "MODE", "NOTES",
+        ]);
+        expect(dm.params.map((p) => p.port)).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
+        expect(dm.params.map((p) => p.name)).toEqual(["BPM", "Feedback", "Gain", "Highpass", "Lowpass", "Level", "Mode", "Notes"]);
+        // no SYNC/HOSTBPM/BYPASS — wrapper-level host-tempo ports, not params
+        expect(dm.params.map((p) => p.symbol)).not.toContain("SYNC");
+        expect(dm.params.map((p) => p.symbol)).not.toContain("HOSTBPM");
+        expect(dm.params[0]).toMatchObject({ default: 120, min: 24, max: 360 });
+        expect(dm.params[4]).toMatchObject({ default: 12000, min: 20, max: 20000 });
+        expect(dm.params[6]).toMatchObject({ default: 0, min: 0, max: 3, step: 1, integer: true });
+        expect(dm.params[7]).toMatchObject({ default: 4, min: 0, max: 17, step: 1, integer: true });
+        // DD_NOTIFY is a control OUTPUT -> out_ports (declared, unwired), never a param
+        expect(dm.out_ports?.map((p) => p.symbol) ?? []).toEqual([]);
+        expect((spec.effects[47].out_ports as { symbol: string }[]).map((p) => p.symbol)).toEqual(["DD_NOTIFY"]);
+        const ds = FX_EFFECTS[48];
+        expect(ds.key).toBe("digital_delay_st");
+        expect(ds.stereo).toBe(true);
+        expect(ds.params.map((p) => p.port)).toEqual([4, 5, 6, 7, 8, 9, 10, 11]);
+        expect(ds.params.map((p) => p.symbol)).not.toContain("SYNC");
+    });
+
+    it("gxtape(.st): 10 params at ttl ports 0..9, camel-case symbols humanized; meterlevel stays an out_port", () => {
+        const t = FX_EFFECTS[49];
+        expect(t.key).toBe("gxtape");
+        expect(t.label).toBe("Tape");
+        expect(t.stereo).toBe(false);
+        expect(t.params.map((p) => p.symbol)).toEqual([
+            "on", "drive", "wowdepth", "wowfreq", "flutdepth", "flutfreq", "hiss", "type", "speed", "gain",
+        ]);
+        expect(t.params.map((p) => p.name)).toEqual([
+            "On", "Drive", "Wow Depth", "Wow Freq", "Flutter Depth", "Flutter Freq", "Tape Hiss", "Tape Type", "Speed", "Gain",
+        ]);
+        expect(t.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        expect(t.params[0]).toMatchObject({ default: 1, min: 0, max: 1 });
+        expect(t.params[2]).toMatchObject({ default: 0.02, min: 0, max: 0.03, step: 0.01 });
+        expect(t.params[6]).toMatchObject({ default: 0.4, min: 0, max: 1 });
+        const ts = FX_EFFECTS[50];
+        expect(ts.key).toBe("gxtape_st");
+        expect(ts.label).toBe("Tape Stereo");
+        expect(ts.stereo).toBe(true); // outl/outr + inl/inr audio pairs
+        expect(ts.params).toHaveLength(10);
+        expect((spec.effects[49].out_ports as { symbol: string }[]).map((p) => p.symbol)).toEqual(["meterlevel"]);
+    });
+
+    it("gxechocat + gxtubedelay: circuit-table classes with ttl-faithful ports", () => {
+        const ec = FX_EFFECTS[51];
+        expect(ec.key).toBe("gxechocat");
+        expect(ec.label).toBe("Echo Cat");
+        expect(ec.stereo).toBe(false);
+        expect(ec.params.map((p) => p.symbol)).toEqual([
+            "input", "swell", "sustain", "output", "bpm", "head1", "head2", "head3",
+        ]);
+        expect(ec.params.map((p) => p.name)).toEqual([
+            "Input", "Swell", "Sustain", "Output", "BPM", "Head 1", "Head 2", "Head 3",
+        ]);
+        expect(ec.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+        expect(ec.params[0]).toMatchObject({ default: 0.25, min: 0, max: 1 });
+        expect(ec.params[3]).toMatchObject({ default: 1, min: 0, max: 4 }); // ttl max (the .cc comment says 2 — ttl wins)
+        expect(ec.params[4]).toMatchObject({ default: 120, min: 24, max: 360 });
+        const td = FX_EFFECTS[52];
+        expect(td.key).toBe("gxtubedelay");
+        expect(td.label).toBe("Tube Delay");
+        expect(td.stereo).toBe(false);
+        expect(td.params.map((p) => p.symbol)).toEqual(["drive", "delay", "feedback", "level", "output"]);
+        expect(td.params.map((p) => p.port)).toEqual([0, 1, 2, 3, 4]);
+        expect(td.params[1]).toMatchObject({ default: 160, min: 1, max: 2500 });
+        expect(td.params[2]).toMatchObject({ default: 0.35, min: 0.01, max: 0.7 });
+    });
+
+    it("ts9 (category DRIVE) + oc_2 (category SPECIAL): bundle-local circuit classes", () => {
+        const ts = FX_EFFECTS[53];
+        expect(ts.key).toBe("ts9");
+        expect(ts.label).toBe("TS-9");
+        expect(ts.category).toBe("drive"); // Tubescreamer = drive, not delay
+        expect(ts.stereo).toBe(false);
+        expect(ts.params.map((p) => p.symbol)).toEqual(["fslider0_", "fslider1_", "fslider2_"]);
+        expect(ts.params.map((p) => p.name)).toEqual(["Level", "Tone", "Drive"]);
+        expect(ts.params.map((p) => p.port)).toEqual([0, 1, 2]);
+        expect(ts.params[0]).toMatchObject({ default: -16, min: -20, max: 4, step: 0.1 });
+        expect(ts.params[1]).toMatchObject({ default: 400, min: 100, max: 1000, step: 10 });
+        expect(ts.params[2]).toMatchObject({ default: 0.5, min: 0, max: 1, step: 0.01 });
+        const oc = FX_EFFECTS[54];
+        expect(oc.key).toBe("oc_2");
+        expect(oc.label).toBe("OC-2 Octave");
+        expect(oc.category).toBe("special"); // octaver — no pitch category in the vocabulary
+        expect(oc.stereo).toBe(false);
+        expect(oc.params.map((p) => p.symbol)).toEqual(["DIRECT", "OCTAVE1", "OCTAVE2"]);
+        expect(oc.params.map((p) => p.name)).toEqual(["Direct", "Octave 1", "Octave 2"]);
+        expect(oc.params.map((p) => p.port)).toEqual([2, 3, 4]);
+        expect(oc.params[0]).toMatchObject({ default: 0.5, min: 0, max: 1 });
+    });
+
+    it("classic delay/echo orphans: mono 2-param classes, distinct from v1 stereo ids 8/9", () => {
+        const cd = FX_EFFECTS[55];
+        expect(cd.key).toBe("classic_delay");
+        expect(cd.label).toBe("Classic Delay");
+        expect(cd.category).toBe("delay");
+        expect(cd.stereo).toBe(false);
+        expect(cd.params.map((p) => p.symbol)).toEqual(["DELAY", "GAIN"]);
+        expect(cd.params.map((p) => p.port)).toEqual([0, 1]);
+        expect(cd.params[0]).toMatchObject({ name: "Delay", default: 0, min: 0, max: 5000, step: 10 });
+        expect(cd.params[1]).toMatchObject({ name: "Gain", default: 0, min: -20, max: 20, step: 0.1 });
+        const ce = FX_EFFECTS[56];
+        expect(ce.key).toBe("classic_echo");
+        expect(ce.label).toBe("Classic Echo");
+        expect(ce.stereo).toBe(false);
+        expect(ce.params.map((p) => p.symbol)).toEqual(["PERCENT", "TIME"]);
+        expect(ce.params.map((p) => p.name)).toEqual(["Wet %", "Time"]);
+        expect(ce.params[0]).toMatchObject({ default: 0, min: 0, max: 100, step: 0.1 });
+        expect(ce.params[1]).toMatchObject({ default: 1, min: 1, max: 2000, step: 1 });
+        // v1 id 8/9 keep their stereo stereodelay/stereoecho identity
+        expect(FX_EFFECTS[8].key).toBe("delay");
+        expect(FX_EFFECTS[8].stereo).toBe(true);
+        expect(FX_EFFECTS[9].key).toBe("echo");
+        expect(FX_EFFECTS[9].stereo).toBe(true);
     });
 });
