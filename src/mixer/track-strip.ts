@@ -29,6 +29,7 @@ import { createEqCurve } from "./eq-curve";
 import { FX_EFFECTS, FX_SLOTS, FX_INSTANCE_COUNT, FX_SLOT_PARAMS, fxParamTo01, type FxCategory } from "../gxfx-params";
 import { getFxInstance, setFxParamUI, setFxEnabledUI, setSlotUI, moveSlotUI, onFxStateChange, type FxInstanceState } from "./fx-rack";
 import { getFxOutParam } from "../obxd-audio";
+import { openObxfPopup } from "../obxf-popup";
 
 const fmtDb = (v: number) => v.toFixed(1);
 const fmtRatio = (v: number) => (v >= 20 ? "20:1" : v.toFixed(1) + ":1");
@@ -447,47 +448,50 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
             renderFxEdit();
         }
 
-        /** The per-slot effect dropdown: "(none)" above one optgroup per
-         * category (FX_CATEGORIES order), one option per effect. */
-        function buildFxSlotSelect(s: number, fxId: number): HTMLSelectElement {
-            const sel = document.createElement("select");
-            sel.className = "fx-slot-select";
-            sel.title = `Effect in chain slot ${s + 1}`;
-            const none = document.createElement("option");
-            none.value = "-1";
-            none.textContent = "(none)";
-            sel.appendChild(none);
-            for (const cat of FX_CATEGORIES) {
-                const group = document.createElement("optgroup");
-                group.label = cat.charAt(0).toUpperCase() + cat.slice(1);
-                for (const fx of FX_EFFECTS) {
-                    if (fx.category !== cat) continue;
-                    const opt = document.createElement("option");
-                    opt.value = String(fx.id);
-                    opt.textContent = fx.label;
-                    group.appendChild(opt);
-                }
-                sel.appendChild(group);
-            }
-            sel.value = String(fxId);
-            // Interacting with the dropdown picks the slot for the edit
-            // area; stopPropagation keeps the row click handler from
-            // re-rendering the chain while the popup is open.
-            sel.addEventListener("click", (ev) => {
+        /** The per-slot effect picker: a styled button opening the OB-Xf
+         * popup (the native <select> popup scrollbar cannot be themed).
+         * "(none)" above one section per category (FX_CATEGORIES order),
+         * one entry per effect. The popup lives in document.body, so a
+         * chain re-render can never destroy it mid-interaction. */
+        function buildFxSlotSelect(s: number, fxId: number): HTMLButtonElement {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "fx-slot-select";
+            btn.title = `Effect in chain slot ${s + 1}`;
+            const fx = fxId >= 0 ? FX_EFFECTS[fxId] : undefined;
+            btn.textContent = (fx ? fx.label : "(none)") + " \u25be";
+            btn.addEventListener("click", (ev) => {
                 ev.stopPropagation();
+                // Interacting with the picker picks the slot for the edit
+                // area (class toggle only — no chain rebuild).
                 selectFxSlot(s);
+                openObxfPopup({
+                    anchor: btn.getBoundingClientRect(),
+                    items: [
+                        {
+                            text: "(none)",
+                            checked: fxId === -1,
+                            // Engine semantics: a slot change resets the
+                            // slot's params to the new effect's defaults and
+                            // clears its enabled flag; setSlotUI's notify
+                            // re-renders chain + edit area.
+                            onClick: () => setSlotUI(t, s, -1),
+                        },
+                        ...FX_CATEGORIES.flatMap((cat) => [
+                            {
+                                type: "section" as const,
+                                label: cat.charAt(0).toUpperCase() + cat.slice(1),
+                            },
+                            ...FX_EFFECTS.filter((f) => f.category === cat).map((f) => ({
+                                text: f.label,
+                                checked: f.id === fxId,
+                                onClick: () => setSlotUI(t, s, f.id),
+                            })),
+                        ]),
+                    ],
+                });
             });
-            sel.addEventListener("focus", () => selectFxSlot(s));
-            sel.addEventListener("change", (ev) => {
-                ev.stopPropagation();
-                fxSlot = s;
-                fxSlotLocked = true;
-                // Engine semantics: a slot change resets the slot's params
-                // to the new effect's defaults and clears its enabled flag;
-                // setSlotUI's notify re-renders chain + edit area.
-                setSlotUI(t, s, parseInt(sel.value, 10));
-            });
-            return sel;
+            return btn;
         }
 
         function renderFxChain(): void {

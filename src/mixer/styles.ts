@@ -314,9 +314,10 @@ const CSS = `
 #mixer-panel .fx-row .detail-toggle:disabled { opacity: 0.35; cursor: default; }
 #mixer-panel .fx-slot-select {
     flex: 1; min-width: 0;
+    appearance: none; font: inherit; text-align: left;
     background: #11111a; border: 1px solid #222230; border-radius: 3px;
-    color: #ccc; font-size: 11px; padding: 1px 2px; outline: none;
-    cursor: pointer;
+    color: #ccc; font-size: 11px; padding: 1px 4px; outline: none;
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #mixer-panel .fx-slot-select:hover { border-color: #33333f; }
 #mixer-panel .fx-slot-select:focus { border-color: #2a4a6a; }
@@ -334,6 +335,17 @@ const CSS = `
     font-variant-numeric: tabular-nums; text-align: center;
     padding: 6px 0 2px; letter-spacing: 1px;
 }
+
+/* ── Thin styled scrollbars (strip panels + console row) ───────────── */
+#mixer-panel .detail-panel,
+#mixer-panel .mixer-console {
+    scrollbar-width: thin;
+    scrollbar-color: #2e2e3e transparent;
+}
+#mixer-panel ::-webkit-scrollbar { width: 6px; height: 6px; }
+#mixer-panel ::-webkit-scrollbar-track { background: transparent; }
+#mixer-panel ::-webkit-scrollbar-thumb { background: #2e2e3e; border-radius: 3px; }
+#mixer-panel ::-webkit-scrollbar-thumb:hover { background: #3e3e52; }
 `;
 
 let injected = false;

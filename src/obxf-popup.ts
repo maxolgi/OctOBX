@@ -25,10 +25,16 @@ export interface PopupCustomRow {
     element: HTMLElement;
 }
 
+/** Non-clickable section header inside the item list. */
+export interface PopupSection {
+    type: "section";
+    label: string;
+}
+
 export interface PopupOptions {
     anchor: DOMRect;
     header?: string;
-    items: (PopupItem | PopupCustomRow | "separator")[];
+    items: (PopupItem | PopupCustomRow | PopupSection | "separator")[];
     onClose?: () => void;
 }
 
@@ -37,7 +43,19 @@ let overlayEl: HTMLDivElement | null = null;
 
 function ensureElements(): void {
     if (popupEl) return;
+    if (!document.getElementById("obxf-popup-style")) {
+        const styleEl = document.createElement("style");
+        styleEl.id = "obxf-popup-style";
+        styleEl.textContent = `
+#obxf-popup-menu { scrollbar-width: thin; scrollbar-color: #3a3a4a transparent; }
+#obxf-popup-menu::-webkit-scrollbar { width: 6px; }
+#obxf-popup-menu::-webkit-scrollbar-track { background: transparent; }
+#obxf-popup-menu::-webkit-scrollbar-thumb { background: #3a3a4a; border-radius: 3px; }
+#obxf-popup-menu::-webkit-scrollbar-thumb:hover { background: #4a4a5e; }`;
+        document.head.appendChild(styleEl);
+    }
     popupEl = document.createElement("div");
+    popupEl.id = "obxf-popup-menu";
     popupEl.style.cssText = [
         "position: fixed",
         "z-index: 100000",
@@ -48,6 +66,10 @@ function ensureElements(): void {
         "font-size: 14px",
         "padding: 4px 0",
         "min-width: 120px",
+        "max-width: 320px",
+        "max-height: min(60vh, 480px)",
+        "overflow-y: auto",
+        "overflow-x: hidden",
         "box-shadow: 0 4px 16px rgba(0,0,0,0.6)",
         "display: none",
     ].join("; ");
@@ -81,6 +103,20 @@ export function openObxfPopup(opts: PopupOptions): void {
     for (const item of opts.items) {
         if (item === "separator") {
             popupEl.appendChild(makeSeparator());
+            continue;
+        }
+        if (item && typeof item === "object" && "type" in item && item.type === "section") {
+            const sec = document.createElement("div");
+            sec.textContent = item.label;
+            sec.style.cssText = [
+                "padding: 5px 12px 3px",
+                "color: rgba(255,255,255,0.45)",
+                "font-size: 11px",
+                "letter-spacing: 0.5px",
+                "text-transform: uppercase",
+                "cursor: default",
+            ].join("; ");
+            popupEl.appendChild(sec);
             continue;
         }
         if (item && typeof item === "object" && "type" in item && item.type === "custom") {
