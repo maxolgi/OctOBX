@@ -64,7 +64,7 @@ describe("gxfx-params — spec transcription", () => {
 
 describe("gxfx-params — layout invariants", () => {
     it("exports the fixed slot/instance constants", () => {
-        expect(FX_COUNT).toBe(81);
+        expect(FX_COUNT).toBe(82);
         expect(FX_SLOTS).toBe(11);
         expect(FX_INSTANCE_COUNT).toBe(10);
     });
@@ -128,6 +128,8 @@ describe("gxfx-params — layout invariants", () => {
             "amp", "amp",                                  // metalamp, metalhead (4x12 cab IR)
             // Phase 2-c detune (80)
             "special",                                     // detune (smbPitchShift over the fftw shim)
+            // Phase 2-d tuner (81)
+            "special",                                     // tuner (inline NSDF pitch tracker, FREQ out port)
         ];
         expect(expected.length).toBe(FX_EFFECTS.length);
         for (let i = 0; i < FX_EFFECTS.length; i++) {
@@ -135,14 +137,14 @@ describe("gxfx-params — layout invariants", () => {
         }
     });
 
-    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 479", () => {
+    it("offsets are cumulative param counts; FX_TOTAL_PARAMS === sum === 481", () => {
         let running = 0;
         for (const fx of FX_EFFECTS) {
             expect(fx.offset).toBe(running);
             running += fx.params.length;
         }
-        expect(running).toBe(479);
-        expect(FX_TOTAL_PARAMS).toBe(479);
+        expect(running).toBe(481);
+        expect(FX_TOTAL_PARAMS).toBe(481);
     });
 
     it("flat mirror covers 0..FX_TOTAL_PARAMS-1 exactly once", () => {
@@ -212,16 +214,16 @@ describe("gxfx-params — 0..1 ↔ engine transforms", () => {
 });
 
 describe("gxfx-params — guards", () => {
-    it("isFxId accepts exactly 0..80", () => {
-        for (let i = 0; i < 81; i++) expect(isFxId(i)).toBe(true);
+    it("isFxId accepts exactly 0..81", () => {
+        for (let i = 0; i < 82; i++) expect(isFxId(i)).toBe(true);
         expect(isFxId(-1)).toBe(false);
-        expect(isFxId(81)).toBe(false);
+        expect(isFxId(82)).toBe(false);
         expect(isFxId(0.5)).toBe(false);
         expect(isFxId(NaN)).toBe(false);
     });
 
     it("out-of-range lookups return NaN / -1 instead of throwing", () => {
-        expect(fxParamFrom01(81, 0, 0.5)).toBeNaN();
+        expect(fxParamFrom01(82, 0, 0.5)).toBeNaN();
         expect(fxParamTo01(-1, 0, 0.5)).toBeNaN();
         expect(fxParamDefault01(0, 99)).toBeNaN();
         expect(fxFlatIndex(0, 99)).toBe(-1);

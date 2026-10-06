@@ -329,6 +329,11 @@ const CSS = `
     font-size: 11px; color: #888; font-weight: 700; letter-spacing: 1px;
     padding: 2px 0;
 }
+#mixer-panel .fx-tuner-readout {
+    font-size: 15px; color: #8ab4f8; font-weight: 700;
+    font-variant-numeric: tabular-nums; text-align: center;
+    padding: 6px 0 2px; letter-spacing: 1px;
+}
 `;
 
 let injected = false;

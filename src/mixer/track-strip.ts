@@ -28,12 +28,24 @@ import { createMeterCanvas, type MeterHandle } from "./meter-canvas";
 import { createEqCurve } from "./eq-curve";
 import { FX_EFFECTS, FX_SLOTS, FX_INSTANCE_COUNT, FX_SLOT_PARAMS, fxParamTo01, type FxCategory } from "../gxfx-params";
 import { getFxInstance, setFxParamUI, setFxEnabledUI, setSlotUI, moveSlotUI, onFxStateChange, type FxInstanceState } from "./fx-rack";
+import { getFxOutParam } from "../obxd-audio";
 
 const fmtDb = (v: number) => v.toFixed(1);
 const fmtRatio = (v: number) => (v >= 20 ? "20:1" : v.toFixed(1) + ":1");
 const fmtHz = (v: number) => (v >= 1000 ? (v / 1000).toFixed(1) + "k" : v.toFixed(0));
 const fmtMs = (v: number) => (v < 1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : v.toFixed(0));
 const fmtFx = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+/** Nearest 12-TET note name for a frequency, relative to the reference
+ * pitch (A4): "A4" for 440 at ref 440, "A4" for 451 at ref 452, ... */
+function noteNameFor(freq: number, refPitch: number): string {
+    if (!(freq > 0) || !(refPitch > 0)) return "";
+    const midi = 69 + 12 * Math.log2(freq / refPitch);
+    const n = Math.round(midi);
+    return NOTE_NAMES[((n % 12) + 12) % 12] + (Math.floor(n / 12) - 1);
+}
 
 /** Dropdown category order — derived from FX_EFFECTS (first appearance in
  * the canonical chain order: wah, drive, dynamics, modulation, delay,
@@ -365,6 +377,12 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
         let fxSlot = 0;
         let fxSlotLocked = false;
         const fxRows: HTMLElement[] = [];   // live chain rows, index = slot
+        // Tuner readout poll — owned here, alive ONLY while the edit area
+        // shows a tuner slot (cleared on every renderFxEdit + dispose).
+        let tunerPoll: ReturnType<typeof setInterval> | undefined;
+        const stopTunerPoll = (): void => {
+            if (tunerPoll !== undefined) { clearInterval(tunerPoll); tunerPoll = undefined; }
+        };
 
         const fxSection = document.createElement("div");
         fxSection.className = "detail-section";
@@ -522,6 +540,7 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
             const st = getFxInstance(t);
             const fxId = st.slots[fxSlot] ?? -1;
             const fx = fxId >= 0 ? FX_EFFECTS[fxId] : undefined;
+            stopTunerPoll();
             fxEdit.textContent = "";
             if (!fx) {
                 const title = document.createElement("div");
@@ -544,6 +563,29 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
                 }).element);
             });
             fxEdit.appendChild(row);
+            // Tuner: live pitch readout from the engine's FREQ out port
+            // (out_ports[0] → g_fx_out[inst][slot][0]), polled at ~10 Hz
+            // via the worklet RPC while THIS tuner slot is selected.
+            if (fx.key === "tuner") {
+                const readout = document.createElement("div");
+                readout.className = "fx-tuner-readout";
+                readout.textContent = "– listening –";
+                fxEdit.appendChild(readout);
+                const pollInst = t;
+                const pollSlot = fxSlot;
+                tunerPoll = setInterval(() => {
+                    if (!readout.isConnected) { stopTunerPoll(); return; }
+                    // reference pitch lives in the slot's param row
+                    // (ordinal 0 = REFFREQ); the note math follows it.
+                    const ref = getFxInstance(pollInst).params[pollSlot * FX_SLOT_PARAMS] || 440;
+                    void getFxOutParam(pollInst, pollSlot, 0).then((f) => {
+                        if (!readout.isConnected) return;
+                        if (!(f > 0)) { readout.textContent = "– listening –"; return; }
+                        const name = noteNameFor(f, ref);
+                        readout.textContent = `${name} (${f.toFixed(1)} Hz)`;
+                    });
+                }, 100);
+            }
         }
 
         renderFxLeds();
@@ -556,6 +598,8 @@ export function buildTrackStrip(t: number, sampleRate: number): TrackStripHandle
             renderFxChain();
             renderFxEdit();
         });
+        const baseDisposeFx = disposeFx;
+        disposeFx = () => { stopTunerPoll(); baseDisposeFx(); };
 
         root.appendChild(fxSection);
     }

@@ -137,6 +137,11 @@ PluginLV2* gxfx_create_metalhead();
 // (gxfx_shims/, complex-DFT subset on vendored kissfft); the LV2 wrapper's
 // plan-rebuild worker is inlined on the LATENCY param-change path
 PluginLV2* gxfx_create_detune();
+// tuner (gxfx_dsp_tuner.cpp, Phase 2-d): gxtuner.lv2's NSDF pitch tracker
+// analyzed inline on a ~100 ms cadence (pthread/semaphore/sigc++ machinery
+// neutralized by gxfx_shims; the FREQ control OUTPUT port is the first
+// real g_fx_out consumer — audio passes through bit-identical)
+PluginLV2* gxfx_create_tuner();
 
 typedef PluginLV2* (*gxfx_factory)();
 static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
@@ -220,7 +225,8 @@ static const gxfx_factory FX_FACTORIES[GXFX_EFFECT_COUNT] = {
     gxfx_create_redeye,
     gxfx_create_metalamp,
     gxfx_create_metalhead,
-    gxfx_create_detune
+    gxfx_create_detune,
+    gxfx_create_tuner
 };
 
 // Generator↔host drift guard: the factory registry above must list every
@@ -242,12 +248,12 @@ static FxRuntime g_fx_rt[FX_INSTANCE_COUNT][FX_SLOTS];
 static float g_fx_params[FX_INSTANCE_COUNT][FX_SLOTS][FX_SLOT_PARAMS];
 static unsigned char g_fx_enabled[FX_INSTANCE_COUNT][FX_SLOTS];
 // Output-port storage (meters, tuner FREQ — Phase 2/3 effects): per slot,
-// FX_OUT_PORTS floats. TODO(Phase 2): the spec declares out_ports for meter
-// effects since Phase 1-b (graphiceq's V1..V11 band levels) — connect them
-// in fx_create_one() next to fx_connect_params(); until then the connection
-// stays unwired (fx_get_out_param reads zeros; graphiceq's factory in
-// gxfx_dsp_eq.cpp parks its meters on TU-local scratch so the unwired
-// policy cannot crash the class).
+// FX_OUT_PORTS floats. The spec's out_ports[] are connected into it by
+// fx_connect_out_ports below (first real consumer: the tuner's FREQ port,
+// Phase 2-d — JS reads it via fx_get_out_param). Effects whose meters
+// park on TU-local scratch (graphiceq/mb families — their compute
+// dereferences fixed scratch pointers, graphiceq precedent) simply
+// double-write or ignore the connected pointers — harmless either way.
 static float g_fx_out[FX_INSTANCE_COUNT][FX_SLOTS][FX_OUT_PORTS];
 static uint32_t g_fx_sample_rate = 48000;
 static bool g_fx_initialized = false;
@@ -284,11 +290,25 @@ static void fx_connect_params(int e, int s, int fx, PluginLV2* p) {
                          &g_fx_params[e][s][i], p);
 }
 
+// Connect the spec-declared control OUTPUT ports into the slot's g_fx_out
+// row (meters, tuner FREQ). The per-slot storage caps at FX_OUT_PORTS=8 —
+// wider declarations (barkgraphiceq's 24 band meters) connect their first
+// 8; their factories park meters on TU-local scratch anyway.
+static void fx_connect_out_ports(int e, int s, int fx, PluginLV2* p) {
+    if (!p->connect_ports) return;
+    int cnt = FX_OUT_COUNTS[fx];
+    if (cnt > FX_OUT_PORTS) cnt = FX_OUT_PORTS;
+    for (int i = 0; i < cnt; ++i)
+        p->connect_ports((uint32_t)FX_OUT_PORT_IDS[fx][i],
+                         &g_fx_out[e][s][i], p);
+}
+
 static PluginLV2* fx_create_one(int e, int s, int fx) {
     PluginLV2* p = FX_FACTORIES[fx]();
     if (!p) return 0;
     if (p->set_samplerate) p->set_samplerate(g_fx_sample_rate, p);
     fx_connect_params(e, s, fx, p);
+    fx_connect_out_ports(e, s, fx, p);
     return p;
 }
 
@@ -447,7 +467,8 @@ void fx_move_slot(int inst, int from, int to) {
     // The moved DSP instances keep the connect_ports() pointers they were
     // created with — they still reference their OLD param rows. Re-point
     // every shifted slot's DSP at its new row (pointer stores only; no
-    // processing state is touched, so no audio glitch).
+    // processing state is touched, so no audio glitch). Out ports
+    // (g_fx_out rows) move with the slot the same way.
     const int lo = from < to ? from : to;
     const int hi = from < to ? to : from;
     for (int s = lo; s <= hi; ++s) {
@@ -455,7 +476,9 @@ void fx_move_slot(int inst, int from, int to) {
         if (fx < 0) continue;
         FxRuntime& r = g_fx_rt[inst][s];
         if (r.dsp) fx_connect_params(inst, s, fx, r.dsp);
+        if (r.dsp) fx_connect_out_ports(inst, s, fx, r.dsp);
         if (r.dsp_r) fx_connect_params(inst, s, fx, r.dsp_r);
+        if (r.dsp_r) fx_connect_out_ports(inst, s, fx, r.dsp_r);
     }
 }
 
@@ -536,5 +559,35 @@ int16_t* fx_get_slots_ptr() { return &g_fx_slot[0][0]; }
 
 EMSCRIPTEN_KEEPALIVE
 unsigned char* fx_get_enabled_ptr() { return &g_fx_enabled[0][0]; }
+
+// Test surface (verify-obxd-wasm only — the fx_param_count/fx_default
+// pattern: Makefile EXPORTS entry, no worklet message case). Renders a
+// deterministic 128-sample ramp through ONE instance of effect fx_id's
+// DSP exactly the way gxfx_process renders a mono slot's L channel
+// (in-place mono_audio) and returns the first differing sample index + 1;
+// 0 = bit-identical passthrough. Exists for the tuner (id 81), whose
+// analysis must never touch the audio path — a synth-fed A/B cannot prove
+// this because the engine reseeds per-voice noise from std::rand() at
+// every note-on (non-repeatable renders). The ramp values are exact
+// float32 (integers / 128), so the bitwise compare is stable.
+EMSCRIPTEN_KEEPALIVE
+int fx_test_bittransparent(int fx_id) {
+    if (fx_id < 0 || fx_id >= FX_COUNT) return -1;
+    float ref[128], buf[128];
+    for (int i = 0; i < 128; ++i) {
+        ref[i] = (float)((i * 1103515245 + 12345) % 251 - 125) / 128.0f;
+        buf[i] = ref[i];
+    }
+    PluginLV2* p = FX_FACTORIES[fx_id]();
+    if (!p) return -2;
+    if (p->set_samplerate) p->set_samplerate(g_fx_sample_rate, p);
+    if (p->activate_plugin) p->activate_plugin(true, p);
+    if (p->mono_audio) p->mono_audio(128, buf, buf, p);
+    if (p->activate_plugin) p->activate_plugin(false, p);
+    if (p->delete_instance) p->delete_instance(p);
+    for (int i = 0; i < 128; ++i)
+        if (buf[i] != ref[i]) return i + 1;
+    return 0;
+}
 
 }

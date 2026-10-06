@@ -538,7 +538,7 @@ async function main() {
   // (l) FX surface + slot round-trip ----------------------------------------
   expect('l. fx surface + set_slot/get_slot round-trip incl. -1 empty', () => {
     mod._obxd_init(48000);
-    if (mod._fx_effect_count() !== 81) return `effect_count=${mod._fx_effect_count()}, want 81 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi + Phase 2-a cabinet + Phase 2-b redeye + metal amp/head + Phase 2-c detune)`;
+    if (mod._fx_effect_count() !== 82) return `effect_count=${mod._fx_effect_count()}, want 82 (11 v1 + 17 drive/dynamics + 6 eq + 4 wah + 7 modulation + 12 time/delay + 4 reverb + 5 amp/tonestack + 10 multiband/utility incl. the audit-find Big Muff Pi + Phase 2-a cabinet + Phase 2-b redeye + metal amp/head + Phase 2-c detune + Phase 2-d tuner)`;
     if (mod._fx_slot_params() !== 48) return `slot_params=${mod._fx_slot_params()}, want 48`;
     if (mod._fx_param_count(0) !== 2) return `param_count(0)=${mod._fx_param_count(0)}, want 2 (wah)`;
     if (mod._fx_param_count(8) !== 7) return `param_count(8)=${mod._fx_param_count(8)}, want 7 (delay)`;
@@ -587,7 +587,8 @@ async function main() {
     if (mod._fx_param_count(78) !== 4) return `param_count(78)=${mod._fx_param_count(78)}, want 4 (metalamp: TONE/DRIVE/PREGAIN/GAIN1)`;
     if (mod._fx_param_count(79) !== 4) return `param_count(79)=${mod._fx_param_count(79)}, want 4 (metalhead: TONE/DRIVE/PREGAIN/GAIN1)`;
     if (mod._fx_param_count(80) !== 10) return `param_count(80)=${mod._fx_param_count(80)}, want 10 (detune: DETUNE..TREBLE; BYPASS filtered)`;
-    if (mod._fx_param_count(81) !== -1) return `param_count(81)=${mod._fx_param_count(81)}, want -1 (out of range)`;
+    if (mod._fx_param_count(81) !== 2) return `param_count(81)=${mod._fx_param_count(81)}, want 2 (tuner: REFFREQ/THRESHOLD)`;
+    if (mod._fx_param_count(82) !== -1) return `param_count(82)=${mod._fx_param_count(82)}, want -1 (out of range)`;
     if (mod._fx_is_stereo(4) !== 1) return `is_stereo(4)=${mod._fx_is_stereo(4)}, want 1 (chorus)`;
     if (mod._fx_is_stereo(0) !== 0) return `is_stereo(0)=${mod._fx_is_stereo(0)}, want 0 (wah, dual-mono)`;
     if (mod._fx_is_stereo(11) !== 0) return `is_stereo(11)=${mod._fx_is_stereo(11)}, want 0 (fuzzface, dual-mono)`;
@@ -621,6 +622,7 @@ async function main() {
     if (mod._fx_is_stereo(78) !== 0) return `is_stereo(78)=${mod._fx_is_stereo(78)}, want 0 (metalamp, dual-mono convolver)`;
     if (mod._fx_is_stereo(79) !== 0) return `is_stereo(79)=${mod._fx_is_stereo(79)}, want 0 (metalhead, dual-mono convolver)`;
     if (mod._fx_is_stereo(80) !== 0) return `is_stereo(80)=${mod._fx_is_stereo(80)}, want 0 (detune, dual-mono phase vocoder)`;
+    if (mod._fx_is_stereo(81) !== 0) return `is_stereo(81)=${mod._fx_is_stereo(81)}, want 0 (tuner, dual-mono transparent)`;
     if (mod._fx_default(0, 1) !== 0.5) return `default(0,1)=${mod._fx_default(0, 1)}, want 0.5 (wah HOTPOTZ)`;
     if (mod._fx_default(3, 4) !== f32(0.002)) return `default(3,4)=${mod._fx_default(3, 4)}, want ${f32(0.002)}`;
     if (mod._fx_default(8, 2) !== 1000) return `default(8,2)=${mod._fx_default(8, 2)}, want 1000 (delay)`;
@@ -672,7 +674,9 @@ async function main() {
     if (mod._fx_default(80, 0) !== 0) return `default(80,0)=${mod._fx_default(80, 0)}, want 0 (detune DETUNE)`;
     if (mod._fx_default(80, 4) !== 50) return `default(80,4)=${mod._fx_default(80, 4)}, want 50 (detune WET)`;
     if (mod._fx_default(80, 6) !== 1) return `default(80,6)=${mod._fx_default(80, 6)}, want 1 (detune LOW)`;
-    if (mod._fx_default(81, 0) !== 0) return `default(81,0)=${mod._fx_default(81, 0)}, want 0 (invalid fx)`;
+    if (mod._fx_default(81, 0) !== 440) return `default(81,0)=${mod._fx_default(81, 0)}, want 440 (tuner REFFREQ)`;
+    if (mod._fx_default(81, 1) !== -50) return `default(81,1)=${mod._fx_default(81, 1)}, want -50 (tuner THRESHOLD)`;
+    if (mod._fx_default(82, 0) !== 0) return `default(82,0)=${mod._fx_default(82, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(61, 0) !== 0) return `default(61,0)=${mod._fx_default(61, 0)}, want 0 (invalid fx)`;
     if (mod._fx_default(0, 48) !== 0) return `default(0,48)=${mod._fx_default(0, 48)}, want 0 (invalid param)`;
     // Default chain = canonical 11 (slot s holds fx s).
@@ -691,7 +695,7 @@ async function main() {
     // Out-of-range args: silent no-ops, state untouched.
     mod._fx_set_slot(10, 0, 5);
     mod._fx_set_slot(0, 11, 5);
-    mod._fx_set_slot(0, 0, 81); // FX_COUNT == 81 since Phase 2-c
+    mod._fx_set_slot(0, 0, 82); // FX_COUNT == 82 since Phase 2-d
     mod._fx_set_slot(0, 0, -2);
     if (mod._fx_get_slot(0, 0) !== 0) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 0 (untouched)`;
     if (mod._fx_get_slot(10, 0) !== -1) return `slot(10,0)=${mod._fx_get_slot(10, 0)}, want -1 (invalid inst)`;
@@ -1921,6 +1925,85 @@ async function main() {
     if (!walkFinite) return 'non-finite sample during the detune LATENCY rebuild walk';
     if (!(Math.sqrt(walkSq / (4 * 8 * 256)) > 1e-4)) return 'detune LATENCY rebuild walk silent';
     console.log(`    detune shift: +5 st moves f0 → F* ${FS.toFixed(1)} Hz (${base.fs.toExponential(3)} → ${shift.fs.toExponential(3)}, ${(shift.fs / Math.max(base.fs, 1e-12)).toFixed(1)}x); f0 falls to ${(shift.f0 / base.f0 * 100).toFixed(1)}%; LATENCY rebuild walk finite`);
+  });
+
+  // (z4) Phase 2-d: tuner (id 81) — inline NSDF pitch tracker + the FIRST
+  // real out_ports consumer ----------------------------------------------
+  // The FREQ control output port is connected into g_fx_out[0][0][0]; a
+  // sustained A4 must read ≈440 Hz via fx_get_out_param after the ~100 ms
+  // analysis cadence. Source: factory patch 8 plays exactly one octave
+  // below the MIDI note (empirically verified: note 69 → 220, note 76 →
+  // 330), so note 81 (A5) sounds A4 = 440 as its strongest periodicity —
+  // verified stable at 440.1±0.1 across runs. Transparency
+  // is proven by the engine's own deterministic self-test export
+  // (fx_test_bittransparent — a synth-fed A/B cannot work: the engine
+  // reseeds per-voice noise from std::rand() at every note-on, so no two
+  // renders are ever bit-equal), cross-checked against a control effect
+  // the harness must flag as non-transparent. Silence must return the
+  // tracker to 0 (level gate), and both params must round-trip.
+  expect('z4. tuner: tracks A4 440±1 via fx_get_out_param; bit-transparent (self-test); silence resets to 0; params round-trip', () => {
+    // param round-trip (ordinals 0/1 = REFFREQ port 1 / THRESHOLD port 4)
+    mod._obxd_init(48000);
+    mod._fx_set_slot(0, 0, 81);
+    if (mod._fx_get_slot(0, 0) !== 81) return `slot(0,0)=${mod._fx_get_slot(0, 0)}, want 81 (tuner)`;
+    for (const [p, v] of [[0, 442.5], [1, -35.5]]) {
+      mod._fx_set_param(0, 0, p, v);
+      if (mod._fx_get_param(0, 0, p) !== f32(v)) return `tuner param ${p} round-trip=${mod._fx_get_param(0, 0, p)}, want ${f32(v)}`;
+    }
+    if (mod._fx_get_out_param(0, 0, 0) !== 0) return `out_param before signal = ${mod._fx_get_out_param(0, 0, 0)}, want 0`;
+    if (mod._fx_get_out_param(0, 0, 8) !== 0) return 'out_param index 8 accepted (want 0, out of range)';
+    // transparency: deterministic in-place ramp through one tuner DSP —
+    // the tuner's analysis may only READ the buffer. Control: distortion
+    // (id 2) must modify it, proving the harness detects non-transparency.
+    const t = mod._fx_test_bittransparent(81);
+    if (t !== 0) return `tuner modified sample ${t - 1} of the passthrough ramp (want bit-identical)`;
+    if (!(mod._fx_test_bittransparent(2) > 0)) return 'control effect (distortion, id 2) passed the transparency self-test — harness broken';
+    // detection: patch 8 note 81 (sounds A4) sustained for 500 quanta ≈
+    // 1.33 s (≥ 12 analysis passes); the settled final value must be 440 ±1.
+    mod._obxd_init(48000);
+    mod._obxd_set_factory_patch(0, 8);
+    mod._fx_set_slot(0, 0, 81);
+    mod._fx_set_enabled(0, 0, 1);
+    mod._obxd_midi_in(0, 0x90, 81, 100);
+    const y = [];
+    for (let q = 0; q < 500; q++) {
+      mod._obxd_render(128);
+      if (q >= 60) {
+        const l = new Float32Array(mod.HEAPF32.buffer, mod._get_track_l_ptr(0), 128);
+        for (let i = 0; i < 128; i++) y.push(l[i]);
+      }
+    }
+    const lastFreq = mod._fx_get_out_param(0, 0, 0);
+    if (!(lastFreq >= 439 && lastFreq <= 441)) {
+      return `tuner FREQ settled at ${lastFreq}, want 440 ±1 (A4 via patch 8 note 81)`;
+    }
+    // cross-check against the render's actual fundamental (3-bin parabolic
+    // DFT peak near 440) — proves the tracker locks the real pitch, not a
+    // lucky constant.
+    const N = y.length;
+    const binMag = (k) => {
+      let rc = 0, rs = 0;
+      for (let i = 0; i < N; i++) { const w = 2 * Math.PI * k * i / N; rc += y[i] * Math.cos(w); rs += y[i] * Math.sin(w); }
+      return Math.sqrt(rc * rc + rs * rs);
+    };
+    const k0 = Math.round(440 * N / 48000);
+    const a = Math.log(binMag(k0 - 1) + 1e-12), b = Math.log(binMag(k0) + 1e-12), c = Math.log(binMag(k0 + 1) + 1e-12);
+    const delta = 0.5 * (a - c) / (a - 2 * b + c);
+    const dftFreq = (k0 + delta) * 48000 / N;
+    if (Math.abs(dftFreq - 440) > 0.5) {
+      return `probe fundamental ${dftFreq.toFixed(2)} Hz, want 440±0.5 (patch/note changed?)`;
+    }
+    if (Math.abs(lastFreq - dftFreq) > 1) {
+      return `tuner FREQ ${lastFreq} vs DFT fundamental ${dftFreq.toFixed(2)} — not tracking the tone`;
+    }
+    // silence gate: after the note-off + panic the chain input is exactly
+    // zero (engine idle memset); the next analysis pass must clear FREQ.
+    mod._obxd_midi_in(0, 0x80, 81, 0);
+    mod._obxd_panic(0);
+    for (let q = 0; q < 120; q++) mod._obxd_render(128); // ≥ 2 cadence passes of silence
+    const silentFreq = mod._fx_get_out_param(0, 0, 0);
+    if (silentFreq !== 0) return `tuner FREQ after 320 ms of silence = ${silentFreq}, want 0 (level gate)`;
+    console.log(`    tuner: FREQ ${lastFreq.toFixed(2)} Hz (DFT probe ${dftFreq.toFixed(2)} Hz), bit-transparent self-test 0, silence reset OK`);
   });
 
   // --- summary -------------------------------------------------------------

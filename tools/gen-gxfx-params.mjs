@@ -471,6 +471,29 @@ const MANIFEST = [
     // ~840 KB per slot dual-mono (digital_delay-class footprint).
     { key: 'detune', menuName: 'Detune', category: 'special', ttl: 'gx_detune.lv2/gx_detune.ttl' },
 
+    // --- Phase 2-d: tuner (inline pitch tracker) ---
+    // tuner: gxtuner.lv2's PitchTracker (NSDF detector) driven inline on a
+    // ~100 ms cadence (wasm/obxd/gxfx_dsp_tuner.cpp — the pthread/semaphore/
+    // sigc++ machinery is neutralized by gxfx_shims; the analysis thread
+    // becomes a recorded entry the wrapper re-invokes). INLINE surface
+    // because the ttl cannot be trusted: its tail port order disagrees
+    // with gxtuner.h's PortIndex (VERIFY at 15 vs 18), and most of its
+    // control inputs are MIDI machinery (CHANNEL/ONMIDI/PITCHBEND/
+    // SINGLENOTE/BPM/VELOCITY/VERIFY/GATE/SYNTHFREQ/GAIN — dropped with
+    // play_midi + uniBar) or GUI-only state the DSP wrapper never even
+    // connects (TUNER_MODE/TEMPERAMENT/MAXL/RESET). Shipped: REFFREQ
+    // (display reference — engine never reads it, the UI's note math
+    // shifts A4 by it) + THRESHOLD (tracker gate, dB). FREQ (ttl port 0)
+    // is a control OUTPUT — the FIRST real g_fx_out consumer: declared in
+    // out_ports, the host connects it to g_fx_out[inst][slot][0], and the
+    // UI polls fx_get_out_param.
+    { key: 'tuner', menuName: 'Tuner', category: 'special', params: [
+        { port: 1, symbol: 'REFFREQ', name: 'Reference Pitch', default: 440, min: 427, max: 453, step: 0.1 },
+        { port: 4, symbol: 'THRESHOLD', name: 'Threshold', default: -50, min: -60, max: 4, step: 0.5 },
+    ], out_ports: [
+        { port: 0, symbol: 'FREQ', name: 'Frequency', min: 0, max: 1000 },
+    ] },
+
 ];
 
 const FX_COUNT = MANIFEST.length;
@@ -605,12 +628,21 @@ function orphanEffect(entry) {
 /** Build an effect from hand-authored param rows. Validation (port bounds,
  * ascending order, min<max, default in range, step>0) is the shared
  * invariant loop in normalize(); inline is the ONLY source kind allowed
- * zero params (an envelope-driven effect with no controls at all). */
+ * zero params (an envelope-driven effect with no controls at all).
+ * `out_ports` (optional, same shape as the ttl out_ports) declares the
+ * effect's control OUTPUT ports for the engine's g_fx_out connection —
+ * the tuner's FREQ port is the pattern (Phase 2-d). */
 function inlineEffect(entry) {
     if (!Array.isArray(entry.params)) throw new Error('inline entry needs a params array');
     return {
         stereo: false,
-        out_ports: [],
+        out_ports: (entry.out_ports || []).map((o) => ({
+            port: o.port,
+            symbol: o.symbol,
+            name: o.name || o.symbol,
+            min: o.min,
+            max: o.max,
+        })),
         params: entry.params.map((p) => ({
             port: p.port,
             symbol: p.symbol,
@@ -1145,6 +1177,9 @@ function genHeader({ effects }) {
         ' * FX_PARAM_COUNTS[effect] — live params per effect; the rest of each',
         ' * row is padding. FX_STEREO[effect] — 1 = native stereo path,',
         ' * 0 = dual-mono. FX_PORTS[effect][i] — PortIndex of param ordinal i.',
+        ' * FX_OUT_COUNTS[effect] / FX_OUT_PORT_IDS[effect][i] — control OUTPUT',
+        ' * ports (spec out_ports, meters + tuner FREQ); the host connects the',
+        " * first min(count, 8) of each row into the slot's g_fx_out row.",
         ' *',
         ' * Consumed by wasm/obxd/gxfx_host.cpp: fx_set_slot copies a row into the',
         " * slot's param array on every slot assign, fx_default() reads single",
@@ -1183,6 +1218,30 @@ function genHeader({ effects }) {
     effects.forEach((fx) => {
         push(`    /* ${String(fx.id).padStart(2)}: ${fx.key} */`);
         push(`    { ${fx.params.map((p) => p.port).join(',')} },`);
+    });
+    push(
+        '};',
+        '',
+    );
+
+    // Control OUTPUT ports (meters, tuner FREQ — spec out_ports[]). The
+    // host connects the first min(count, FX_OUT_PORTS=8) of each row into
+    // g_fx_out[inst][slot][i] (Phase 2-d wiring); effects whose meters
+    // park on TU-local scratch simply ignore or double-write the pointers
+    // (graphiceq/mb precedent — harmless).
+    const outPortsRow = effects.reduce((m, fx) => Math.max(m, fx.out_ports.length), 0);
+    push(`#define GXFX_OUT_PORTS_ROW ${outPortsRow}`);
+    push('');
+    push(`static const int FX_OUT_COUNTS[GXFX_EFFECT_COUNT] = { ${effects.map((fx) => fx.out_ports.length).join(', ')} };`);
+    push('');
+    push(`static const int FX_OUT_PORT_IDS[GXFX_EFFECT_COUNT][GXFX_OUT_PORTS_ROW] = {`);
+    effects.forEach((fx) => {
+        const row = [];
+        for (let i = 0; i < outPortsRow; i++) {
+            row.push(i < fx.out_ports.length ? fx.out_ports[i].port : 0);
+        }
+        push(`    /* ${String(fx.id).padStart(2)}: ${fx.key} — ${fx.out_ports.length} out ports */`);
+        push(`    { ${row.join(',')} },`);
     });
     push(
         '};',

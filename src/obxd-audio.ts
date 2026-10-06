@@ -775,6 +775,30 @@ export function moveFxSlot(instanceId: number, from: number, to: number): void {
     postWorkletMessage({ type: "fx_move_slot", instance_id: instanceId, from, to });
 }
 
+/** Read one of a slot's output ports (meters, tuner FREQ) — engine value
+ * (Hz for the tuner's FREQ port). Resolves 0 on timeout/no worklet; the
+ * predicate keys on instance/slot/index so concurrent pollers (one tuner
+ * readout per mixer strip) each get their own reply. */
+export async function getFxOutParam(instanceId: number, slot: number, index: number): Promise<number> {
+    if (!workletNode) return 0;
+    if (instanceId < 0 || instanceId >= FX_INSTANCE_COUNT) return 0;
+    if (!Number.isInteger(slot) || slot < 0 || slot >= FX_SLOTS) return 0;
+    if (!Number.isInteger(index) || index < 0) return 0;
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "fx_out_param"
+            && (m as { instance_id?: number }).instance_id === instanceId
+            && (m as { slot?: number }).slot === slot
+            && (m as { index?: number }).index === index,
+        1000,
+    );
+    workletNode.port.postMessage({ type: "fx_get_out_param", instance_id: instanceId, slot, index });
+    const raw = await replyPromise;
+    if (!raw) return 0;
+    const v = (raw as { value?: number }).value;
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
 export async function getFxState(): Promise<FxBulkState | null> {
     if (!workletNode) return null;
     const replyPromise = awaitReply(

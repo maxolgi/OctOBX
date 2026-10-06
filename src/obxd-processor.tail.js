@@ -933,6 +933,22 @@ class ObxdProcessor extends AudioWorkletProcessor {
                         wasmModule._fx_move_slot(id, msg.from | 0, msg.to | 0);
                     }
                     break;
+                case 'fx_get_out_param':
+                    // Light direct read of one slot output-port slot
+                    // (meters, tuner FREQ). Direct reply — the echo of
+                    // instance/slot/index lets concurrent pollers (one per
+                    // mixer strip with a tuner selected) correlate their
+                    // own replies through the predicate router.
+                    if (wasmModule && wasmModule._fx_get_out_param) {
+                        this.port.postMessage({
+                            type: 'fx_out_param',
+                            instance_id: id,
+                            slot: msg.slot | 0,
+                            index: msg.index | 0,
+                            value: wasmModule._fx_get_out_param(id, msg.slot | 0, msg.index | 0),
+                        });
+                    }
+                    break;
                 case 'fx_get_state':
                     // Full rack pull: 5280 params + 110 slots + 110 enabled.
                     taskQueue.push(() => {

@@ -6641,6 +6641,47 @@
           "integer": false
         }
       ]
+    },
+    {
+      "id": 81,
+      "key": "tuner",
+      "label": "Tuner",
+      "dsp": "tuner",
+      "stereo": false,
+      "category": "special",
+      "out_ports": [
+        {
+          "port": 0,
+          "symbol": "FREQ",
+          "name": "Frequency",
+          "min": 0,
+          "max": 1000
+        }
+      ],
+      "params": [
+        {
+          "port": 1,
+          "symbol": "REFFREQ",
+          "name": "Reference Pitch",
+          "default": 440,
+          "min": 427,
+          "max": 453,
+          "step": 0.1,
+          "toggled": false,
+          "integer": false
+        },
+        {
+          "port": 4,
+          "symbol": "THRESHOLD",
+          "name": "Threshold",
+          "default": -50,
+          "min": -60,
+          "max": 4,
+          "step": 0.5,
+          "toggled": false,
+          "integer": false
+        }
+      ]
     }
   ]
 }
