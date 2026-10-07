@@ -5,6 +5,10 @@
 // resets a slot's 48 params to the new effect's defaults and clears its
 // enabled flag, and fx_move_slot relocates values together with the slot.
 // Mono effects run dual-mono (two PluginLV2 instances, L and R).
+// DSP is created eagerly at fx_set_slot time and activated eagerly at
+// fx_set_enabled time — both exports run in the worklet's message handler,
+// never inside process(); the first activate allocates (delay buffers,
+// looper tapes) and must never land inside the render quantum.
 #include "gxfx_prelude.h"
 #include "gxfx_defaults.h"
 #include "../../third_party/guitarix/trunk/src/LV2/DSP/gx_pluginlv2.h"
@@ -145,9 +149,10 @@ PluginLV2* gxfx_create_tuner();
 // looper (gxfx_dsp_looper.cpp, Phase 3): gx_livelooper.lv2's bundle-local
 // hand-tweaked faust class over the sndfile.hh include-order stub (wave
 // save/load no-op — loops start empty each session). 64 MiB of tapes per
-// DSP instance (4 x TAPESIZE 4194304 floats), lazily new'd on activate —
-// mono → dual-mono → an enabled looper slot costs 128 MiB on the first
-// render after enable; bar1..4/playh1..4 meter outs feed g_fx_out.
+// DSP instance (4 x TAPESIZE 4194304 floats), new'd on activate —
+// mono → dual-mono → an enabled looper slot costs 128 MiB, allocated
+// eagerly at fx_set_enabled (message-handler) time; bar1..4/playh1..4
+// meter outs feed g_fx_out.
 PluginLV2* gxfx_create_livelooper();
 
 typedef PluginLV2* (*gxfx_factory)();
@@ -424,8 +429,10 @@ void fx_set_slot(int inst, int slot, int fx_id) {
     memset(g_fx_out[inst][slot], 0, sizeof(g_fx_out[inst][slot]));
     if (fx_id >= 0) {
         memcpy(g_fx_params[inst][slot], FX_DEFAULTS[fx_id], FX_SLOT_PARAMS * sizeof(float));
-        // Eager create: fx_set_slot runs from a worklet task message, never
-        // the render path; activation stays lazy on first render after enable.
+        // Eager create: fx_set_slot runs in the worklet's message handler,
+        // never inside process(); activation happens just as eagerly at
+        // fx_set_enabled time — first-activate allocates (delay buffers,
+        // looper tapes) and must never land inside the render quantum.
         fx_ensure_dsp(inst, slot);
     } else {
         memset(g_fx_params[inst][slot], 0, FX_SLOT_PARAMS * sizeof(float));
@@ -517,6 +524,12 @@ void fx_set_enabled(int inst, int slot, int enabled) {
     if (g_fx_slot[inst][slot] < 0) return; // nothing to enable
     g_fx_enabled[inst][slot] = enabled ? 1 : 0;
     if (enabled) g_fx_rt[inst][slot].ever_enabled = true;
+    // Eager activate: fx_set_enabled runs in the worklet's message handler,
+    // never inside process(); the first activate_plugin() allocates the
+    // effect's runtime (delay buffers, looper tapes) and must never land
+    // inside the render quantum. gxfx_process keeps its own fx_ensure_active
+    // call as a harmless fallback (the r.active check short-circuits).
+    if (enabled) fx_ensure_active(inst, slot);
 }
 
 EMSCRIPTEN_KEEPALIVE

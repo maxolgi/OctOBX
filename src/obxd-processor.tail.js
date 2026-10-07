@@ -893,10 +893,12 @@ class ObxdProcessor extends AudioWorkletProcessor {
                 // heap, all 10 instances). Slot index = chain position; a
                 // slot holds any fx id (-1 = empty). `value` is in ENGINE
                 // units — the TS layer converts before posting.
-                // fx_set_param/fx_set_enabled are light queued setters.
-                // fx_set_slot/fx_move_slot run HERE in the message handler,
-                // NOT via the task queue: their C side creates/destroys
-                // DSP objects, which must never land inside process().
+                // fx_set_param is a light queued setter.
+                // fx_set_enabled/fx_set_slot/fx_move_slot run HERE in the
+                // message handler, NOT via the task queue: enabling eagerly
+                // activates the DSP, and slot/move create/destroy DSP
+                // objects — that allocates (delay buffers, looper tapes)
+                // and must never land inside process().
                 // Only the bulk pull/restore ride the task queue.
                 // ------------------------------------------------------------------
                 case 'fx_set_param':
@@ -907,14 +909,17 @@ class ObxdProcessor extends AudioWorkletProcessor {
                     });
                     break;
                 case 'fx_set_enabled':
-                    // First-time enable lazily allocates the effect's delay
-                    // buffers inside the NEXT render (by design; rare, so
-                    // this stays a light task).
-                    taskQueue.push(() => {
-                        if (wasmModule && wasmModule._fx_set_enabled) {
-                            wasmModule._fx_set_enabled(id, msg.slot | 0, msg.enabled ? 1 : 0);
-                        }
-                    });
+                    // Enable now eagerly ACTIVATES on the C side
+                    // (fx_ensure_active — first activate allocates delay
+                    // buffers / looper tapes), so it must run HERE at
+                    // message-handler time; task-queue tasks drain inside
+                    // process(). Param values are read by the DSP through
+                    // connected pointers every render, so a fx_set_param
+                    // enqueued before this enable still takes effect after
+                    // activation (the strict-FIFO relaxation is safe here).
+                    if (wasmModule && wasmModule._fx_set_enabled) {
+                        wasmModule._fx_set_enabled(id, msg.slot | 0, msg.enabled ? 1 : 0);
+                    }
                     break;
                 case 'fx_set_slot':
                     // Load fx id (-1 = empty) into a chain slot. The C side
