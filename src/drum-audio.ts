@@ -19,6 +19,7 @@
 import type { DrumKit, DrumPad, DrumLayer } from "./drum-state";
 import { isLayerPlayed } from "./drum-state";
 import {
+    awaitReply,
     getObxdAudioContext,
     getObxdNode,
     sendObxdInstanceMidi,
@@ -330,51 +331,33 @@ export function setDrumLayerParam(pad: number, layer: number, idx: number, value
  * Read back a single legacy ParamsEnum.h value from a drum pad/layer's
  * param store on instance 9 (DRUM_INSTANCE). Resolves to the 0..1
  * value, or -1 on timeout / no worklet / out-of-range index. Mirrors
- * getObxdInstanceParam's one-shot-predicate + 2s-timeout pattern
- * (correlating by pad+layer+idx so concurrent queries for different
- * layers don't cross-reply). obxd-audio.ts's awaitReply router is not
- * exported, so we install our own one-shot addEventListener listener
- * on the worklet port and remove it as soon as it claims the matching
- * reply (or on timeout). The permanent ensureRouter() listener in
- * obxd-audio.ts has no predicate for "drum_layer_param_value", so it
- * ignores these replies and the two listeners coexist cleanly.
+ * getObxdInstanceParam's pattern via the shared awaitReply router in
+ * obxd-audio.ts (correlating by pad+layer+idx so concurrent queries
+ * for different layers don't cross-reply).
  */
 export async function getDrumLayerParam(pad: number, layer: number, idx: number): Promise<number> {
     const node = getObxdNode();
     if (!node) return -1;
     const port = node.port;
-    return new Promise<number>((resolve) => {
-        let timer: ReturnType<typeof setTimeout>;
-        const onMsg = (ev: MessageEvent): void => {
-            const msg = ev.data;
-            if (!msg || typeof msg !== "object") return;
-            const m = msg as { type?: string; pad?: number; layer?: number; idx?: number; value?: number };
-            if (m.type === "drum_layer_param_value"
-                && m.pad === pad
-                && m.layer === layer
-                && m.idx === idx) {
-                port.removeEventListener("message", onMsg);
-                clearTimeout(timer);
-                resolve(Number(m.value ?? -1));
-            }
-        };
-        timer = setTimeout(() => {
-            port.removeEventListener("message", onMsg);
-            resolve(-1);
-        }, 2000);
-        // Install the predicate BEFORE posting so a fast reply can't be missed.
-        port.addEventListener("message", onMsg);
-        // ensureRouter() in obxd-audio.ts already calls port.start() once the
-        // worklet is up; the defensive try/catch mirrors its style for safety.
-        try { port.start(); } catch { /* some impls throw if already started */ }
-        port.postMessage({
-            type: "get_drum_layer_param",
-            instance_id: DRUM_INSTANCE,
-            pad,
-            layer,
-            idx,
-        });
+    // Install the predicate BEFORE posting so a fast reply can't be missed.
+    const replyPromise = awaitReply(
+        (m) => typeof m === "object" && m !== null
+            && (m as { type?: string }).type === "drum_layer_param_value"
+            && (m as { pad?: number }).pad === pad
+            && (m as { layer?: number }).layer === layer
+            && (m as { idx?: number }).idx === idx,
+        2000,
+    );
+    port.postMessage({
+        type: "get_drum_layer_param",
+        instance_id: DRUM_INSTANCE,
+        pad,
+        layer,
+        idx,
     });
+    const raw = await replyPromise;
+    if (!raw) return -1;
+    return Number((raw as { value?: number }).value ?? -1);
 }
 
 export function setPadLayerCount(pad: number, count: number): void {

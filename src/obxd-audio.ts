@@ -191,7 +191,14 @@ function ensureRouter(): void {
     try { workletNode.port.start(); } catch { /* some impls throw if already started */ }
 }
 
-function awaitReply(predicate: (msg: unknown) => boolean, timeoutMs: number): Promise<unknown> {
+/*
+ * The single reply-correlation mechanism for worklet RPC replies: install a
+ * predicate into the pendingReplies array scanned by the router in
+ * ensureRouter(), then resolve (with the message) or time out (with null).
+ * drum-audio.ts's getDrumLayerParam uses this too — never install a private
+ * one-shot port listener for a worklet reply.
+ */
+export function awaitReply(predicate: (msg: unknown) => boolean, timeoutMs: number): Promise<unknown> {
     return new Promise((resolve) => {
         const timer = setTimeout(() => {
             const i = pendingReplies.findIndex((p) => p.predicate === predicate);
