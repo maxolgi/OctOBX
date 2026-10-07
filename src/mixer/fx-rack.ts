@@ -89,6 +89,16 @@ export function ensureFxStateLoaded(): Promise<void> {
     return loadPromise;
 }
 
+/** Unconditionally re-pull the engine FX state into this cache (doLoad
+ * overwrites each instance's slots/enabled/params and notifies listeners,
+ * so mounted track strips re-render). Call after any engine-side FX state
+ * write that bypasses the UI mutation helpers above — e.g. the bulk
+ * restoreFxState() performed when a project is switched mid-session. */
+export function refreshFxStateCache(): Promise<void> {
+    loadPromise = doLoad();
+    return loadPromise;
+}
+
 export function fxLoaded(): boolean {
     return loaded;
 }

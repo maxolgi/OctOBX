@@ -27,6 +27,7 @@ import {
 } from "./obxd-bridge";
 import { getDrumState, restoreDrumState, preloadDrumKit } from "./drum-rack";
 import type { DrumKit } from "./drum-state";
+import { refreshFxStateCache } from "./mixer/fx-rack";
 import { canonicalNewParamOrder } from "./obxf-param-mappings";
 
 const LS_KEY = "octobx:app_state:v1";
@@ -370,6 +371,10 @@ async function restoreAppStateAfterAWP(): Promise<boolean> {
                 console.warn("[app-state] Failed to restore FX state:", e);
             }
         }
+
+        // Refresh even when s.fx was absent or restoreFxState failed above —
+        // the cache should mirror whatever the engine actually ended up with.
+        await refreshFxStateCache();
 
         console.log("[app-state] Full restore complete");
         return true;
