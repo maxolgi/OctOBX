@@ -132,12 +132,6 @@ let fxParamsView = null;          // Float32Array view over the params block
 let fxSlotsView = null;           // Int16Array view over the slots block
 let fxEnabledView = null;         // Uint8Array view over the enabled block
 
-// The pristine WebAssembly.instantiate, captured the first time any of our
-// loader patches runs (see ensureModule / ensureOctopus). Patched variants
-// must ALWAYS bottom out here — never in another patch — so the two
-// factories can never substitute each other's WASM bytes.
-let realInstantiate = null;
-
 function ensureModule(wasmBytesArg) {
     if (initPromise) return initPromise;
     initPromise = (async () => {
@@ -148,45 +142,40 @@ function ensureModule(wasmBytesArg) {
                 throw new Error('ObxdModuleFactory not found after combined-script load (typeof=' + typeof factory + ')');
             }
 
-            // emcc 6.x's WASM loader inside AudioWorkletGlobalScope is
-            // unreachable from outside the factory closure — all of its
-            // inner vars (`wasmBinary`, `readBinary`, `readAsync`, `fetch`)
-            // are declared inside the factory function body, so we can't
-            // monkey-patch them by bare name. We CAN monkey-patch
-            // `WebAssembly.instantiateStreaming` itself (a real global),
-            // which emcc calls with whatever `fetch()` returned. If we make
-            // it succeed using our pre-fetched bytes, emcc's loader never
-            // tries to call `fetch` for the binary.
+            // Both committed emcc glues support the documented
+            // Module.instantiateWasm factory-config hook (consulted before
+            // their default fetch/streaming loader). The hook receives the
+            // FULLY-ASSEMBLED imports object, so each factory instantiates
+            // its OWN pre-fetched bytes — cross-module contamination is
+            // structurally impossible, and no WebAssembly globals are ever
+            // touched.
             let prefetchedBytes = null;
             if (wasmBytesArg) {
                 prefetchedBytes = wasmBytesArg instanceof Uint8Array
                     ? wasmBytesArg
                     : new Uint8Array(wasmBytesArg);
-                const originalInstantiateStreaming = WebAssembly.instantiateStreaming;
-                WebAssembly.instantiateStreaming = async function (_response, imports) {
-                    console.log('[obxd-processor] instantiateStreaming patched -> using pre-fetched bytes');
-                    return WebAssembly.instantiate(prefetchedBytes, imports);
-                };
-                // Also patch plain instantiate() in case emcc falls through
-                // to its ArrayBuffer path: when called with imports object
-                // (not a Module), swap in our bytes.
-                const originalInstantiate = WebAssembly.instantiate;
-                realInstantiate = originalInstantiate;   // shared with ensureOctopus (see its comment)
-                WebAssembly.instantiate = async function (binaryOrModule, imports) {
-                    if (imports && (!binaryOrModule || !(binaryOrModule instanceof WebAssembly.Module))) {
-                        return originalInstantiate(prefetchedBytes, imports);
-                    }
-                    return originalInstantiate(binaryOrModule, imports);
-                };
-                console.log('[obxd-processor] pre-fetched WASM bytes injected (' + prefetchedBytes.byteLength + '); WebAssembly.instantiate patched');
             } else {
                 console.warn('[obxd-processor] no pre-fetched WASM bytes; falling back to emcc default loader');
             }
 
             console.log('[obxd-processor] invoking factory...');
-            const m = await factory({
-                locateFile: (p) => '/' + p,
-            });
+            const factoryConfig = { locateFile: (p) => '/' + p };
+            if (prefetchedBytes) {
+                factoryConfig.instantiateWasm = (imports, onSuccess) => {
+                    console.log('[obxd-processor] instantiateWasm hook -> using pre-fetched bytes (' + prefetchedBytes.byteLength + ')');
+                    WebAssembly.instantiate(prefetchedBytes, imports)
+                        .then((res) => onSuccess(res.instance, res.module))
+                        .catch((e) => {
+                            // The glue's instantiateWasm promise is
+                            // resolve-only; surface the failure loudly
+                            // instead of letting the boot hang silently.
+                            console.error('[obxd-processor] wasm instantiation failed:', e && e.message);
+                            setTimeout(() => { throw e; }, 0);
+                        });
+                };
+            }
+            const m = await factory(factoryConfig);
+            if (typeof m._obxd_init !== 'function') throw new Error('obxd module instantiation mismatch: _obxd_init missing');
             console.log('[obxd-processor] factory resolved; _exports:', Object.keys(m).filter(k => k.startsWith('_')).join(','));
             wasmModule = m;
             // _obxd_init now creates all 10 SynthEngine instances and
@@ -236,28 +225,18 @@ function ensureModule(wasmBytesArg) {
 //     {type:'error'} WITHOUT setting alive=false — the synth path must
 //     survive a sequencer-only failure.
 //
-// Loader patching mirrors ensureModule's trick (patch the WebAssembly
-// globals emcc's inner loader calls — its closure vars are unreachable from
-// outside the factory), but SCOPED: installed right before the factory call
-// and restored in a finally. We also await the obxd initPromise FIRST:
-// ensureModule's patches stay installed forever and close over the obxd
-// bytes, so if both factories were in flight at once, whichever patch was
-// installed when a factory's instantiate fired would win and could hand the
-// OTHER module the wrong bytes. Serializing after obxd settles and
-// restoring afterwards closes that window; both patched variants bottom out
-// at `realInstantiate` (the pristine builtin captured at first patch) so
-// they can never chain into each other even if the timing assumptions
-// change.
+// Loading uses the same documented Module.instantiateWasm hook as
+// ensureModule: the octopus glue (an IMPORTED_MEMORY build) hands the hook
+// the fully-assembled imports object — already carrying the shared
+// WebAssembly.Memory injected from `wasmMemory` — so the hook instantiates
+// the octopus bytes and nothing else. Each factory closes over its OWN
+// bytes, so the two instantiations can run in parallel with no WebAssembly
+// globals touched and no way to hand one module the other's bytes.
 function ensureOctopus(opts) {
     if (octInitPromise) return octInitPromise;
     octInitPromise = (async () => {
         const port = opts && opts.port;
         try {
-            // Let the obxd instantiate finish first (see the function
-            // comment). A rejected obxd init must not block the sequencer —
-            // swallow and continue.
-            try { if (initPromise) await initPromise; } catch (e) { /* obxd failed; octopus still boots */ }
-
             console.log('[obxd-processor] locating OctopusModuleFactory...');
             const factory = (typeof OctopusModuleFactory !== 'undefined') ? OctopusModuleFactory : null;
             if (typeof factory !== 'function') {
@@ -268,82 +247,72 @@ function ensureOctopus(opts) {
                 ? opts.wasmBinary
                 : new Uint8Array(opts.wasmBinary);
 
-            const prevStreaming = WebAssembly.instantiateStreaming;
-            const prevInstantiate = WebAssembly.instantiate;
-            if (!realInstantiate) realInstantiate = prevInstantiate;
-            WebAssembly.instantiateStreaming = async function (_response, imports) {
-                console.log('[obxd-processor] octopus instantiateStreaming patched -> using pre-fetched bytes');
-                return realInstantiate(octBytes, imports);
-            };
-            // Same fall-through guard as ensureModule's plain-instantiate
-            // patch: when called with real bytes (wasmBinary was in the
-            // factory config), pass them through untouched.
-            WebAssembly.instantiate = async function (binaryOrModule, imports) {
-                if (imports && (!binaryOrModule || !(binaryOrModule instanceof WebAssembly.Module))) {
-                    return realInstantiate(octBytes, imports);
-                }
-                return realInstantiate(binaryOrModule, imports);
-            };
-            console.log('[obxd-processor] octopus loader patched (' + octBytes.byteLength + ' pre-fetched bytes, imported shared memory)');
+            // Same documented instantiateWasm hook as ensureModule (see the
+            // function comment): the glue assembles the imports — including
+            // the shared memory from `wasmMemory` — and we instantiate the
+            // octopus bytes ourselves.
+            const m = await factory({
+                wasmMemory: opts.memory,
+                locateFile: (p) => '/' + p,
+                instantiateWasm: (imports, onSuccess) => {
+                    console.log('[obxd-processor] octopus instantiateWasm hook -> using pre-fetched bytes (' + octBytes.byteLength + ', imported shared memory)');
+                    WebAssembly.instantiate(octBytes, imports)
+                        .then((res) => onSuccess(res.instance, res.module))
+                        .catch((e) => {
+                            // The glue's instantiateWasm promise is
+                            // resolve-only; surface the failure loudly
+                            // instead of letting the boot hang silently.
+                            console.error('[obxd-processor] octopus wasm instantiation failed:', e && e.message);
+                            setTimeout(() => { throw e; }, 0);
+                        });
+                },
+            });
+            if (typeof m._engine_init !== 'function') throw new Error('octopus module instantiation mismatch: _engine_init missing');
 
-            try {
-                const m = await factory({
-                    wasmBinary: octBytes,
-                    wasmMemory: opts.memory,
-                    locateFile: (p) => '/' + p,
-                });
+            // Sequencer timebase: _octopus_pump converts audio-quantum
+            // sample deltas into 48-PPQN ticks, so it needs the exact
+            // context sample rate.
+            m._octopus_set_sample_rate(sampleRate || 48000);
 
-                // Sequencer timebase: _octopus_pump converts audio-quantum
-                // sample deltas into 48-PPQN ticks, so it needs the exact
-                // context sample rate.
-                m._octopus_set_sample_rate(sampleRate || 48000);
+            // /persistent is the engine's state slot (the octopus glue
+            // keeps -sFORCE_FILESYSTEM=1). mkdir throws when the dir
+            // already exists — swallow and move on.
+            try { m.FS.mkdir('/persistent'); } catch (e) { /* already exists */ }
 
-                // /persistent is the engine's state slot (the octopus glue
-                // keeps -sFORCE_FILESYSTEM=1). mkdir throws when the dir
-                // already exists — swallow and move on.
-                try { m.FS.mkdir('/persistent'); } catch (e) { /* already exists */ }
+            m._engine_init();
 
-                m._engine_init();
-
-                // Optional initial state (saved project handed over by the
-                // main thread): stage the bytes into the FS, then replay
-                // through the engine's normal load path.
-                const initialState = opts.initialState;
-                if (initialState && initialState.length) {
-                    m.FS.writeFile('/persistent/octopus_state.bin', initialState);
-                    m._wasm_load_state();
-                }
-
-                // Synth-ring views, built over the octopus module's own heap
-                // (HEAPU8.buffer IS the shared memory's buffer) from the
-                // C-side getters. process() drains this ring right after
-                // pumping the engine — same quantum, same memory.
-                midiSabRing = new Uint32Array(m.HEAPU8.buffer, m._get_midi_synth_ring_ptr(), MIDI_SYNTH_RING_SIZE);
-                midiSabHead = new Int32Array(m.HEAPU8.buffer, m._get_midi_synth_ring_head_ptr(), 1);
-                midiSabTail = new Int32Array(m.HEAPU8.buffer, m._get_midi_synth_ring_tail_ptr(), 1);
-                console.log('[obxd-processor] octopus synth-ring views connected (ring ptr ' + m._get_midi_synth_ring_ptr() + ')');
-
-                octModule = m;
-                octReady = true;
-
-                // Engine is up — tell the main thread. It builds its OWN
-                // views (MIR rendering, status reads) over the SAME shared
-                // memory it passed as processorOptions.octopusMemory, using
-                // these byte offsets; no per-frame posting needed.
-                port.postMessage({
-                    type: 'oct_ready',
-                    mirPtr: m._get_mir_ptr(),
-                    processedMirPtr: m._get_processed_mir_ptr(),
-                    statusPtr: m._get_status_ptr(),
-                });
-                console.log('[obxd-processor] octopus engine ready');
-            } finally {
-                // Restore whatever was installed before us (the obxd-era
-                // patches, or the pristine builtins) — see the function
-                // comment for why the patch must be scoped.
-                WebAssembly.instantiateStreaming = prevStreaming;
-                WebAssembly.instantiate = prevInstantiate;
+            // Optional initial state (saved project handed over by the
+            // main thread): stage the bytes into the FS, then replay
+            // through the engine's normal load path.
+            const initialState = opts.initialState;
+            if (initialState && initialState.length) {
+                m.FS.writeFile('/persistent/octopus_state.bin', initialState);
+                m._wasm_load_state();
             }
+
+            // Synth-ring views, built over the octopus module's own heap
+            // (HEAPU8.buffer IS the shared memory's buffer) from the
+            // C-side getters. process() drains this ring right after
+            // pumping the engine — same quantum, same memory.
+            midiSabRing = new Uint32Array(m.HEAPU8.buffer, m._get_midi_synth_ring_ptr(), MIDI_SYNTH_RING_SIZE);
+            midiSabHead = new Int32Array(m.HEAPU8.buffer, m._get_midi_synth_ring_head_ptr(), 1);
+            midiSabTail = new Int32Array(m.HEAPU8.buffer, m._get_midi_synth_ring_tail_ptr(), 1);
+            console.log('[obxd-processor] octopus synth-ring views connected (ring ptr ' + m._get_midi_synth_ring_ptr() + ')');
+
+            octModule = m;
+            octReady = true;
+
+            // Engine is up — tell the main thread. It builds its OWN
+            // views (MIR rendering, status reads) over the SAME shared
+            // memory it passed as processorOptions.octopusMemory, using
+            // these byte offsets; no per-frame posting needed.
+            port.postMessage({
+                type: 'oct_ready',
+                mirPtr: m._get_mir_ptr(),
+                processedMirPtr: m._get_processed_mir_ptr(),
+                statusPtr: m._get_status_ptr(),
+            });
+            console.log('[obxd-processor] octopus engine ready');
         } catch (e) {
             console.error('[obxd-processor] octopus WASM load failed:', e && e.message, e && e.stack);
             throw e;
@@ -460,8 +429,8 @@ class ObxdProcessor extends AudioWorkletProcessor {
         // Boot the Octopus sequencer engine in this same worklet. The main
         // thread passes the pre-fetched octopus WASM bytes, the shared
         // WebAssembly.Memory the module imports, and an optional initial
-        // state blob. ensureOctopus() (which waits for the obxd factory
-        // above to settle first — see its comment) builds the synth-ring
+        // state blob. ensureOctopus() (fully independent of the obxd boot —
+        // each factory instantiates its own bytes) builds the synth-ring
         // views over the octopus heap itself; the old processorOptions
         // midiSab/midiSynth*Offset keys are gone. A sequencer-only failure
         // posts {type:'error'} but deliberately does NOT set alive=false.
