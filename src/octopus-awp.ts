@@ -118,10 +118,8 @@ const OCT_STATUS_TICK_NS_OFFSET = 32; // Float64 tick_ns at byte offset +32
 const OCT_WASM_PAGES = 2048;
 const REPLY_TIMEOUT_MS = 3000;
 
-// Mirrors ACTIVE_PROJECT_KEY in state-persistence.ts (not exported there;
-// keep the literal in sync).
-const ACTIVE_PROJECT_KEY = "octobx:active_project";
-const DEFAULT_PROJECT_NAME = "Default";
+export const ACTIVE_PROJECT_KEY = "octobx:active_project";
+export const DEFAULT_PROJECT_NAME = "Default";
 
 // ---------------------------------------------------------------------------
 // Module state (single engine, single boot — see bootOctopusEngine)

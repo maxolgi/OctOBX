@@ -30,7 +30,8 @@ import type { DrumKit } from "./drum-state";
 import { refreshFxStateCache } from "./mixer/fx-rack";
 import { canonicalNewParamOrder } from "./obxf-param-mappings";
 
-const LS_KEY = "octobx:app_state:v1";
+export const APP_STATE_LS_KEY = "octobx:app_state:v1";
+const LS_KEY = APP_STATE_LS_KEY;
 
 interface RoutingState {
     channel: number;

@@ -23,12 +23,12 @@
  * Right-click on Octopus panel: context menu with export/import/project ops.
  */
 
-import type { OctopusController } from "./octopus-awp";
+import { ACTIVE_PROJECT_KEY, DEFAULT_PROJECT_NAME, type OctopusController } from "./octopus-awp";
 import {
     loadMidiLearnBindings,
     saveMidiLearnBindings,
 } from "./obxf-midi-learn-integration";
-import { saveAppState, clearAppState, downloadAppStateJson, reloadAndRestoreAppState } from "./app-state";
+import { saveAppState, clearAppState, downloadAppStateJson, reloadAndRestoreAppState, APP_STATE_LS_KEY } from "./app-state";
 import {
     idbSaveProject,
     idbLoadProject,
@@ -39,9 +39,10 @@ import {
 
 // ---- localStorage keys for project management ----
 // Only the (small) index + active name live here; payloads live in
-// IndexedDB (see idb-projects.ts).
+// IndexedDB (see idb-projects.ts). ACTIVE_PROJECT_KEY /
+// DEFAULT_PROJECT_NAME are defined in octopus-awp.ts; APP_STATE_LS_KEY in
+// app-state.ts.
 const PROJECT_INDEX_KEY = "octobx:project_index";
-const ACTIVE_PROJECT_KEY = "octobx:active_project";
 
 // ---- Project index management ----
 
@@ -61,7 +62,7 @@ function setProjectList(names: string[]): void {
 }
 
 function getActiveProject(): string {
-    return localStorage.getItem(ACTIVE_PROJECT_KEY) || "Default";
+    return localStorage.getItem(ACTIVE_PROJECT_KEY) || DEFAULT_PROJECT_NAME;
 }
 
 function setActiveProject(name: string): void {
@@ -84,7 +85,7 @@ async function saveProjectData(ctl: OctopusController, name: string): Promise<Ui
     await saveAppState();
 
     // Read app state JSON
-    const appStateJson = localStorage.getItem("octobx:app_state:v1") || "{}";
+    const appStateJson = localStorage.getItem(APP_STATE_LS_KEY) || "{}";
 
     await idbSaveProject(name, octopusBytes, appStateJson);
 
@@ -124,7 +125,7 @@ async function loadProjectData(ctl: OctopusController, name: string): Promise<vo
 
     // Write app state to working localStorage key
     if (project.appStateJson && project.appStateJson !== "{}") {
-        localStorage.setItem("octobx:app_state:v1", project.appStateJson);
+        localStorage.setItem(APP_STATE_LS_KEY, project.appStateJson);
     }
 
     setActiveProject(name);
@@ -198,7 +199,7 @@ export function downloadStateFile(data: Uint8Array): void {
  * forget — failures are reported via reportProjectError.
  */
 export function onStateSavedBytes(bytes: Uint8Array): void {
-    const appStateJson = localStorage.getItem("octobx:app_state:v1") || "{}";
+    const appStateJson = localStorage.getItem(APP_STATE_LS_KEY) || "{}";
     idbSaveProject(getActiveProject(), bytes, appStateJson).catch((err: unknown) => {
         reportProjectError("Auto-save (internal save)", err);
     });
@@ -241,7 +242,7 @@ export function setupStatePersistence(ctl: OctopusController) {
 
     // Initialize project index with Default if empty
     if (getProjectList().length === 0) {
-        setProjectList(["Default"]);
+        setProjectList([DEFAULT_PROJECT_NAME]);
     }
     refreshProjectSelector();
 
