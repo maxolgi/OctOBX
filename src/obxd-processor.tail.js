@@ -1113,14 +1113,31 @@ class ObxdProcessor extends AudioWorkletProcessor {
                 case 'oct_key':
                     // UI key press → firmware interpreter. The SAVE key
                     // latches a one-shot "state saved" flag inside the
-                    // engine; when it fires we forward the persisted bytes
-                    // to the main thread in the same message turn.
+                    // engine; the flag check is inline (cheap), but the
+                    // serialization + file read are deferred to a HEAVY
+                    // task-queue task (one per drain) because the full grid
+                    // save is too heavy for this inline handler on the
+                    // audio render thread. The oct_state_saved reply now
+                    // arrives from the task queue, possibly a few quanta
+                    // later; ordering relative to other queued work is
+                    // preserved by strict FIFO. bytes:null on failure — the
+                    // main-thread subscriber ignores non-Uint8Array/empty
+                    // payloads, so failure is safe.
                     if (!octModule || !octReady) return;
                     try {
                         octModule._wasm_key_press(msg.key | 0, msg.press ? 1 : 0);
                         if (octModule._wasm_consume_state_saved()) {
-                            const savedBytes = octModule.FS.readFile('/persistent/octopus_state.bin');
-                            this.port.postMessage({ type: 'oct_state_saved', bytes: savedBytes });
+                            taskQueue.push(() => {
+                                let savedBytes = null;
+                                try {
+                                    octModule._wasm_save_state();
+                                    savedBytes = octModule.FS.readFile('/persistent/octopus_state.bin');
+                                } catch (e) {
+                                    console.error('[obxd-processor] internal save task threw:', e && e.message);
+                                    savedBytes = null;
+                                }
+                                this.port.postMessage({ type: 'oct_state_saved', bytes: savedBytes });
+                            }, true);
                         }
                     } catch (e) {
                         console.error('[obxd-processor] oct_key threw:', e && e.message);

@@ -294,8 +294,18 @@ static void handle_key_press(int keyNdx, int press) {
         /* GRID+PGM save */
         if (keyNdx == 242 && G_zoom_level == OSC_ZOOM_GRID
             && MODE_OBJECT_SELECTION == OSC_BIRDSEYE && G_run_bit == 0) {
+#ifdef OCT_AWP
+            /* AWP: the full grid serialization (PersGridExport + all pages +
+             * fwrite) is too heavy for the worklet's inline message handler,
+             * which runs on the audio render thread between quanta. Only
+             * latch the flag here; the worklet consumes it and performs the
+             * save itself via wasm_save_state on its AWP task queue (one
+             * HEAVY task per quantum). */
+            g_state_saved = 1;
+#else
             save_state("/persistent/octopus_state.bin");
             g_state_saved = 1;
+#endif
         }
     } else {
         G_pressed_keys[keyNdx] = 0;
