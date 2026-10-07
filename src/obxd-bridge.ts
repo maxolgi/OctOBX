@@ -31,11 +31,11 @@
  * Channel preservation (MPE): the Octopus engine packs the full MIDI
  * status byte (0x90 | (channel & 0x0F)) into its MIDI stream, so the
  * per-note channel travels in the status byte's low nibble. obxd_midi_in()
- * on the C side currently hardcodes `channel = 0` regardless of that nibble;
- * consuming `status & 0x0F` when g_mpe_enabled[id] is set is the engine
- * follow-up that makes processNoteOn(note, vel, channel) receive the real
- * per-voice channel. No JS change is needed for that — the channel is
- * already in the status byte the worklet reads.
+ * preserves it end-to-end: when g_mpe_enabled[id] is set the engine
+ * consumes `status & 0x0F`, so processNoteOn(note, vel, channel) and the
+ * per-channel expression handlers (processMPEPitch / processMPETimbre /
+ * processMPEChannelPressure) receive the real per-voice channel; in
+ * non-MPE mode channel 0 is used.
  */
 
 import { isObxdReady, sendObxdMidiRouting, setObxdInstanceMpe as setObxdInstanceMpeEngine } from "./obxd-audio";
@@ -75,18 +75,18 @@ export function setObxdInstanceChannel(id: number, channel: number): void {
  * path (via buildChannelToInstance in the handler) pick up the new zone on
  * the next batch.
  *
- * The engine flag is what the (deferred) obxd_midi_in channel-consumption
- * follow-up keys off of; setting it now means the moment that one-liner
- * lands, per-voice channel dispatch works end-to-end with no further JS.
+ * The engine flag keys the per-channel MPE handling in obxd_midi_in (note
+ * signatures plus the processMPEPitch / processMPETimbre /
+ * processMPEChannelPressure handlers), so per-voice channel dispatch works
+ * end-to-end.
  */
 export function setObxdInstanceMpe(id: number, enabled: boolean): void {
     if (id < 0 || id >= INSTANCE_COUNT) return;
     instanceMpe[id] = !!enabled;
     // Mirror the flag to the engine (g_mpe_enabled[id] via the worklet's
     // set_mpe handler). No-ops before the worklet is up; the handler guards
-    // on wasmModule. Setting it now means the moment the engine-side
-    // obxd_midi_in channel-consumption follow-up lands, per-voice channel
-    // dispatch works end-to-end with no further JS change.
+    // on wasmModule. With the flag set, obxd_midi_in consumes the status
+    // byte's channel nibble and dispatches the per-channel MPE handlers.
     setObxdInstanceMpeEngine(id, instanceMpe[id]);
     syncRoutingToAudioWorklet();
 }
