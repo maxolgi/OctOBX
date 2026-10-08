@@ -1,12 +1,87 @@
-# AGENTS.md
+## Behavioral guidelines
+
+Think before coding, keep changes surgical, define success criteria. Match existing code style.
+
+### 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+### 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+If you are not sure about something dont overthink, use internet search.
+
+## Git workflow for agents
+
+**Agents commit, humans push.**
+
+- **Commit your work** as you complete each logical unit. Small, focused commits with clear messages. Stage only the files you changed — never `git add -A` blindly.
+- **Never push.** Never run `git push`, `gh pr create`, or any remote command. The human reviews the commit log and pushes when ready.
+- **One commit per logical change.** If you fix three issues, that's three commits. Write messages that match the repo's existing style (look at `git log --oneline -10`).
+- **Before committing:** inspect `git status` and `git diff` to confirm only intended files are staged. Never commit secrets, `cert-hash.js`, or `web/wasm/` contents.
+- **Rebase is fine** if you need to fix your own earlier commit (e.g., `git commit --amend`), but never force-push.
+
+---
+Never edit above this line
+---
 
 OctOBX — the Genoqs Octopus/Nemo MIDI sequencer firmware (~50k lines of C89)
 compiled to **WebAssembly via Emscripten**, with a TypeScript/Vite web UI and
 an in-browser multi-instance **OB-Xf synthesizer** running in an AudioWorklet.
 The synth was migrated from the legacy 2DaT/Obxd OB-XD engine to the
 Surge-maintained OB-Xf engine (32-voice polyphony, second LFO, MPE, ~30 more
-parameters). Each instance feeds a user-reorderable **guitarix FX chain**
-(11 effects, wah → reverb) between the synth output and the mixer taps.
+parameters). Each instance feeds a **guitarix FX chain** (any of 83 effects
+loadable into 11 user-assignable slots) between the synth output and the
+mixer taps.
 The legacy `third_party/Obxd/` submodule has been removed.
 
 This is the **WASM/browser port**. It is a sibling project to the native
@@ -199,12 +274,19 @@ python3 serve.py                       # http://localhost:8080
 `wasm/obxd/patches/` to generate `wasm/obxd/patches.h` (gitignored), which
 `main_obxd.cpp`'s `__has_include("patches.h")` guard picks up so
 `obxd_set_factory_patch()` loads real presets instead of the programmatic
-fallback. It then concatenates the combined AudioWorklet module
-`wasm/build/obxd-processor.js` in this order: `obxd-awp-shim.js` →
+fallback. `build.sh synth`/`all` also run `node tools/gen-worklet-protocol.mjs`
+(regenerates the worklet message-protocol artifacts from the single-source
+spec `tools/worklet-protocol.mjs`; `--check` gates staleness). It then
+concatenates the combined AudioWorklet module `wasm/build/obxd-processor.js`
+as: a `const WORKLET_PROTOCOL_CHECKS = 1|0;` prelude (ALWAYS the first line —
+`synth` combines with 1, `app`/`all`/`desktop` with 0; the tail's dev-only
+protocol-validation hook reads it) → `obxd-awp-shim.js` →
 `octopus_wasm.js` → `obxd_wasm.js` → `mixer_wasm_glue.js` (optional —
 concatenated only when the CakeMix artifacts `wasm/mixer/mixer_wasm_glue.js`
 + `mixer_wasm_bg.wasm` are present; `build.sh` tries to refresh them via
 `tools/prep-mixer-wasm.mjs` first) → `src/generated/restore-layout.js` →
+(`src/generated/worklet-protocol-checks.js` — concatenated only when the
+checks flag is 1; the generated message-shape validator) →
 `src/awp-task-queue.js` → `obxd-processor.tail.js` — one classic script,
 three WASM factories (`OctopusModuleFactory` + `ObxdModuleFactory` + the
 mixer glue's `__cmxInitSync`/`__cmxMixerWasm`). Without the mixer artifacts
@@ -621,7 +703,14 @@ Browser (COOP/COEP/CORP cross-origin isolated)
   pre-fetched on the main thread and passed via `processorOptions`
   (`wasmBinary` / `octopusWasmBinary` + `octopusMemory`; the mixer binary
   arrives as `mixerWasmBinary`, fetched best-effort) to sidestep emcc's
-  broken-in-AWP fetch paths.
+  broken-in-AWP fetch paths. Inside the worklet, both emcc factories are
+  instantiated through the documented `Module['instantiateWasm']`
+  factory-config hook (`ensureModule`/`ensureOctopus` in the tail): the
+  hook receives the fully-assembled imports (the octopus glue injects the
+  shared memory itself) and compiles each factory's OWN pre-fetched bytes,
+  so no `WebAssembly` globals are ever patched and cross-module byte
+  contamination is structurally impossible. Post-boot asserts verify the
+  expected exports (`_obxd_init` / `_engine_init`) exist.
 - **CakeMix mixer engine** — a Rust wasm-bindgen module ported from the
   sibling CakeMix repo's oximedia engine. Per-instance stereo taps
   `g_track_l/r[10]` (C exports `get_track_l_ptr`/`get_track_r_ptr` in
@@ -749,7 +838,7 @@ sequentially after setting the running status byte.
 | `midi-access.ts` | Shared `openMidiAccess()` + `pollForPorts()` — works around the Chrome-on-Linux late port-enumeration quirk (see MIDI section). |
 | `midi-output.ts` | Web MIDI API **output** (Chrome/Edge); `frameMidi()` emits correct 1/2/3-byte messages. Hardware events arrive only as `hw_midi` batches forwarded from the worklet — `attachHwMidiForwarding()` registers the one handler (small +5 ms forward offset); there is no RAF drain loop any more. `rescan()`. |
 | `midi-input.ts` | Web MIDI API **input** (Chrome/Edge); forwards hardware messages to `ctl.midiInput()` → `oct_midi_in` messages; `rescan()`. |
-| `obxd-audio.ts` | Main-thread bootstrap + per-instance API for the combined OB-Xf/Octopus AudioWorklet. The node is created AT STARTUP by `bootOctopusEngine()`; `setupObxdAudio(octopusAssets?)` is idempotent (later rack calls are no-ops that just re-resume the AudioContext). Pre-fetches the synth + Octopus WASM binaries (plus `/mixer_wasm_bg.wasm` best-effort), passes them via `processorOptions` (`wasmBinary` + `octopusWasmBinary`/`octopusMemory`/`octopusInitialState`, mixer as `mixerWasmBinary`); `addWorkletMessageListener` registry + one-shot reply router for async worklet RPCs. Adds `setObxdInstanceMpe` for per-instance MPE flag mirroring to `g_mpe_enabled[id]`. |
+| `obxd-audio.ts` | Main-thread bootstrap + per-instance API for the combined OB-Xf/Octopus AudioWorklet. The node is created AT STARTUP by `bootOctopusEngine()`; `setupObxdAudio(octopusAssets?)` is idempotent (later rack calls are no-ops that just re-resume the AudioContext). Pre-fetches the synth + Octopus WASM binaries (plus `/mixer_wasm_bg.wasm` best-effort), passes them via `processorOptions` (`wasmBinary` + `octopusWasmBinary`/`octopusMemory`/`octopusInitialState`, mixer as `mixerWasmBinary`); `addWorkletMessageListener` registry + one-shot reply router for async worklet RPCs (replies narrowed via the generated `WorkletToMainMsg` union). ALL main→worklet sends flow through typed funnels checked against `src/generated/worklet-protocol.ts` (`postWorkletMessage(msg: MainToWorkletMsg, transfer?)` here, `postToEngine` in octopus-awp.ts, `postDrum` in drum-audio.ts — a mistyped field is a compile error). Adds `setObxdInstanceMpe` for per-instance MPE flag mirroring to `g_mpe_enabled[id]`. |
 | `obxd-bridge.ts` | Channel→instance routing state (default 1–10 → 0–9, reassignable), MPE-aware via `buildChannelToInstance()` — an instance with MPE enabled claims a lower zone (master + N voice channels) before non-MPE instances fill the remaining channels. Pushes the routing table to the worklet via `sendObxdMidiRouting()`; the synth consumes MIDI itself from the shared ring inside process(). |
 | `obxd-rack.ts` | OB-XD panel UI: instance selector, power/polyphony/channel, meter (30Hz ping/pong), `.fxp` loader, Reset/Panic/Panic-All. Adds per-instance MPE toggle + bend-range UI. The worklet node is already up at boot; first PLAY just resumes the suspended AudioContext (autoplay gesture). |
 | `obxd-synth-ui.ts` | Data-driven OB-Xf editor panel (104 parameter-bound controls) rendered from `obxf-layout.ts`; absolute-positioned inside a 1150×576 canvas. Legacy-indexed controls dispatch via `setObxdInstanceParam(idx, v)`; OB-Xf-only controls get a sentinel `200 + canonical ordinal`, assigned NAME-KEYED from the generated `canonicalNewParamOrder` (matches the C engine's dispatch by construction; `RingModVol`→`RingModMix` alias handled). `syncObxdControlsFromEngine(instanceId)` re-seeds widget positions from `g_param_mirror` (legacy) and `g_new_param_mirror` (NEW params) on instance switch / patch load. Exports `newParamSentinel(name)` consumed by drum-rack. |
@@ -767,8 +856,10 @@ sequentially after setting the running status byte.
 | `mixer/store.ts` | Console state + `mix_*` worklet messaging (vanilla-TS port of CakeMix's SolidJS store): every control write fans out to per-mono-channel messages (`trackChannel(t, side)`; stereo pairs), pan wired through the `channelPans` stereo-balance split. `seedEngineFromStore()` replays the full console state to the engine; owns the one permanent `mixer_meter` listener. `mix_get_params` → `mixer_params` is the diagnostics pull. |
 | `mixer/fx-rack.ts` | Slot-keyed state cache for the per-instance guitarix FX chains (slot ids, enabled, flat 11-slot × 48-param mirror per instance). Loaded once per console mount via `getFxState()` (bulk `fx_get_state` pull); the UI mutations here (`setFxParamUI` converting 0..1 → engine units, enable, set-slot, move-slot) are the only writers after load, and `refreshFxStateCache()` re-pulls the engine state after engine-side restores (e.g. a project switch mid-session). Pure logic — no DOM. |
 | `mixer/` (console widgets) | Vanilla-TS port of CakeMix's console UI — `knob.ts`, `meter-canvas.ts`, `gr-meter.ts`, `eq-curve.ts`, `track-strip.ts`, `master-strip.ts`, `console.ts` (mounts 16 strips + master), `styles.ts`. Meters poll the store arrays from one rAF loop. |
-| `obxd-processor.tail.js` | Plain JS appended to the emcc output(s) to form `obxd-processor.js` for `audioWorklet.addModule()`. Subclasses `AudioWorkletProcessor`. `ensureOctopus()` boots the Octopus engine in this same worklet against the shared memory; `process()` calls `_octopus_pump(128)` FIRST, then drains the synth MIDI ring (same quantum), pendingMidi, the deferred AWP task queue, and `obxd_render`, then feeds the per-instance taps into the CakeMix mixer (`mixer.process(128)`, whose master IS the node output; legacy master-sum fallback). Hosts the `oct_*` + `fx_*` + `mix_*` message handlers. `fx_set_enabled`/`fx_set_slot`/`fx_move_slot` run directly in the message handler (they allocate/free DSP — never inside `process()`); `fx_set_param` is a light queued setter; the `oct_key` SAVE path latches the engine's one-shot flag inline but defers `_wasm_save_state` + file read to a heavy task (the `oct_state_saved` reply arrives from the queue). Heavy messages (fxp load, factory patch, PCM load/clear, bulk pulls/restores incl. `fx_get_state`/`fx_restore_state`, oct_save_state/oct_load_state) run through the task queue (`awp-task-queue.js`), budgeted per 128-sample quantum. |
+| `obxd-processor.tail.js` | Plain JS appended to the emcc output(s) to form `obxd-processor.js` for `audioWorklet.addModule()`. Subclasses `AudioWorkletProcessor`. Both emcc factories boot via the `Module['instantiateWasm']` hook (pre-fetched bytes, post-boot export asserts). `ensureOctopus()` boots the Octopus engine in this same worklet against the shared memory; `process()` calls `_octopus_pump(128)` FIRST, then drains the synth MIDI ring (same quantum), pendingMidi, the deferred AWP task queue, and `obxd_render`, then feeds the per-instance taps into the CakeMix mixer (`mixer.process(128)`, whose master IS the node output; legacy master-sum fallback). Hosts the `oct_*` + `fx_*` + `mix_*` message handlers; incoming messages are shape-validated against the generated protocol spec in DEV BUILDS ONLY (`WORKLET_PROTOCOL_CHECKS`, log-and-continue — never throws on the audio thread's message loop). `fx_set_enabled`/`fx_set_slot`/`fx_move_slot` run directly in the message handler (they allocate/free DSP — never inside `process()`); `fx_set_param` is a light queued setter; the `oct_key` SAVE path latches the engine's one-shot flag inline but defers `_wasm_save_state` + file read to a heavy task (the `oct_state_saved` reply arrives from the queue). Heavy messages (fxp load, factory patch, PCM load/clear, bulk pulls/restores incl. `fx_get_state`/`fx_restore_state`, oct_save_state/oct_load_state) run through the task queue (`awp-task-queue.js`), budgeted per 128-sample quantum. |
 | `obxd-awp-shim.js` | Plain JS prepended to emcc output; polyfills `self`/`location`/`fetch`/`performance` for AudioWorkletGlobalScope, plus `TextEncoder`/`TextDecoder` and `crypto.getRandomValues` (the wasm-bindgen mixer glue + mixer ctor need them). |
+| `generated/worklet-protocol.ts` | AUTO-GENERATED by `tools/gen-worklet-protocol.mjs` from `tools/worklet-protocol.mjs` — the single-source worklet message-protocol spec (75 main→worklet + 25 worklet→main types, field/type DSL incl. flag-vs-bool, nullability, fixed array lengths). Exports the `MainToWorkletMsg`/`WorkletToMainMsg` discriminated unions the typed senders + reply narrowing compile against. `--check` gates staleness. |
+| `generated/worklet-protocol-checks.js` | AUTO-GENERATED classic script (same source) concatenated into the worklet in dev builds only: `__workletProtocolCheck(msg)` returns null or an error string (unknown type / missing field / wrong typeof). `test/worklet-protocol-sync.test.ts` gates spec↔tail drift (handler coverage both directions, per-case field presence, generator freshness) and unit-tests the validator. |
 | `transport-sync.ts` | Wires PLAY/STOP/BPM to the Octopus engine (controller `oct_*` messages) + transport indicator; seeds the tempo display from the shared status block. |
 | `state-persistence.ts` | Octopus sequencer state save/load as BYTES through the worklet (`ctl.saveState()`/`ctl.loadState()`), stored in the octobx projects IndexedDB (idb-projects.ts); localStorage holds only the project index + active name. Internal GRID+PGM saves arrive as `oct_state_saved` bytes → `onStateSavedBytes` (auto-save + download). LOAD imports .bin files via `ctl.loadState()`. Shift+LOAD purges legacy `EM_FS_*` IDBFS leftovers + app state. Boot auto-load comes from the active project inside `bootOctopusEngine()`. |
 | `idb-projects.ts` | Raw IndexedDB wrapper for project storage (db `octobx`, store `projects`). Projects moved out of localStorage to avoid the ~5MB base64 quota; localStorage keeps only the project index + active name. `migrateLegacyProjects()` does the one-time move. |
@@ -914,7 +1005,7 @@ curl -sk http://127.0.0.1:8081/ | grep -o 'assets/index-[^"]*\.js'   # hash must
 (`midi-framing.ts`, `channel-routing.ts`, `obxf-midi-learn.ts`,
 `obxf-param-mappings.ts`, `obxf-param-format.ts`, `obxf-dispatch-coverage`,
 `sentinel-migration`, `dense-layer-index`, `awp-task-queue`, `mixer-store`,
-`gxfx-params`) — 260 tests, no browser required.
+`gxfx-params`, `worklet-protocol-sync`) — 338 tests, no browser required.
 `npm run test:wasm` additionally exercises the built synth WASM under Node
 (`tools/verify-obxd-wasm.mjs` — 40 behavioral checks over the exported C
 surface: mirror round-trips, factory patch loads, drum classification,
@@ -971,14 +1062,22 @@ browser console:
    wrapper and legacy OB-Xd integer schema as a fallback. To swap patches,
    replace the `.fxp` files in `patches/` (keep the `NN_name.fxp` naming so
    the `g_factory_patches` symbol table matches) and rebuild.
-3. **AudioWorklet reply correlation** is correct but untyped — `obxd-audio.ts`
-   uses an `unknown`-typed predicate router to avoid racing `port.onmessage`
-   reassignments.
-4. **Limited automated tests** — vitest (`npm test`, 260 tests) covers the
+3. **Worklet message boundary — typed TS side, plain-JS worklet side.**
+   Every main→worklet send flows through typed funnels checked against the
+   generated `MainToWorkletMsg` union (`tools/worklet-protocol.mjs` is the
+   single source; `tools/gen-worklet-protocol.mjs` regenerates, `--check`
+   gates), replies are narrowed via `WorkletToMainMsg`, and
+   `test/worklet-protocol-sync.test.ts` gates spec↔handler drift in CI.
+   Dev builds (`build.sh synth`) additionally shape-validate every incoming
+   message in the worklet; production builds skip that for zero
+   audio-thread overhead. Residual gap: the tail itself stays plain JS
+   (classic script by AWP necessity), so a worklet-side field typo is
+   caught by the CI drift gate, not the compiler.
+4. **Limited automated tests** — vitest (`npm test`, 338 tests) covers the
    pure-logic modules (`midi-framing.ts`, `channel-routing.ts`,
    `obxf-midi-learn.ts`, `obxf-param-mappings.ts`, `obxf-param-format.ts`,
    `obxf-dispatch-coverage`, `awp-task-queue`, `mixer-store`,
-   `gxfx-params`); `npm run test:wasm`
+   `gxfx-params`, `worklet-protocol-sync`); `npm run test:wasm`
    (`tools/verify-obxd-wasm.mjs`) covers the OB-Xf synth WASM under Node
    (40 checks, incl. 21 guitarix-FX checks); `npm run test:octopus` (`tools/verify-octopus-wasm.mjs`)
    covers the Octopus engine WASM behaviorally in headless Chromium
