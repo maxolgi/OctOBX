@@ -480,6 +480,17 @@ class ObxdProcessor extends AudioWorkletProcessor {
         this.port.onmessage = (ev) => {
             const msg = ev.data;
             if (!msg) return;
+            // Protocol shape validation — DEV BUILDS ONLY. build.sh's combine_worklet
+            // emits `const WORKLET_PROTOCOL_CHECKS = 1|0` as the first line of the
+            // combined script (1 for the dev `synth` flow, 0 for app/all/desktop
+            // production builds) and concatenates the generated validator ahead of
+            // this file only when 1. The typeof guard keeps the raw tail loadable
+            // without the concat. Log-and-continue: a malformed message must NEVER
+            // throw on the audio thread's message loop.
+            if (WORKLET_PROTOCOL_CHECKS && typeof __workletProtocolCheck === 'function') {
+                const protoErr = __workletProtocolCheck(msg);
+                if (protoErr) console.error('[obxd-processor] protocol:', protoErr);
+            }
             const id = (typeof msg.instance_id === 'number') ? (msg.instance_id | 0) : 0;
             switch (msg.type) {
                 case 'midi':
