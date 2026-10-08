@@ -18,6 +18,7 @@
 
 import type { DrumKit, DrumPad, DrumLayer } from "./drum-state";
 import { isLayerPlayed } from "./drum-state";
+import type { MainToWorkletMsg } from "./generated/worklet-protocol";
 import {
     awaitReply,
     getObxdAudioContext,
@@ -101,7 +102,7 @@ async function decodeToMono(buf: ArrayBuffer, ctx: AudioContext): Promise<Float3
  * Post a PCM/worklet message to the drum instance. No-ops (like the rest
  * of obxd-audio.ts) when the worklet hasn't been brought up yet.
  */
-function postDrum(msg: object): void {
+function postDrum(msg: MainToWorkletMsg): void {
     const node = getObxdNode();
     if (!node) return;
     node.port.postMessage(msg);
@@ -338,7 +339,6 @@ export function setDrumLayerParam(pad: number, layer: number, idx: number, value
 export async function getDrumLayerParam(pad: number, layer: number, idx: number): Promise<number> {
     const node = getObxdNode();
     if (!node) return -1;
-    const port = node.port;
     // Install the predicate BEFORE posting so a fast reply can't be missed.
     const replyPromise = awaitReply(
         (m) => typeof m === "object" && m !== null
@@ -348,7 +348,7 @@ export async function getDrumLayerParam(pad: number, layer: number, idx: number)
             && (m as { idx?: number }).idx === idx,
         2000,
     );
-    port.postMessage({
+    postDrum({
         type: "get_drum_layer_param",
         instance_id: DRUM_INSTANCE,
         pad,

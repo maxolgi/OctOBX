@@ -26,6 +26,7 @@
  */
 
 import { FX_INSTANCE_COUNT, FX_SLOTS, FX_SLOT_PARAMS, isFxId } from "./gxfx-params";
+import type { MainToWorkletMsg, WorkletToMainMsg } from "./generated/worklet-protocol";
 
 let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
@@ -124,6 +125,7 @@ function ensureRouter(): void {
     workletNode.port.addEventListener("message", (ev: MessageEvent) => {
         const msg = ev.data;
         if (!msg || typeof msg !== "object") return;
+        const m = msg as WorkletToMainMsg;
 
         // Permanent listeners first (octopus-awp controller, etc.) so
         // they observe every message, including ones the reply router
@@ -135,14 +137,14 @@ function ensureRouter(): void {
         // Permanent meter listener: every pong refreshes lastMeters.
         // Independent of pendingReplies so a ping without an awaitReply
         // caller still updates the rack UI's meter bar.
-        if ((msg as { type?: string }).type === "pong") {
-            const meters = (msg as { meters?: number[] }).meters;
+        if (m.type === "pong") {
+            const meters = m.meters;
             if (Array.isArray(meters)) {
                 for (let i = 0; i < 10 && i < meters.length; i++) {
                     lastMeters[i] = Number(meters[i]) || 0;
                 }
             }
-            const voices = (msg as { voiceActivity?: number[] }).voiceActivity;
+            const voices = m.voiceActivity;
             if (Array.isArray(voices)) {
                 for (let i = 0; i < 10 && i < voices.length; i++) {
                     lastVoiceActivity[i] = (Number(voices[i]) || 0) >>> 0;
@@ -157,17 +159,17 @@ function ensureRouter(): void {
         // — the latter only after it already flipped itself to the legacy
         // master sum, so without this the console UI would keep claiming
         // "ONLINE" while the meters freeze.
-        if ((msg as { type?: string }).type === "mixer_ready") {
+        if (m.type === "mixer_ready") {
             mixerReady = true;
         }
-        if ((msg as { type?: string }).type === "mixer_error") {
+        if (m.type === "mixer_error") {
             mixerReady = false;
         }
 
         // Hardware MIDI forward: AudioWorklet sends packed events from
         // the SAB ring buffer for hardware synth output.
-        if ((msg as { type?: string }).type === "hw_midi") {
-            const packed = (msg as { packed?: number[] }).packed;
+        if (m.type === "hw_midi") {
+            const packed = m.packed;
             if (Array.isArray(packed) && hwMidiHandler) {
                 hwMidiHandler(packed);
             }
@@ -326,12 +328,13 @@ export async function setupObxdAudio(octopusAssets?: OctopusWorkletAssets): Prom
         port.onmessage = (ev: MessageEvent) => {
             const msg = ev.data;
             if (!msg) return;
+            const m = msg as WorkletToMainMsg;
             // Forward any non-ready/non-error messages to the previous handler
             // (defensive — there is none in practice today) before intercepting.
             // Permanent listeners (octopus-awp controller) also see handshake-
             // window messages so an oct_ready racing the obxd ready is never
             // missed before ensureRouter takes over.
-            if (msg.type !== "ready" && msg.type !== "error") {
+            if (m.type !== "ready" && m.type !== "error") {
                 if (msg && typeof msg === "object") {
                     for (const listener of workletMessageListeners) {
                         listener(msg);
@@ -342,7 +345,7 @@ export async function setupObxdAudio(octopusAssets?: OctopusWorkletAssets): Prom
                 }
                 return;
             }
-            if (msg.type === "ready") {
+            if (m.type === "ready") {
                 cleanup();
                 // Now that the worklet is up, install the async-reply router
                 // for the rest of the session. (Adding the listener earlier
@@ -361,9 +364,9 @@ export async function setupObxdAudio(octopusAssets?: OctopusWorkletAssets): Prom
                 for (let i = 0; i < 10; i++) defaultRouting[i + 1] = (1 << i);
                 sendObxdMidiRouting(defaultRouting);
                 resolve();
-            } else if (msg.type === "error") {
+            } else if (m.type === "error") {
                 cleanup();
-                reject(new Error(String(msg.message || "obxd worklet init failed")));
+                reject(new Error(String(m.message || "obxd worklet init failed")));
             }
         };
     });
@@ -385,11 +388,11 @@ export function teardownObxdAudio(): void {
 // ---------------------------------------------------------------------------
 
 export function setObxdInstanceActive(id: number, active: boolean): void {
-    workletNode?.port.postMessage({ type: "set_active", instance_id: id, active });
+    postWorkletMessage({ type: "set_active", instance_id: id, active });
 }
 
 export function setObxdInstancePolyphony(id: number, voiceCount: number): void {
-    workletNode?.port.postMessage({ type: "set_polyphony", instance_id: id, voice_count: voiceCount });
+    postWorkletMessage({ type: "set_polyphony", instance_id: id, voice_count: voiceCount });
 }
 
 /*
@@ -401,7 +404,7 @@ export function setObxdInstancePolyphony(id: number, voiceCount: number): void {
  * hasn't been brought up yet.
  */
 export function setObxdInstanceMpe(id: number, enabled: boolean): void {
-    workletNode?.port.postMessage({ type: "set_mpe", instance_id: id, enabled: enabled ? 1 : 0 });
+    postWorkletMessage({ type: "set_mpe", instance_id: id, enabled: enabled ? 1 : 0 });
 }
 
 /*
@@ -411,7 +414,7 @@ export function setObxdInstanceMpe(id: number, enabled: boolean): void {
  * the unreliable Octopus-engine SAB-echo path. `v` is 0..1.
  */
 export function setObxdInstanceModWheel(id: number, v: number): void {
-    workletNode?.port.postMessage({ type: "set_mod_wheel", instance_id: id, value: v });
+    postWorkletMessage({ type: "set_mod_wheel", instance_id: id, value: v });
 }
 
 /*
@@ -419,7 +422,7 @@ export function setObxdInstanceModWheel(id: number, v: number): void {
  * rationale as setObxdInstanceModWheel — sends straight to sustainOn/Off.
  */
 export function setObxdInstanceSustain(id: number, on: boolean): void {
-    workletNode?.port.postMessage({ type: "set_sustain", instance_id: id, enabled: on ? 1 : 0 });
+    postWorkletMessage({ type: "set_sustain", instance_id: id, enabled: on ? 1 : 0 });
 }
 
 /*
@@ -442,7 +445,6 @@ export async function loadObxdInstanceFxp(
     if (!workletNode) {
         throw new Error("obxd worklet not initialized");
     }
-    const port = workletNode.port;
     // Race the worklet reply against a 5s timeout. Correlate by type AND
     // instance_id so concurrent loads on different instances don't cross.
     const replyPromise = awaitReply(
@@ -452,7 +454,7 @@ export async function loadObxdInstanceFxp(
         5000,
     );
     const copy = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    port.postMessage({ type: "load_fxp", instance_id: id, bytes: copy }, [copy.buffer]);
+    postWorkletMessage({ type: "load_fxp", instance_id: id, bytes: copy }, [copy.buffer]);
     const raw = await replyPromise;
     if (!raw) return { success: false, name: "" };
     const msg = raw as { success?: boolean; name?: string };
@@ -466,7 +468,7 @@ export async function loadObxdInstanceFxp(
  */
 export function setObxdInstanceParam(id: number, idx: number, value01: number): void {
     if (idx === VOLUME_PARAM_IDX) instanceVolumes[id] = value01;
-    workletNode?.port.postMessage({ type: "set_param", instance_id: id, idx, value: value01 });
+    postWorkletMessage({ type: "set_param", instance_id: id, idx, value: value01 });
 }
 
 /*
@@ -474,7 +476,7 @@ export function setObxdInstanceParam(id: number, idx: number, value01: number): 
  * (matches the original single-instance gain scaling).
  */
 export function setObxdInstanceGain(id: number, gain01: number): void {
-    workletNode?.port.postMessage({ type: "gain", instance_id: id, value: gain01 });
+    postWorkletMessage({ type: "gain", instance_id: id, value: gain01 });
 }
 
 /*
@@ -484,7 +486,7 @@ export function setObxdInstanceGain(id: number, gain01: number): void {
  * quantum (~2.9ms jitter at 44.1kHz — well below perceptible).
  */
 export function sendObxdInstanceMidi(id: number, status: number, d1: number, d2: number): void {
-    workletNode?.port.postMessage({ type: "midi", instance_id: id, status, d1, d2 });
+    postWorkletMessage({ type: "midi", instance_id: id, status, d1, d2 });
 }
 
 /*
@@ -495,7 +497,7 @@ export function sendObxdInstanceMidi(id: number, status: number, d1: number, d2:
  * worklet iterates set bits to dispatch each event to all instances.
  */
 export function sendObxdMidiRouting(routing: number[]): void {
-    workletNode?.port.postMessage({ type: "set_routing", routing });
+    postWorkletMessage({ type: "set_routing", routing });
 }
 
 /*
@@ -503,8 +505,12 @@ export function sendObxdMidiRouting(routing: number[]): void {
  * for every mix_* message. No-ops before the worklet node exists, matching
  * every other setter here.
  */
-export function postWorkletMessage(msg: unknown): void {
-    workletNode?.port.postMessage(msg);
+export function postWorkletMessage(msg: MainToWorkletMsg, transfer?: Transferable[]): void {
+    if (transfer) {
+        workletNode?.port.postMessage(msg, transfer);
+    } else {
+        workletNode?.port.postMessage(msg);
+    }
 }
 
 /*
@@ -519,17 +525,17 @@ export function isMixerReady(): boolean {
 
 /* Hard silence — allSoundOff on one instance (resets envelopes too). */
 export function obxdInstancePanic(id: number): void {
-    workletNode?.port.postMessage({ type: "panic", instance_id: id });
+    postWorkletMessage({ type: "panic", instance_id: id });
 }
 
 /* Convenience: panic every instance in one round-trip. */
 export function obxdPanicAll(): void {
-    workletNode?.port.postMessage({ type: "panic_all" });
+    postWorkletMessage({ type: "panic_all" });
 }
 
 /* Re-apply the engine's built-in defaults for a specific instance. */
 export function obxdInstanceResetPatch(id: number): void {
-    workletNode?.port.postMessage({ type: "reset_patch", instance_id: id });
+    postWorkletMessage({ type: "reset_patch", instance_id: id });
 }
 
 /*
@@ -538,7 +544,7 @@ export function obxdInstanceResetPatch(id: number): void {
  * worklet forwards to _obxd_set_factory_patch(instance_id, patch_id).
  */
 export function applyObxdFactoryPatch(id: number, patchId: number): void {
-    workletNode?.port.postMessage({ type: "set_factory_patch", instance_id: id, patch_id: patchId });
+    postWorkletMessage({ type: "set_factory_patch", instance_id: id, patch_id: patchId });
 }
 
 /*
@@ -553,7 +559,6 @@ export function applyObxdFactoryPatch(id: number, patchId: number): void {
  */
 export async function getObxdInstanceParam(id: number, idx: number): Promise<number> {
     if (!workletNode) return -1;
-    const port = workletNode.port;
     // Install the predicate FIRST so a fast reply can't be missed.
     const replyPromise = awaitReply(
         (m) => typeof m === "object" && m !== null
@@ -562,7 +567,7 @@ export async function getObxdInstanceParam(id: number, idx: number): Promise<num
             && (m as { idx?: number }).idx === idx,
         2000,
     );
-    port.postMessage({ type: "get_param", instance_id: id, idx });
+    postWorkletMessage({ type: "get_param", instance_id: id, idx });
     const raw = await replyPromise;
     if (!raw) return -1;
     const v = Number((raw as { value?: number }).value ?? -1);
@@ -603,7 +608,7 @@ export function syncInstanceVolumes(params: number[]): void {
  * The rack UI calls this on a 30Hz interval to refresh the meter bar.
  */
 export function pingObxd(): void {
-    workletNode?.port.postMessage({ type: "ping" });
+    postWorkletMessage({ type: "ping" });
 }
 
 /* Last received per-instance RMS values (length 10, zeros before first pong). */
@@ -648,7 +653,7 @@ export async function getObxdInstancePatchName(id: number): Promise<string> {
             && (m as { instance_id?: number }).instance_id === id,
         2000,
     );
-    workletNode.port.postMessage({ type: "get_patch_name", instance_id: id });
+    postWorkletMessage({ type: "get_patch_name", instance_id: id });
     const raw = await replyPromise;
     if (!raw) return "";
     return String((raw as { name?: string }).name || "");
@@ -656,17 +661,17 @@ export async function getObxdInstancePatchName(id: number): Promise<string> {
 
 /* Per-instance MPE pitch-bend (glide) range in semitones [0..48]. */
 export function setObxdInstanceMpeGlideRange(id: number, semitones: number): void {
-    workletNode?.port.postMessage({ type: "set_mpe_glide_range", instance_id: id, semitones });
+    postWorkletMessage({ type: "set_mpe_glide_range", instance_id: id, semitones });
 }
 
 /* Set one row of an instance's 8-row VoiceMatrix. row in [0,8). src/tgt are OB-Xf string names. depth in [-1,1]. */
 export function setObxdInstanceMatrixRow(id: number, row: number, src: string, tgt: string, depth: number): void {
-    workletNode?.port.postMessage({ type: "set_matrix_row", instance_id: id, row, src, tgt, depth });
+    postWorkletMessage({ type: "set_matrix_row", instance_id: id, row, src, tgt, depth });
 }
 
 /* Clear (zero) one VoiceMatrix row on a specific instance. */
 export function clearObxdInstanceMatrixRow(id: number, row: number): void {
-    workletNode?.port.postMessage({ type: "clear_matrix_row", instance_id: id, row });
+    postWorkletMessage({ type: "clear_matrix_row", instance_id: id, row });
 }
 
 // ---------------------------------------------------------------------------
@@ -685,7 +690,7 @@ export async function dumpAllSynthParams(): Promise<number[] | null> {
             && (m as { type?: string }).type === "all_params_dumped",
         5000,
     );
-    workletNode.port.postMessage({ type: "dump_all_params" });
+    postWorkletMessage({ type: "dump_all_params" });
     const raw = await replyPromise;
     if (!raw) return null;
     return (raw as { params?: number[] }).params ?? null;
@@ -713,7 +718,7 @@ export async function restoreAllSynthAndDrumState(synth: number[], drum: number[
             && (m as { type?: string }).type === "all_state_restored",
         5000,
     );
-    workletNode.port.postMessage({ type: "restore_all_state", synthParams: synth, drumParams: drum });
+    postWorkletMessage({ type: "restore_all_state", synthParams: synth, drumParams: drum });
     await replyPromise;
 }
 
@@ -730,7 +735,7 @@ export async function dumpAllDrumParams(): Promise<number[] | null> {
             && (m as { type?: string }).type === "drum_params_dumped",
         5000,
     );
-    workletNode.port.postMessage({ type: "dump_drum_params" });
+    postWorkletMessage({ type: "dump_drum_params" });
     const raw = await replyPromise;
     if (!raw) return null;
     return (raw as { params?: number[] }).params ?? null;
@@ -799,7 +804,7 @@ export async function getFxOutParam(instanceId: number, slot: number, index: num
             && (m as { index?: number }).index === index,
         1000,
     );
-    workletNode.port.postMessage({ type: "fx_get_out_param", instance_id: instanceId, slot, index });
+    postWorkletMessage({ type: "fx_get_out_param", instance_id: instanceId, slot, index });
     const raw = await replyPromise;
     if (!raw) return 0;
     const v = (raw as { value?: number }).value;
@@ -813,7 +818,7 @@ export async function getFxState(): Promise<FxBulkState | null> {
             && (m as { type?: string }).type === "fx_state",
         5000,
     );
-    workletNode.port.postMessage({ type: "fx_get_state" });
+    postWorkletMessage({ type: "fx_get_state" });
     const raw = await replyPromise;
     if (!raw) return null;
     const params = (raw as { params?: number[] }).params;
@@ -835,7 +840,7 @@ export async function restoreFxState(state: FxBulkState): Promise<boolean> {
             && (m as { type?: string }).type === "fx_state_restored",
         10000,
     );
-    workletNode.port.postMessage({ type: "fx_restore_state", params: state.params, slots: state.slots, enabled: state.enabled });
+    postWorkletMessage({ type: "fx_restore_state", params: state.params, slots: state.slots, enabled: state.enabled });
     const raw = await replyPromise;
     return !!raw;
 }

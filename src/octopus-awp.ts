@@ -55,6 +55,7 @@ import {
     getObxdNode,
     getObxdAudioContext,
 } from "./obxd-audio";
+import type { MainToWorkletMsg, WorkletToMainMsg } from "./generated/worklet-protocol";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -171,7 +172,7 @@ let lastDropWarnAt = 0;
  * earlier. A rate-limited console.warn keeps dropped sends visible when
  * debugging without spamming the console on every frame.
  */
-function postToEngine(msg: Record<string, unknown>): boolean {
+function postToEngine(msg: MainToWorkletMsg): boolean {
     const node = getObxdNode();
     if (!node || !octReady) {
         const now = performance.now();
@@ -198,20 +199,7 @@ function settleSlot<T>(slot: PendingSlot<T> | null, value: T): PendingSlot<T> | 
 
 function handleWorkletMessage(msg: unknown): void {
     if (!msg || typeof msg !== "object") return;
-    const m = msg as {
-        type?: string;
-        mirPtr?: number;
-        processedMirPtr?: number;
-        statusPtr?: number;
-        bytes?: Uint8Array | null;
-        ok?: boolean;
-        mir?: number[];
-        runBit?: number;
-        tempo?: number;
-        zoom?: number;
-        tickCount?: number;
-        message?: string;
-    };
+    const m = msg as WorkletToMainMsg;
 
     switch (m.type) {
         case "oct_ready": {

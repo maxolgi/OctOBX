@@ -17,6 +17,7 @@
  */
 
 import { postWorkletMessage } from "../obxd-audio";
+import type { MainToWorkletMsg } from "../generated/worklet-protocol";
 
 export const TRACK_COUNT = 16;
 
@@ -164,7 +165,7 @@ export const master = {
 
 // ── Messaging helpers ───────────────────────────────────────────────────────
 
-function sendBoth(track: number, msg: (ch: number) => Record<string, unknown>): void {
+function sendBoth(track: number, msg: (ch: number) => MainToWorkletMsg): void {
     postWorkletMessage(msg(trackChannel(track, 0)));
     postWorkletMessage(msg(trackChannel(track, 1)));
 }
