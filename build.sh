@@ -164,16 +164,30 @@ generate_ts_catalog() {
     echo "  Generated src/patch-catalog.ts ($(ls "$patch_dir"/*.fxp 2>/dev/null | wc -l) patches)"
 }
 
-# Combine the worklet: shim → octopus emcc JS → obxd emcc JS → (optional)
-# CakeMix mixer glue → restore layout → task queue → processor tail, one
-# classic script for audioWorklet.addModule(). Also stages the mixer
-# engine binary into wasm/build/ (vite's publicDir) so the main thread can
-# pre-fetch /mixer_wasm_bg.wasm. The committed artifacts in wasm/mixer/
-# are refreshed from the sibling CakeMix checkout via
-# tools/prep-mixer-wasm.mjs; when absent (and CakeMix unavailable) the
-# build degrades gracefully — no glue concat, no binary, and the worklet
-# falls back to the legacy C-side master sum.
+# Combine the worklet: protocol-checks flag → shim → octopus emcc JS → obxd
+# emcc JS → (optional) CakeMix mixer glue → restore layout → (dev only)
+# worklet protocol checks → task queue → processor tail, one classic script
+# for audioWorklet.addModule(). Also stages the mixer engine binary into
+# wasm/build/ (vite's publicDir) so the main thread can pre-fetch
+# /mixer_wasm_bg.wasm. The committed artifacts in wasm/mixer/ are refreshed
+# from the sibling CakeMix checkout via tools/prep-mixer-wasm.mjs; when
+# absent (and CakeMix unavailable) the build degrades gracefully — no glue
+# concat, no binary, and the worklet falls back to the legacy C-side master
+# sum.
+#
+# Usage: combine_worklet <protocol_checks: 0|1>   (default 0)
+#
+# Protocol checks: 1 (dev — the `synth` case) additionally concatenates
+# src/generated/worklet-protocol-checks.js (the MAIN→WORKLET shape
+# validator) right after the restore layout; 0 (production — the
+# app/desktop/all cases) omits the validator so shipped worklets carry no
+# dev-only checking code. The `const WORKLET_PROTOCOL_CHECKS = <0|1>;` line
+# is ALWAYS emitted as the FIRST line of the combined output — the
+# processor tail reads it unconditionally to decide whether the validator
+# is present, so it must exist even when the checks code is not concat'd.
 combine_worklet() {
+    local protocol_checks="${1:-0}"
+    [ "$protocol_checks" = "1" ] || protocol_checks=0
     # Required inputs — the two emcc glues are products of `make -C wasm` /
     # `make -C wasm/obxd`; the rest are committed sources. If ANY is missing
     # the concat would emit a truncated worklet, so warn and keep the
@@ -183,9 +197,13 @@ combine_worklet() {
     local missing=""
     local input
     local nl=$'\n'
-    for input in wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js \
-                 src/generated/restore-layout.js src/awp-task-queue.js \
-                 src/obxd-processor.tail.js src/obxd-awp-shim.js; do
+    local required="wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js \
+                    src/generated/restore-layout.js src/awp-task-queue.js \
+                    src/obxd-processor.tail.js src/obxd-awp-shim.js"
+    if [ "$protocol_checks" = "1" ]; then
+        required="$required src/generated/worklet-protocol-checks.js"
+    fi
+    for input in $required; do
         [ -f "$input" ] || missing="${missing}${nl}  $input"
     done
     if [ -n "$missing" ]; then
@@ -211,12 +229,17 @@ combine_worklet() {
             echo "  (mixer engine unavailable — worklet built without it; legacy master sum in effect)"
         fi
     fi
+    local checks_arg=""
+    if [ "$protocol_checks" = "1" ]; then
+        checks_arg="src/generated/worklet-protocol-checks.js"
+    fi
+    printf 'const WORKLET_PROTOCOL_CHECKS = %s;\n' "$protocol_checks" > wasm/build/_worklet_checks_flag.js
     cp src/obxd-awp-shim.js wasm/build/_awp_shim.js
-    cat wasm/build/_awp_shim.js wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js \
+    cat wasm/build/_worklet_checks_flag.js wasm/build/_awp_shim.js wasm/build/octopus_wasm.js wasm/build/obxd_wasm.js \
         $glue_arg \
-        src/generated/restore-layout.js src/awp-task-queue.js src/obxd-processor.tail.js \
+        src/generated/restore-layout.js $checks_arg src/awp-task-queue.js src/obxd-processor.tail.js \
         > wasm/build/obxd-processor.js
-    rm wasm/build/_awp_shim.js
+    rm wasm/build/_worklet_checks_flag.js wasm/build/_awp_shim.js
 }
 
 case "${1:-all}" in
@@ -254,14 +277,17 @@ case "${1:-all}" in
         # emits src/gxfx-params.ts + wasm/obxd/gxfx_defaults.h.
         # `node tools/gen-gxfx-params.mjs --check` gates staleness.
         node tools/gen-gxfx-params.mjs
+        # Regenerate the worklet message-protocol types + shape validator from tools/worklet-protocol.mjs.
+        node tools/gen-worklet-protocol.mjs
         make -C wasm/obxd -f Makefile clean
         make -C wasm/obxd -f Makefile
         # Combined worklet concatenation — same layout as the `all` case
         # below: the octopus glue (OctopusModuleFactory) rides in ahead of
         # the obxd glue so ensureOctopus can boot the sequencer in-worklet,
         # and (when present) the CakeMix mixer glue rides between the obxd
-        # glue and the restore layout (see combine_worklet above).
-        combine_worklet
+        # glue and the restore layout (see combine_worklet above). This is
+        # the DEV path — protocol checks on (`combine_worklet 1`).
+        combine_worklet 1
         echo "=== Synth build complete ==="
         echo "Output: wasm/build/obxd_wasm.{js,wasm} + wasm/build/obxd-processor.js (combined)"
         ;;
@@ -272,8 +298,9 @@ case "${1:-all}" in
         # verbatim. Without this, editing src/obxd-processor.tail.js or
         # src/obxd-awp-shim.js and running only `./build.sh app` would ship
         # a stale worklet (combine_worklet warns + keeps the previous one
-        # when the emcc glues are missing).
-        combine_worklet
+        # when the emcc glues are missing). Production path — protocol
+        # checks off (`combine_worklet 0`).
+        combine_worklet 0
         npm install
         npm run build
         echo "=== App build complete ==="
@@ -284,7 +311,8 @@ case "${1:-all}" in
         # the app must be built first. Requires rustup (rust + cargo).
         # Refresh the combined worklet first — same rationale as the `app`
         # case above (vite copies wasm/build into dist verbatim).
-        combine_worklet
+        # Production path — protocol checks off (`combine_worklet 0`).
+        combine_worklet 0
         npm install
         npm run build
         cargo build --release --manifest-path gui/Cargo.toml
@@ -303,11 +331,14 @@ case "${1:-all}" in
         # gxfx generator rides along).
         node tools/gen-param-table.mjs
         node tools/gen-gxfx-params.mjs
+        # Worklet protocol generator rides along — see the `synth` case.
+        node tools/gen-worklet-protocol.mjs
         make -C wasm/obxd -f Makefile
         # Combined worklet concatenation — see combine_worklet above for the
-        # layout rationale (shim → octopus → obxd → mixer glue → layout →
-        # task queue → tail).
-        combine_worklet
+        # layout rationale (flag → shim → octopus → obxd → mixer glue →
+        # layout → [checks] → task queue → tail). Production path —
+        # protocol checks off (`combine_worklet 0`).
+        combine_worklet 0
         echo ""
         echo "=== Building OctOBX TypeScript app ==="
         npm install
