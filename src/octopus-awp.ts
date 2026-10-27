@@ -449,7 +449,10 @@ export async function bootOctopusEngine(): Promise<OctopusController> {
         // Creates the combined worklet node (idempotent — a no-op if the
         // OB-Xf rack already brought it up without octopus assets; in that
         // case the octopus half joins via this same call's assets).
-        await setupObxdAudio({ octopusWasmBinary, octopusMemory, octopusInitialState });
+        // deferSynth: octopus-first boot — the node comes up without the
+        // synth/mixer bytes so the sequencer is playable ASAP; main.ts then
+        // fetches those in the background (loadSynthModules).
+        await setupObxdAudio({ octopusWasmBinary, octopusMemory, octopusInitialState, deferSynth: true });
 
         attachContextStateListener();
         startPumpLoop();

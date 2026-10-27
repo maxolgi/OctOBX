@@ -295,7 +295,7 @@ describe("worklet protocol shape validator (generated checks file)", () => {
     });
 
     it("WORKLET_PROTOCOL_TYPES covers main→worklet only", () => {
-        expect(protocolTypes.size).toBe(75);
+        expect(protocolTypes.size).toBe(76);
         expect(protocolTypes.has("set_param")).toBe(true);
         expect(protocolTypes.has("pong")).toBe(false);
     });

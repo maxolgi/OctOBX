@@ -28,6 +28,7 @@
 const WP_KIND_LABELS = { n: 'number', b: 'boolean', s: 'string', u: 'bytes', f: 'f32', a: 'number[]' };
 
 const WP_FIELDS = {
+    synth_load: 'wasmBinary:u8,mixerWasmBinary:u8?',
     midi: 'instance_id:n,status:n,d1:n,d2:n',
     set_routing: 'routing:a17',
     set_active: 'instance_id:n,active:b',
@@ -181,6 +182,6 @@ if (typeof globalThis !== 'undefined') {
         'set_active', 'set_drum_layer_param', 'set_factory_patch', 'set_matrix_row',
         'set_mod_wheel', 'set_mpe', 'set_mpe_glide_range', 'set_param',
         'set_pcm_choke', 'set_pcm_layer', 'set_pcm_layer_count', 'set_pcm_note_map',
-        'set_polyphony', 'set_routing', 'set_sustain',
+        'set_polyphony', 'set_routing', 'set_sustain', 'synth_load',
     ]);
 }

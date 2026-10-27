@@ -77,6 +77,7 @@ export function parseFieldDsl(dsl) {
 export const PROTOCOL = {
     mainToWorklet: [
         // -- synth: instance lifecycle ------------------------------------------
+        { type: 'synth_load', fields: { wasmBinary: 'bytes', mixerWasmBinary: 'bytes?' }, notes: 'deferred boot (gradual load): background-fetched synth + mixer bytes for an octopus-first node; posted with a transfer list; answered by ready' },
         { type: 'midi', fields: { instance_id: 'int:0-9', status: 'int', d1: 'int', d2: 'int' }, notes: 'queued to pendingMidi, drained inside process()' },
         { type: 'set_routing', fields: { routing: 'number[]:17' }, notes: 'per-channel instance bitmask: bit i of routing[ch] = instance i' },
         { type: 'set_active', fields: { instance_id: 'int:0-9', active: 'bool' }, notes: 'power an instance on/off' },
@@ -90,7 +91,7 @@ export const PROTOCOL = {
         // -- synth: params + patches -------------------------------------------
         { type: 'set_param', fields: { instance_id: 'int:0-9', idx: 'int', value: 'number:0-1' }, notes: 'legacy-space 0..1 param write (queued)' },
         { type: 'gain', fields: { instance_id: 'int:0-9', value: 'number:0-1' }, notes: 'no active callers' },
-        { type: 'load_fxp', fields: { instance_id: 'int:0-9', bytes: 'bytes' }, notes: 'HEAVY; the ONLY message posted with a transfer list ([bytes.buffer])' },
+        { type: 'load_fxp', fields: { instance_id: 'int:0-9', bytes: 'bytes' }, notes: 'HEAVY; bytes transferred ([bytes.buffer])' },
         { type: 'set_factory_patch', fields: { instance_id: 'int:0-9', patch_id: 'int' }, notes: 'HEAVY (task-queued factory .fxp parse)' },
         { type: 'panic', fields: { instance_id: 'int:0-9' }, notes: 'all notes off for one instance' },
         { type: 'panic_all', fields: {}, notes: 'all notes off, every instance' },

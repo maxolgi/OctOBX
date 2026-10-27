@@ -354,7 +354,10 @@ Browser (COOP/COEP/CORP cross-origin isolated)
 ├── Main Thread
 │   ├── bootOctopusEngine() (octopus-awp.ts) — creates the shared 128 MiB
 │   │   WebAssembly.Memory, fetches octopus_wasm.wasm, brings up the combined
-│   │   worklet node AT STARTUP; holds zero-copy views (processed MIR, status
+│   │   worklet node AT STARTUP (octopus-first: no synth bytes yet — the
+│   │   synth + mixer WASM are fetched in the background right after boot
+│   │   via loadSynthModules() and booted inside the worklet through the
+│   │   'synth_load' message); holds zero-copy views (processed MIR, status
 │   │   block) + window.__octopus (OctopusController)
 │   ├── Octopus UI (classic panel or modern grid) — posts oct_* messages;
 │   │   renders the MIR view at 60Hz RAF
@@ -428,7 +431,15 @@ Browser (COOP/COEP/CORP cross-origin isolated)
    thread and passed via `processorOptions` (`wasmBinary` /
    `octopusWasmBinary` + `octopusMemory`; the mixer binary arrives as
    `mixerWasmBinary`, fetched best-effort) to sidestep emcc's broken-in-AWP
-   fetch paths.
+   fetch paths. **Gradual load:** the boot path passes `deferSynth`, so the
+   node is created with ONLY the octopus assets; `loadSynthModules()`
+   (obxd-audio.ts, fired from main.ts right after boot) fetches the synth +
+   mixer binaries in the background and transfers them into the worklet via
+   the `synth_load` message — the same `ensureModule`/`initMixer` boot path
+   the constructor would have taken. The sequencer UI is usable after
+   ~2.2 MB instead of ~6.2 MB; `whenSynthReady()` gates everything that
+   needs the engine (the rack's ready-chain, `isObxdReady()`), and a synth
+   boot failure no longer retires the node (the sequencer survives).
 7. **CakeMix mixer engine** — a Rust wasm-bindgen module ported from the
    sibling CakeMix repo's oximedia engine. Per-instance stereo taps
    `g_track_l/r[10]` (C exports `get_track_l_ptr`/`get_track_r_ptr` in
@@ -886,7 +897,7 @@ chorus → flanger → phaser → tremolo → delay → echo → reverb).
 | `midi-access.ts` | Shared `openMidiAccess()` + `pollForPorts()` — works around the Chrome-on-Linux late port-enumeration quirk. |
 | `midi-output.ts` | Web MIDI API **output** (Chrome/Edge). Hardware events arrive only as `hw_midi` batches forwarded from the worklet — `attachHwMidiForwarding()` registers the single handler (small +5 ms forward offset); the 60Hz RAF drain loop is gone. `frameMidi()` emits correct 1/2/3-byte messages. |
 | `midi-input.ts` | Web MIDI API **input** (Chrome/Edge). `HardwareMidiInput` attaches `onmidimessage` to the selected input port and forwards `(status, d1, d2)` to `ctl.midiInput()` (`oct_midi_in` messages). Sysex / active-sensing / tune-request dropped. |
-| `obxd-audio.ts` | Main-thread bootstrap + per-instance API for the combined OB-Xf/Octopus AudioWorklet. The node is created AT STARTUP by `bootOctopusEngine()`; `setupObxdAudio(octopusAssets?)` is idempotent (later rack calls are no-ops that just re-resume the AudioContext). Pre-fetches the synth + Octopus WASM binaries (plus `/mixer_wasm_bg.wasm` best-effort) and passes them via `processorOptions` (`wasmBinary` + `octopusWasmBinary`/`octopusMemory`/`octopusInitialState`, mixer as `mixerWasmBinary`). Permanent listener registry (`addWorkletMessageListener`) + one-shot reply router for async worklet RPCs (replies narrowed via the generated `WorkletToMainMsg` union). ALL main→worklet sends flow through typed funnels checked against `src/generated/worklet-protocol.ts` — a mistyped field is a compile error. Adds `setObxdInstanceMpe` for per-instance MPE flag mirroring. |
+| `obxd-audio.ts` | Main-thread bootstrap + per-instance API for the combined OB-Xf/Octopus AudioWorklet. The node is created AT STARTUP by `bootOctopusEngine()`; `setupObxdAudio(octopusAssets?)` is idempotent (later rack calls are no-ops that just re-resume the AudioContext). Pre-fetches the synth + Octopus WASM binaries (plus `/mixer_wasm_bg.wasm` best-effort) and passes them via `processorOptions` (`wasmBinary` + `octopusWasmBinary`/`octopusMemory`/`octopusInitialState`, mixer as `mixerWasmBinary`) — except on the gradual-load path (`deferSynth`), where the node comes up octopus-first and `loadSynthModules()` fetches the synth + mixer bytes in the background afterwards, transferring them into the worklet as the `synth_load` message (the worklet re-uses the same boot path the constructor takes). `whenSynthReady()` / `isObxdReady()` (now "synth booted", not "node exists") gate everything engine-dependent; the rack's ready-chain awaits `whenSynthReady()`. Permanent listener registry (`addWorkletMessageListener`) + one-shot reply router for async worklet RPCs (replies narrowed via the generated `WorkletToMainMsg` union). ALL main→worklet sends flow through typed funnels checked against `src/generated/worklet-protocol.ts` — a mistyped field is a compile error. Adds `setObxdInstanceMpe` for per-instance MPE flag mirroring. |
 | `obxd-bridge.ts` | Channel→instance routing state for the OB-Xf synth (default channels 1–10 → instances 0–9, reassignable per instance). MPE-aware: an instance with MPE enabled claims a lower zone (master + N voice channels) before non-MPE instances fill the rest. Pushes the routing table to the worklet via `sendObxdMidiRouting()`; the synth consumes MIDI itself from the shared ring inside process(). |
 | `obxd-processor.tail.js` | Plain JS appended to the emcc output(s) at build time to form `obxd-processor.js` (the file fed to `audioWorklet.addModule()`). Subclasses `AudioWorkletProcessor`; both emcc factories boot via the `Module['instantiateWasm']` hook (pre-fetched bytes, post-boot export asserts). `ensureOctopus()` boots the Octopus engine in this same worklet against the shared memory; `process()` calls `_octopus_pump(128)` FIRST, then drains the Octopus synth MIDI ring (same quantum), the queued `pendingMidi`, the deferred AWP task queue, and `_obxd_render(128)`, then feeds the per-instance taps into the CakeMix mixer (`mixer.process(128)` — its master IS the node output; legacy master-sum fallback). Hosts the `oct_*` + `fx_*` + `mix_*` message handlers; incoming messages are shape-validated against the generated protocol spec in DEV BUILDS ONLY (`WORKLET_PROTOCOL_CHECKS`, log-and-continue). `fx_set_enabled`/`fx_set_slot`/`fx_move_slot` run directly in the message handler (they allocate/free DSP — never inside `process()`), `fx_set_param` is a light queued setter, and the `oct_key` SAVE path latches the engine's one-shot flag inline but defers `_wasm_save_state` + file read to a heavy task-queue task. Caches `HEAPF32` views and refreshes them only when WASM memory grows (avoids per-quantum GC pressure that caused audio clicks). |
 | `obxd-awp-shim.js` | Plain JS prepended to the emcc output. Polyfills `self`/`location`/`fetch`/`performance` for emcc's worker-env output inside AudioWorkletGlobalScope, plus `TextEncoder`/`TextDecoder` and `crypto.getRandomValues` (needed by the wasm-bindgen mixer glue). |
@@ -990,11 +1001,17 @@ MIDI output (see "MIDI routing").
 Init flow:
 
 1. Page load: `bootOctopusEngine()` (octopus-awp.ts) creates the shared
-   128 MiB `WebAssembly.Memory`, fetches the Octopus + OB-Xf WASM binaries
-   (plus `/mixer_wasm_bg.wasm` best-effort), and calls
-   `setupObxdAudio()` — the combined worklet node comes up AT STARTUP, not
-   lazily on first PLAY. The OB-Xf rack + editor panel build eagerly
-   (defaults baked in) and start a 30Hz meter ping/pong.
+   128 MiB `WebAssembly.Memory`, fetches the Octopus WASM binary, and calls
+   `setupObxdAudio({deferSynth: true})` — the combined worklet node comes
+   up AT STARTUP (not lazily on first PLAY) with only the Octopus assets.
+   The OB-Xf rack + editor panel build eagerly (defaults baked in) and
+   start a 30Hz meter ping/pong. `main.ts` then fires
+   `loadSynthModules()` (not awaited): the OB-Xf + mixer binaries are
+   fetched in the background and transferred into the worklet as the
+   `synth_load` message. Until the synth posts `{type:'ready'}`,
+   `isObxdReady()` is false and every synth-side message is a null-guarded
+   no-op inside the worklet; the rack's ready-chain (state restore, drum
+   preload, knob sync) awaits `whenSynthReady()`.
 2. The worklet's `ensureModule()` passes the pre-fetched bytes into the
    emcc factory via the documented `Module['instantiateWasm']` hook (emcc's
    fetch/XHR paths are broken in AWP and are never reached; each factory
@@ -1002,10 +1019,13 @@ Init flow:
    `WebAssembly` globals are touched and cross-module byte contamination is
    impossible), invokes
    `ObxdModuleFactory`, calls `_obxd_init(sampleRate)`, and posts
-   `{type:'ready'}`. `ensureOctopus()` then boots the Octopus engine the
+   `{type:'ready'}`. `ensureOctopus()` boots the Octopus engine the
    same way against the
    shared memory (`engine_init`, optional initial-state replay from the
    active project) and posts `oct_ready` with the MIR/status byte offsets.
+   With the gradual load the synth bytes arrive via `synth_load` (same
+   `ensureModule` path, non-fatal on failure — the node stays alive for
+   the sequencer) instead of `processorOptions.wasmBinary`.
 3. The AudioContext is still suspended (autoplay policy) — process() is not
    called yet, so `octopus-awp.ts` runs the RAF fallback pump (`oct_pump`
    messages) to keep the sequencer alive. The first user gesture (PLAY

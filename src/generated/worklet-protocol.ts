@@ -8,7 +8,7 @@
  * Regenerate with:    node tools/gen-worklet-protocol.mjs
  * Freshness check:    node tools/gen-worklet-protocol.mjs --check   (CI gate)
  *
- * 75 main→worklet + 25 worklet→main types.
+ * 76 main→worklet + 25 worklet→main types.
  *
  * DSL→TS mapping: int/number/flag → number, bool → boolean, bytes →
  * Uint8Array, f32 → Float32Array, string → string, number[] → number[]
@@ -20,6 +20,7 @@
 
 /** Messages the main thread posts to the combined OB-Xf/Octopus AudioWorklet. */
 export type MainToWorkletMsg =
+    | { type: 'synth_load'; wasmBinary: Uint8Array; mixerWasmBinary?: Uint8Array } // deferred boot (gradual load): background-fetched synth + mixer bytes for an octopus-first node; posted with a transfer list; answered by ready
     | { type: 'midi'; instance_id: number; status: number; d1: number; d2: number } // queued to pendingMidi, drained inside process()
     | { type: 'set_routing'; routing: number[] /* 17 */ } // per-channel instance bitmask: bit i of routing[ch] = instance i
     | { type: 'set_active'; instance_id: number; active: boolean } // power an instance on/off
@@ -32,7 +33,7 @@ export type MainToWorkletMsg =
     | { type: 'clear_matrix_row'; instance_id: number; row: number } // MPE modulation matrix row clear
     | { type: 'set_param'; instance_id: number; idx: number; value: number } // legacy-space 0..1 param write (queued)
     | { type: 'gain'; instance_id: number; value: number } // no active callers
-    | { type: 'load_fxp'; instance_id: number; bytes: Uint8Array } // HEAVY; the ONLY message posted with a transfer list ([bytes.buffer])
+    | { type: 'load_fxp'; instance_id: number; bytes: Uint8Array } // HEAVY; bytes transferred ([bytes.buffer])
     | { type: 'set_factory_patch'; instance_id: number; patch_id: number } // HEAVY (task-queued factory .fxp parse)
     | { type: 'panic'; instance_id: number } // all notes off for one instance
     | { type: 'panic_all' } // all notes off, every instance

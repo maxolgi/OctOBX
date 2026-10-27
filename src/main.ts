@@ -19,7 +19,7 @@ import { setupStatePersistence } from "./state-persistence";
 import { setupObxdRack } from "./obxd-rack";
 import { mountDrumModule } from "./drum-rack";
 import { mountMixer } from "./mixer";
-import { getObxdSelectedInstance, isObxdReady } from "./obxd-audio";
+import { getObxdSelectedInstance, isObxdReady, loadSynthModules } from "./obxd-audio";
 import { syncObxdControlsFromEngine } from "./obxd-synth-ui";
 import { loadAppState, registerAWPReadyCallback } from "./app-state";
 
@@ -38,6 +38,23 @@ async function main() {
     // the worklet node) and resolves once the engine reports ready.
     ctl = await bootOctopusEngine();
     window.__octopus = ctl;
+
+    // With the octopus-first (deferred synth) boot, a worklet-side engine
+    // init failure no longer rejects bootOctopusEngine — surface it via
+    // the controller's ready promise instead (also prevents an unhandled
+    // rejection).
+    ctl.ready.catch((e: unknown) => {
+        logStatus(`ERROR: Octopus engine failed to start: ${e instanceof Error ? e.message : String(e)}`);
+    });
+
+    // Gradual load, phase 2 (NOT awaited): fetch the OB-Xf synth + CakeMix
+    // mixer WASM in the background and boot them inside the already-running
+    // worklet. The sequencer UI below is usable while this lands; the
+    // ready-chain (state restore, drum preload) and PLAY wait on it via
+    // whenSynthReady().
+    loadSynthModules().catch((e: unknown) => {
+        console.error("[octobx] synth modules failed to load (will retry on next PLAY):", e);
+    });
 
     // --- Hardware MIDI output ---
     // Events now arrive only as hw_midi messages from the worklet (the

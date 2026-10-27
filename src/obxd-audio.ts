@@ -217,11 +217,95 @@ export function awaitReply(predicate: (msg: unknown) => boolean, timeoutMs: numb
  * WASM binary + shared memory inside the AudioWorkletGlobalScope (see
  * octopus-awp.ts). `octopusInitialState` is the boot-time state blob
  * from the active project, or null for a fresh engine.
+ *
+ * `deferSynth` (gradual load): create the worklet node WITHOUT the synth
+ * or mixer bytes — the Octopus engine comes up first and the heavy
+ * modules are fetched in the background afterwards and booted via the
+ * 'synth_load' message (loadSynthModules below). Cuts the blocking boot
+ * fetch from ~6 MB down to the octopus binary + processor script.
  */
 export interface OctopusWorkletAssets {
     octopusWasmBinary: ArrayBuffer;
     octopusMemory: WebAssembly.Memory;
     octopusInitialState: Uint8Array | null;
+    deferSynth?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Synth boot state (gradual load)
+// ---------------------------------------------------------------------------
+
+/*
+ * True once the worklet posted {type:'ready'} — the synth WASM booted,
+ * either from processorOptions bytes at construction or via the deferred
+ * 'synth_load' message. Until then every synth/fx/drum/mixer message is
+ * a null-guarded no-op inside the worklet, so UI gates that need the
+ * ENGINE (not just the node) must test this — that is exactly what
+ * isObxdReady() means now that the node can exist without the synth.
+ */
+let synthReady = false;
+let synthReadyResolve: (() => void) | null = null;
+let synthReadyReject: ((err: Error) => void) | null = null;
+const synthReadyPromise = new Promise<void>((resolve, reject) => {
+    synthReadyResolve = resolve;
+    synthReadyReject = reject;
+});
+
+function markSynthReady(): void {
+    synthReady = true;
+    synthReadyResolve?.();
+}
+
+function rejectSynthReady(err: Error): void {
+    if (!synthReady) synthReadyReject?.(err);
+}
+
+/** Resolves once the synth WASM is up inside the worklet (posts 'ready'). */
+export function whenSynthReady(): Promise<void> {
+    return synthReadyPromise;
+}
+
+/*
+ * Gradual-load phase 2: fetch the OB-Xf synth + CakeMix mixer WASM in the
+ * background and hand them to the (already-running) worklet via
+ * 'synth_load' — zero-copy transfer, same boot path the constructor would
+ * have taken. Resolves when the worklet confirms with 'ready'. Idempotent;
+ * a fetch failure resets the latch so a later call (e.g. the next PLAY)
+ * retries the download.
+ */
+let synthLoadStarted = false;
+export async function loadSynthModules(): Promise<void> {
+    if (synthReady || synthLoadStarted) return synthReadyPromise;
+    if (!workletNode) return synthReadyPromise;
+    synthLoadStarted = true;
+    try {
+        const wasmBinary = await fetchWasmBytes("/obxd_wasm.wasm");
+        // Best-effort like the constructor path: a 404/missing file just
+        // means the worklet keeps the legacy C-side master sum.
+        let mixerWasmBinary: ArrayBuffer | undefined;
+        try {
+            const mixResponse = await fetch(`/mixer_wasm_bg.wasm?v=${Date.now()}`);
+            if (mixResponse.ok) mixerWasmBinary = await mixResponse.arrayBuffer();
+        } catch { /* absent — legacy path */ }
+        const wasmBytes = new Uint8Array(wasmBinary);
+        const mixBytes = mixerWasmBinary ? new Uint8Array(mixerWasmBinary) : undefined;
+        const transfer: Transferable[] = [wasmBytes.buffer];
+        if (mixBytes) transfer.push(mixBytes.buffer);
+        postWorkletMessage({ type: "synth_load", wasmBinary: wasmBytes, mixerWasmBinary: mixBytes }, transfer);
+        return synthReadyPromise;
+    } catch (e) {
+        synthLoadStarted = false;   // allow a retry on the next trigger
+        throw e;
+    }
+}
+
+/** Cache-busted WASM fetch shared by the constructor path and synth_load. */
+async function fetchWasmBytes(path: string): Promise<ArrayBuffer> {
+    const response = await fetch(`${path}?v=${Date.now()}`);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch ${path}: HTTP ${response.status}`);
+    }
+    return response.arrayBuffer();
 }
 
 export async function setupObxdAudio(octopusAssets?: OctopusWorkletAssets): Promise<void> {
@@ -254,32 +338,40 @@ export async function setupObxdAudio(octopusAssets?: OctopusWorkletAssets): Prom
         moduleAdded = true;
     }
 
+    // Gradual load: when the caller defers the synth, this call only brings
+    // up the node + the Octopus engine. The synth + mixer binaries are
+    // fetched in the background afterwards (loadSynthModules) and booted
+    // inside the worklet via the 'synth_load' message.
+    const deferSynth = !!octopusAssets?.deferSynth;
+
     // Pre-fetch the WASM binary on the main thread. We pass it into the
     // processor via processorOptions; the worklet forwards it to the emcc
     // factory as `wasmBinary`, which skips emcc's XHR/fetch loading paths
     // (neither of which is reliable in AudioWorkletGlobalScope).
-    const wasmResponse = await fetch("/obxd_wasm.wasm?v=" + Date.now());
-    if (!wasmResponse.ok) {
-        throw new Error(`Failed to fetch obxd_wasm.wasm: HTTP ${wasmResponse.status}`);
+    let wasmBinary: ArrayBuffer | undefined;
+    if (!deferSynth) {
+        wasmBinary = await fetchWasmBytes("/obxd_wasm.wasm");
     }
-    const wasmBinary = await wasmResponse.arrayBuffer();
 
     // CakeMix mixer engine binary — best-effort: a 404/missing file just
     // means the worklet boots without the mixer (legacy C-side master sum
     // stays the output path; the mixer UI shows its disconnected state).
     let mixerWasmBinary: ArrayBuffer | undefined;
-    try {
-        const mixResponse = await fetch("/mixer_wasm_bg.wasm?v=" + Date.now());
-        if (mixResponse.ok) mixerWasmBinary = await mixResponse.arrayBuffer();
-    } catch { /* absent — legacy path */ }
+    if (!deferSynth) {
+        try {
+            const mixResponse = await fetch("/mixer_wasm_bg.wasm?v=" + Date.now());
+            if (mixResponse.ok) mixerWasmBinary = await mixResponse.arrayBuffer();
+        } catch { /* absent — legacy path */ }
+    }
 
     const processorOptions: {
-        wasmBinary: ArrayBuffer;
+        wasmBinary?: ArrayBuffer;
         mixerWasmBinary?: ArrayBuffer;
         octopusWasmBinary?: ArrayBuffer;
         octopusMemory?: WebAssembly.Memory;
         octopusInitialState?: Uint8Array | null;
-    } = { wasmBinary };
+    } = {};
+    if (wasmBinary) processorOptions.wasmBinary = wasmBinary;
     if (mixerWasmBinary) processorOptions.mixerWasmBinary = mixerWasmBinary;
     if (octopusAssets) {
         processorOptions.octopusWasmBinary = octopusAssets.octopusWasmBinary;
@@ -310,6 +402,33 @@ export async function setupObxdAudio(octopusAssets?: OctopusWorkletAssets): Prom
         masterGain,
         masterAnalyser,
     };
+
+    // Default MIDI routing: channels 1-10 → instances 0-9. Each entry is a
+    // BITMASK (bit i = instance i), matching the format the processor's
+    // process() loop expects and the one used by
+    // syncRoutingToAudioWorklet() in obxd-bridge.ts. Using single instance
+    // IDs here (0,1,2…) was a latent bug that only surfaced on machines
+    // without saved localStorage state — the restore path calls
+    // syncRoutingToAudioWorklet which overwrote it with correct bitmasks,
+    // masking the bug.
+    const sendDefaultMidiRouting = () => {
+        const defaultRouting = new Array(17).fill(0);
+        for (let i = 0; i < 10; i++) defaultRouting[i + 1] = (1 << i);
+        sendObxdMidiRouting(defaultRouting);
+    };
+
+    if (deferSynth) {
+        // Gradual load: no synth 'ready' handshake to wait for — the synth
+        // boots later via 'synth_load' (loadSynthModules). Install the
+        // reply router right away: MessagePort delivery is queued until
+        // start(), so every worklet message (constructed / oct_ready /
+        // the later ready / error) flows through it and on to the
+        // permanent listeners (octopus-awp controller, synth-ready latch).
+        ensureRouter();
+        sendDefaultMidiRouting();
+        console.log("[obxd] AudioWorklet connected (octopus-first, synth deferred), sampleRate =", audioContext.sampleRate);
+        return;
+    }
 
     // Await the worklet's `{type:'ready'}` message before resolving. The
     // processor emits ready once emcc's WASM factory has resolved and
@@ -347,26 +466,19 @@ export async function setupObxdAudio(octopusAssets?: OctopusWorkletAssets): Prom
             }
             if (m.type === "ready") {
                 cleanup();
+                markSynthReady();
                 // Now that the worklet is up, install the async-reply router
                 // for the rest of the session. (Adding the listener earlier
                 // is safe too, but we wait for ready so the router doesn't
                 // intercept the ready message by accident.)
                 ensureRouter();
-                // Send default MIDI routing: channels 1-10 → instances 0-9.
-                // Each entry is a BITMASK (bit i = instance i), matching the
-                // format the processor's process() loop expects and the one
-                // used by syncRoutingToAudioWorklet() in obxd-bridge.ts. Using
-                // single instance IDs here (0,1,2…) was a latent bug that only
-                // surfaced on machines without saved localStorage state — the
-                // restore path calls syncRoutingToAudioWorklet which overwrote
-                // it with correct bitmasks, masking the bug.
-                const defaultRouting = new Array(17).fill(0);
-                for (let i = 0; i < 10; i++) defaultRouting[i + 1] = (1 << i);
-                sendObxdMidiRouting(defaultRouting);
+                sendDefaultMidiRouting();
                 resolve();
             } else if (m.type === "error") {
                 cleanup();
-                reject(new Error(String(m.message || "obxd worklet init failed")));
+                const err = new Error(String(m.message || "obxd worklet init failed"));
+                rejectSynthReady(err);
+                reject(err);
             }
         };
     });
@@ -861,8 +973,15 @@ export function setObxdSelectedInstance(id: number): void {
 // Legacy / utility
 // ---------------------------------------------------------------------------
 
+/*
+ * True once the SYNTH booted inside the worklet ({type:'ready'}). Used to
+ * mean "node exists" — the two were equivalent until the gradual-load
+ * refactor made the node come up octopus-first with the synth deferred,
+ * and every caller of this gate needs the engine (params, meters,
+ * restores), not the bare node. Node-existence checks use getObxdNode().
+ */
 export function isObxdReady(): boolean {
-    return workletNode !== null;
+    return synthReady;
 }
 
 export function getObxdNode(): AudioWorkletNode | null {
@@ -884,5 +1003,12 @@ addWorkletMessageListener((msg: unknown) => {
     if (typeof t === "string" && t.indexOf("mixer") === 0) {
         mixerLog.push(msg);
         if (mixerLog.length > 50) mixerLog.shift();
+    }
+    // Deferred-boot lifecycle (gradual load): the router-installed path
+    // sees the worklet's 'ready'/'error' messages that the constructor
+    // handshake would otherwise have consumed.
+    if (t === "ready") markSynthReady();
+    if (t === "error" && !synthReady) {
+        rejectSynthReady(new Error(String((msg as { message?: string }).message || "obxd worklet init failed")));
     }
 });

@@ -31,6 +31,7 @@
 import {
     setupObxdAudio,
     isObxdReady,
+    whenSynthReady,
     getObxdAudioContext,
     getObxdSelectedInstance,
     setObxdSelectedInstance,
@@ -549,6 +550,12 @@ function startAudioInit(): void {
     if (audioInitializing || audioInitDone) return;
     audioInitializing = true;
     setupObxdAudio().then(async () => {
+        // Gradual load: the worklet node exists from page load, but with
+        // the synth deferred it may still be downloading/booting — the
+        // ready-chain below (state restore + drum preload + knob sync)
+        // must wait for it, exactly as it implicitly did when
+        // setupObxdAudio itself awaited the synth 'ready' handshake.
+        await whenSynthReady();
         const restored = awpReadyCallback ? await awpReadyCallback() : false;
         // Always sync knob positions — whether from factory defaults
         // (!restored) or from restored engine params (restored).

@@ -415,16 +415,52 @@ class ObxdProcessor extends AudioWorkletProcessor {
             '; wasmBytesArg type:', typeof wasmBytesArg,
             '; byteLength:', wasmBytesArg ? wasmBytesArg.byteLength : 0);
 
+        // Shared boot helpers (constructor path + the deferred 'synth_load'
+        // message path below). bootSynth posts 'ready' once the synth WASM
+        // is up — the main thread's synth-ready latch (and the old
+        // construction handshake) key off that message. `fatal` retires the
+        // node on failure (constructor semantics); the deferred path passes
+        // false so an already-running Octopus engine survives a synth boot
+        // failure.
+        const bootSynth = (wasmBytes, fatal) => {
+            ensureModule(wasmBytes).then(() => {
+                this.port.postMessage({ type: 'ready' });
+            }).catch((e) => {
+                reportError(e);
+                if (fatal) this.alive = false;
+            });
+        };
+        const bootMixer = (mixBytes) => {
+            initMixer(mixBytes, this.port).then(() => {
+                this.port.postMessage({ type: 'mixer_ready' });
+            }).catch((e) => {
+                console.warn('[obxd-processor] mixer engine unavailable — using legacy master sum:', e && e.message);
+                // Surface the failure to the main thread (the worklet's
+                // console is hard to reach from DevTools MCP targets).
+                // phase distinguishes this init-time failure from a
+                // mid-session process() throw (phase:'process').
+                this.port.postMessage({
+                    type: 'mixer_error',
+                    phase: 'init',
+                    message: String(e && e.message || e),
+                    stack: String(e && e.stack || ''),
+                });
+            });
+        };
+
         // Default routing: channels 1-10 → instances 0-9 (bitmask: bit i = instance i)
         midiRouting = new Array(17).fill(0);
         for (let i = 0; i < OBXD_INSTANCE_COUNT; i++) midiRouting[i + 1] = (1 << i);
 
-        ensureModule(wasmBytesArg).then(() => {
-            this.port.postMessage({ type: 'ready' });
-        }).catch((e) => {
-            reportError(e);
-            this.alive = false;
-        });
+        if (wasmBytesArg) {
+            bootSynth(wasmBytesArg, true);
+        } else {
+            // Gradual load: the node comes up Octopus-first with no synth
+            // bytes; the main thread fetches them in the background and
+            // posts 'synth_load' once ready. process() returns silence for
+            // the synth path until then (the sequencer path is independent).
+            console.log('[obxd-processor] no synth bytes at construction — awaiting deferred synth_load');
+        }
 
         // Boot the Octopus sequencer engine in this same worklet. The main
         // thread passes the pre-fetched octopus WASM bytes, the shared
@@ -451,26 +487,11 @@ class ObxdProcessor extends AudioWorkletProcessor {
 
         // CakeMix mixer engine (optional third module). Bytes come via
         // processorOptions.mixerWasmBinary (main thread pre-fetches
-        // /mixer_wasm_bg.wasm). Failure is deliberately silent beyond a
+        // /mixer_wasm_bg.wasm) or, on the deferred path, with the
+        // 'synth_load' message. Failure is deliberately silent beyond a
         // console warning — the legacy master-sum path keeps audio alive.
         const mixBytesArg = octProcOpts ? octProcOpts.mixerWasmBinary : null;
-        if (mixBytesArg) {
-            initMixer(mixBytesArg, this.port).then(() => {
-                this.port.postMessage({ type: 'mixer_ready' });
-            }).catch((e) => {
-                console.warn('[obxd-processor] mixer engine unavailable — using legacy master sum:', e && e.message);
-                // Surface the failure to the main thread (the worklet's
-                // console is hard to reach from DevTools MCP targets).
-                // phase distinguishes this init-time failure from a
-                // mid-session process() throw (phase:'process').
-                this.port.postMessage({
-                    type: 'mixer_error',
-                    phase: 'init',
-                    message: String(e && e.message || e),
-                    stack: String(e && e.stack || ''),
-                });
-            });
-        }
+        if (mixBytesArg) bootMixer(mixBytesArg);
 
         // Per-instance message routing. Every command carries an
         // instance_id (0..9) so the C side can dispatch to the right
@@ -493,6 +514,22 @@ class ObxdProcessor extends AudioWorkletProcessor {
             }
             const id = (typeof msg.instance_id === 'number') ? (msg.instance_id | 0) : 0;
             switch (msg.type) {
+                case 'synth_load':
+                    // Gradual-load phase 2: the main thread finished its
+                    // background fetch of the synth (+ mixer) bytes and
+                    // transferred them here. Same boot path the constructor
+                    // uses, EXCEPT a failure is non-fatal (fatal=false) —
+                    // by now the Octopus engine is already running and the
+                    // node must stay alive. 'ready' is posted when the
+                    // synth is up; until then every synth message is a
+                    // null-guarded no-op above.
+                    if (msg.wasmBinary && msg.wasmBinary.byteLength) {
+                        bootSynth(msg.wasmBinary, false);
+                        if (msg.mixerWasmBinary && msg.mixerWasmBinary.byteLength) {
+                            bootMixer(msg.mixerWasmBinary);
+                        }
+                    }
+                    break;
                 case 'midi':
                     // Queued; msg must carry {instance_id, status, d1, d2}.
                     // Drained in process() so we don't dispatch from the
