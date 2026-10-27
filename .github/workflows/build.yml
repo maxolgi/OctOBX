@@ -87,7 +87,7 @@ jobs:
   #    + mingw-w64); no Windows runner needed.
   # ---------------------------------------------------------------------------
   build:
-    name: Build (windows-x64 cross)
+    name: Build (ubuntu-x64, windows-x64 cross)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -136,26 +136,34 @@ jobs:
       - name: Synth WASM checks
         run: npm run test:wasm
 
-      # The Linux release binary comes from the Debian trixie container job
-      # below (glibc-capped for Debian stable); the native gui build inside
-      # ./build.sh all above is smoke only.
+      # Native gui binary for this job's ubuntu toolchain — already built by
+      # ./build.sh all above, just stage + strip it. (The Debian-stable
+      # binary + .deb come from the trixie container job below.)
+      - name: Stage ubuntu binary
+        run: |
+          mkdir -p release
+          cp gui/target/release/octobx_gui release/octobx_gui-ubuntu-x64
+          strip release/octobx_gui-ubuntu-x64
+
+      - name: Upload ubuntu binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: octobx_gui-ubuntu-x64
+          path: release/octobx_gui-ubuntu-x64
+          if-no-files-found: error
+
       - name: Cross-build gui launcher (Windows exe, dist embedded)
         run: cargo build --release --manifest-path gui/Cargo.toml --target x86_64-pc-windows-gnu
 
-      - name: Stage artifacts
-        run: |
-          mkdir -p release
-          cp gui/target/x86_64-pc-windows-gnu/release/octobx_gui.exe release/octobx_gui-windows-x64.exe
-
-      - name: Upload artifacts
+      - name: Upload Windows exe
         uses: actions/upload-artifact@v7
         with:
           name: octobx_gui-windows-x64
-          path: release/
+          path: gui/target/x86_64-pc-windows-gnu/release/octobx_gui.exe
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # 3. Linux build — Debian 13 (trixie) container, glibc 2.41.
+  # 3. Debian build — trixie container, glibc 2.41.
   #    ubuntu-latest images carry a newer glibc, which would raise the binary's
   #    minimum requirement above Debian stable. Building inside debian:trixie
   #    caps it, and cargo-deb's $auto depends resolve against trixie's library
@@ -163,7 +171,7 @@ jobs:
   #    too: rust-embed bakes dist/ into the binary at compile time.
   # ---------------------------------------------------------------------------
   build-linux:
-    name: Build (linux-x64, Debian trixie)
+    name: Build (debian-x64, trixie container)
     runs-on: ubuntu-latest
     container: debian:trixie
     defaults:
@@ -226,14 +234,14 @@ jobs:
       - name: Stage binary
         run: |
           mkdir -p release
-          cp gui/target/release/octobx_gui release/octobx_gui-linux-x64
-          strip release/octobx_gui-linux-x64
+          cp gui/target/release/octobx_gui release/octobx_gui-debian-x64
+          strip release/octobx_gui-debian-x64
 
       - name: Upload binary
         uses: actions/upload-artifact@v7
         with:
-          name: octobx_gui-linux-x64
-          path: release/octobx_gui-linux-x64
+          name: octobx_gui-debian-x64
+          path: release/octobx_gui-debian-x64
           if-no-files-found: error
 
       # .deb package (binary already built, --no-build skips rebuild). $auto
@@ -282,12 +290,12 @@ jobs:
         run: |
           ls -R artifacts
           # Copy by filename from anywhere in the tree — layout-proof either
-          # way. Expect exactly 3 assets: windows exe + linux binary (trixie)
-          # + .deb.
+          # way. Expect exactly 4 assets: windows exe + ubuntu binary +
+          # debian binary (trixie) + .deb.
           mkdir -p release
           find artifacts -type f \( -name 'octobx_gui-*' -o -name '*.deb' \) -exec cp {} release/ \;
           ls -la release
-          [ "$(find release -type f | wc -l)" -eq 3 ] || { echo "ERROR: expected 3 release assets"; exit 1; }
+          [ "$(find release -type f | wc -l)" -eq 4 ] || { echo "ERROR: expected 4 release assets"; exit 1; }
 
       - name: Set release metadata
         id: meta
