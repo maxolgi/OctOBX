@@ -87,7 +87,7 @@ jobs:
   #    + mingw-w64); no Windows runner needed.
   # ---------------------------------------------------------------------------
   build:
-    name: Build (linux-x64)
+    name: Build (windows-x64 cross)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -136,29 +136,125 @@ jobs:
       - name: Synth WASM checks
         run: npm run test:wasm
 
-      - name: Build gui launcher (Linux, dist embedded)
-        run: |
-          cargo build --release --manifest-path gui/Cargo.toml
-          strip gui/target/release/octobx_gui
-
+      # The Linux release binary comes from the Debian trixie container job
+      # below (glibc-capped for Debian stable); the native gui build inside
+      # ./build.sh all above is smoke only.
       - name: Cross-build gui launcher (Windows exe, dist embedded)
         run: cargo build --release --manifest-path gui/Cargo.toml --target x86_64-pc-windows-gnu
 
       - name: Stage artifacts
         run: |
           mkdir -p release
-          cp gui/target/release/octobx_gui release/octobx_gui-linux-x64
           cp gui/target/x86_64-pc-windows-gnu/release/octobx_gui.exe release/octobx_gui-windows-x64.exe
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: octobx-${{ github.sha }}
+          name: octobx_gui-windows-x64
           path: release/
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # 3. Publish a GitHub Release for every successful build.
+  # 3. Linux build — Debian 13 (trixie) container, glibc 2.41.
+  #    ubuntu-latest images carry a newer glibc, which would raise the binary's
+  #    minimum requirement above Debian stable. Building inside debian:trixie
+  #    caps it, and cargo-deb's $auto depends resolve against trixie's library
+  #    versions via dpkg-shlibdeps. The whole WASM + app chain must run here
+  #    too: rust-embed bakes dist/ into the binary at compile time.
+  # ---------------------------------------------------------------------------
+  build-linux:
+    name: Build (linux-x64, Debian trixie)
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Must precede checkout: git is not in the base image and checkout falls
+      # back to a REST download (no submodules) without it.
+      # No libssl-dev (tls feature is pure-Rust rustls), no cmake/ninja
+      # (emsdk bundles its own toolchain; the gui crate has no C builds).
+      - name: Install build deps (Debian trixie)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git python3 xz-utils pkg-config \
+            build-essential xxd \
+            libegl-dev libgl1-mesa-dev \
+            libxcb1-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxext-dev libxxf86vm-dev \
+            libwayland-dev libxkbcommon-dev
+          ldd --version | head -n 1
+
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      # dtolnay/rust-toolchain assumes rustup is preinstalled (true on GH
+      # runners, not in the bare container), so install rustup directly.
+      - name: Install Rust (stable)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      # 6.0.4 — the emcc version the engine is verified against (same pin as
+      # the setup-emsdk step in the build job above; bump both together).
+      - name: Install Emscripten (emsdk 6.0.4)
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install 6.0.4
+          "$HOME/emsdk/emsdk" activate 6.0.4
+          echo "EMSDK=$HOME/emsdk" >> "$GITHUB_ENV"
+          echo "$HOME/emsdk/upstream/emscripten" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 23
+          cache: npm
+
+      # Full chain in-container: octopus WASM + OB-Xf synth WASM + vite app +
+      # the native gui build with dist/ embedded (build.sh all runs
+      # npm install itself).
+      - name: Build everything (WASM + app + gui)
+        run: ./build.sh all
+
+      - name: Stage binary
+        run: |
+          mkdir -p release
+          cp gui/target/release/octobx_gui release/octobx_gui-linux-x64
+          strip release/octobx_gui-linux-x64
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: octobx_gui-linux-x64
+          path: release/octobx_gui-linux-x64
+          if-no-files-found: error
+
+      # .deb package (binary already built, --no-build skips rebuild). $auto
+      # depends resolve against trixie via dpkg-shlibdeps (from
+      # build-essential); metadata lives in gui/Cargo.toml
+      # ([package.metadata.deb]).
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb package
+        run: cargo deb --no-build --manifest-path gui/Cargo.toml
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v7
+        with:
+          name: octobx-deb
+          path: gui/target/debian/*.deb
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 4. Publish a GitHub Release for every successful build.
   #    - Push to main  → regular release tagged dev-<short_sha>, marked
   #      "latest" (prerelease=false — GitHub ignores make_latest on
   #      pre-releases, so dev builds must be full releases to get the
@@ -168,7 +264,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Publish release
-    needs: build
+    needs: [build, build-linux]
     if: >-
       github.event_name != 'pull_request' &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
@@ -176,21 +272,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      # No name → downloads every artifact of this run, each into its own
+      # artifacts/<name>/ subdirectory.
       - uses: actions/download-artifact@v7
         with:
-          name: octobx-${{ github.sha }}
           path: artifacts
 
       - name: Stage release assets
         run: |
           ls -R artifacts
-          # Single-artifact downloads extract directly into path/ (no
-          # per-name subdirectory), so copy by filename from anywhere in
-          # the tree — layout-proof either way.
+          # Copy by filename from anywhere in the tree — layout-proof either
+          # way. Expect exactly 3 assets: windows exe + linux binary (trixie)
+          # + .deb.
           mkdir -p release
-          find artifacts -type f -name 'octobx_gui-*' -exec cp {} release/ \;
+          find artifacts -type f \( -name 'octobx_gui-*' -o -name '*.deb' \) -exec cp {} release/ \;
           ls -la release
-          [ "$(find release -type f | wc -l)" -eq 2 ] || { echo "ERROR: expected 2 release assets"; exit 1; }
+          [ "$(find release -type f | wc -l)" -eq 3 ] || { echo "ERROR: expected 3 release assets"; exit 1; }
 
       - name: Set release metadata
         id: meta

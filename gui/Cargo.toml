@@ -2,6 +2,9 @@
 name = "octobx_gui"
 version = "0.1.0"
 edition = "2024"
+description = "Octopus MIDI sequencer + OB-Xf synth studio, embedded web launcher"
+license = "GPL-3.0-or-later"
+readme = "README.md"
 
 [dependencies]
 eframe = "0.36.1"
@@ -15,3 +18,17 @@ default = ["tls"]
 # LAN hosts need HTTPS: a non-localhost plain-HTTP origin is "untrustworthy",
 # so the browser ignores COOP/COEP and SharedArrayBuffer (pthreads) is denied.
 tls = ["tiny_http/ssl-rustls"]
+
+# cargo-deb packaging (built by CI inside a debian:trixie container so the
+# binary's glibc requirement and the $auto depends resolve against Debian
+# stable). See .github/workflows/build.yml, build-linux job.
+[package.metadata.deb]
+maintainer = "maxolgi <https://github.com/maxolgi/OctOBX>"
+copyright = "2026"
+license-file = ["../LICENSE", "0"]
+section = "sound"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/octobx_gui", "usr/bin/", "755"],
+]
