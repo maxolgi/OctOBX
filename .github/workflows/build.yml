@@ -155,11 +155,16 @@ jobs:
       - name: Cross-build gui launcher (Windows exe, dist embedded)
         run: cargo build --release --manifest-path gui/Cargo.toml --target x86_64-pc-windows-gnu
 
+      # upload-artifact keeps the file's basename, so stage under the release
+      # name first (octobx_gui-windows-x64.exe) to match the other assets.
+      - name: Stage Windows exe
+        run: cp gui/target/x86_64-pc-windows-gnu/release/octobx_gui.exe release/octobx_gui-windows-x64.exe
+
       - name: Upload Windows exe
         uses: actions/upload-artifact@v7
         with:
           name: octobx_gui-windows-x64
-          path: gui/target/x86_64-pc-windows-gnu/release/octobx_gui.exe
+          path: release/octobx_gui-windows-x64.exe
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
