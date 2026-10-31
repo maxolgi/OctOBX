@@ -192,7 +192,10 @@ jobs:
             libxcb1-dev libxrandr-dev libxinerama-dev \
             libxcursor-dev libxi-dev libxext-dev libxxf86vm-dev \
             libwayland-dev libxkbcommon-dev
-          ldd --version | head -n 1
+          # sed, not `head -n 1`: head exits after the first line and ldd
+          # SIGPIPEs on its remaining output (exit 141) under this job's
+          # bash -o pipefail.
+          ldd --version | sed -n 1p
 
       - uses: actions/checkout@v5
         with:
