@@ -634,7 +634,7 @@ Browser (COOP/COEP/CORP cross-origin isolated)
 │   │   background right after boot and boots them in the worklet via the
 │   │   'synth_load' message); holds zero-copy views over the
 │   │   shared heap (processed MIR, status block) and window.__octopus
-│   ├── Octopus UI (classic panel or modern grid) — posts oct_* messages;
+│   ├── Octopus UI (classic panel) — posts oct_* messages;
 │   │   renders the MIR view at 60 Hz RAF
 │   ├── Drum UI (kit selector, 8 pads × 4 layers, knob strips)
 │   ├── OB-Xf rack + editor UI (instance selector, knobs, meters, .fxp
@@ -644,7 +644,7 @@ Browser (COOP/COEP/CORP cross-origin isolated)
 │   ├── RAF fallback pump — while the AudioContext is suspended (autoplay
 │   │   policy), posts oct_pump (wall-delta ms) per frame; stops when the
 │   │   context runs, restarts on re-suspend
-│   └── Transport controls + project persistence (Tab cycles 5 views)
+│   └── Transport controls + project persistence (Tab cycles 4 views)
 │
 └── AudioWorklet — ONE combined node (obxd-processor.js), THREE WASM modules
     ├── octopus_wasm.wasm — Octopus sequencer engine (imports the shared
@@ -842,11 +842,11 @@ sequentially after setting the running status byte.
 
 | File | Role |
 |---|---|
-| `main.ts` | Entry point: SharedArrayBuffer check → `bootOctopusEngine()` (creates the shared memory + the combined worklet node) → build UI → transport/persistence → hardware MIDI (`attachHwMidiForwarding` attached before the panel) → OB-XD rack → drum module mount. Tab key cycles the 5 views (classic → modern → synth → drums → mixer); Shift+Tab reverses. Skips when focus is on a form control (`<input>`/`<select>`/`<textarea>`). |
+| `main.ts` | Entry point: SharedArrayBuffer check → `bootOctopusEngine()` (creates the shared memory + the combined worklet node) → build UI → transport/persistence → hardware MIDI (`attachHwMidiForwarding` attached before the panel) → OB-XD rack → drum module mount. Tab key cycles the 4 views (classic → synth → drums → mixer); Shift+Tab reverses. Skips when focus is on a form control (`<input>`/`<select>`/`<textarea>`). |
 | `octopus-awp.ts` | Main-thread controller for the engine inside the combined OB-Xf AudioWorklet. `bootOctopusEngine()` creates the shared 128 MiB `WebAssembly.Memory`, fetches `octopus_wasm.wasm`, reads the initial state from the active project (idb-projects), brings up the worklet node via `setupObxdAudio({octopusWasmBinary, octopusMemory, octopusInitialState})`, and exposes `OctopusController` + `window.__octopus`. Holds the zero-copy MIR/status views, the request/reply slots (`saveState`/`loadState`/`snapshot`), the internal-save fan-out, and the RAF fallback pump used while the AudioContext is suspended. |
 | `octopus-types.ts` | Slimmed shared declarations — only the OB-Xf module types remain; the Octopus surface is the `OctopusController` interface in `octopus-awp.ts`. |
 | `classic-panel.ts` | Faithful port of the Octopus control surface (same DOM/IDs as `web_gui.html`); drives the engine through `OctopusController` `oct_*` messages, renders MIR from the shared-memory view at 60 Hz. |
-| `octopus-panel.ts` | Simplified modern grid view (alternative panel); same controller + shared MIR view. |
+| `octopus-panel.ts` | Simplified modern grid view (alternative panel); not exposed in the UI (no button, not in the Tab cycle) — kept for possible future work. |
 | `midi-access.ts` | Shared `openMidiAccess()` + `pollForPorts()` — works around the Chrome-on-Linux late port-enumeration quirk (see MIDI section). |
 | `midi-output.ts` | Web MIDI API **output** (Chrome/Edge); `frameMidi()` emits correct 1/2/3-byte messages. Hardware events arrive only as `hw_midi` batches forwarded from the worklet — `attachHwMidiForwarding()` registers the one handler (small +5 ms forward offset); there is no RAF drain loop any more. `rescan()`. |
 | `midi-input.ts` | Web MIDI API **input** (Chrome/Edge); forwards hardware messages to `ctl.midiInput()` → `oct_midi_in` messages; `rescan()`. |

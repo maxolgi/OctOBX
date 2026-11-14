@@ -3,7 +3,7 @@
  *
  * Boots the Octopus engine inside the combined OB-Xf AudioWorklet via
  * bootOctopusEngine() (which also creates the worklet node), starts the
- * grid panel, brings up the OB-Xf synth rack, and wires transport +
+ * classic panel, brings up the OB-Xf synth rack, and wires transport +
  * hardware MIDI. Hardware MIDI output is fed exclusively by hw_midi
  * messages forwarded from the worklet (attachHwMidiForwarding).
  */
@@ -11,7 +11,6 @@
 import { bootOctopusEngine } from "./octopus-awp";
 import type { OctopusController } from "./octopus-awp";
 import { setupTransportSync } from "./transport-sync";
-import { startOctopusPanel } from "./octopus-panel";
 import { buildClassicPanel } from "./classic-panel";
 import { HardwareMidiOutput, attachHwMidiForwarding } from "./midi-output";
 import { HardwareMidiInput } from "./midi-input";
@@ -113,19 +112,17 @@ async function main() {
     console.log("[octobx] All systems go");
 }
 
-function switchPanel(view: "classic" | "modern" | "synth" | "drums" | "mixer") {
+function switchPanel(view: "classic" | "synth" | "drums" | "mixer") {
     if (!ctl) return;
     if (activePanelCleanup) { activePanelCleanup(); activePanelCleanup = null; }
 
     const classicEl = document.getElementById("view-classic")!;
-    const modernEl = document.getElementById("view-modern")!;
     const obxdEl = document.getElementById("obxd-panel")!;
     const drumEl = document.getElementById("drum-panel")!;
     const mixerEl = document.getElementById("mixer-panel")!;
 
     if (view === "synth") {
         classicEl.style.display = "none";
-        modernEl.style.display = "none";
         obxdEl.style.display = "";
         drumEl.style.display = "none";
         mixerEl.style.display = "none";
@@ -136,21 +133,12 @@ function switchPanel(view: "classic" | "modern" | "synth" | "drums" | "mixer") {
         window.scrollTo(0, 0);
     } else if (view === "classic") {
         classicEl.style.display = "";
-        modernEl.style.display = "none";
         obxdEl.style.display = "none";
         drumEl.style.display = "none";
         mixerEl.style.display = "none";
         activePanelCleanup = buildClassicPanel(ctl);
-    } else if (view === "modern") {
-        classicEl.style.display = "none";
-        modernEl.style.display = "";
-        obxdEl.style.display = "none";
-        drumEl.style.display = "none";
-        mixerEl.style.display = "none";
-        activePanelCleanup = startOctopusPanel(ctl);
     } else if (view === "mixer") {
         classicEl.style.display = "none";
-        modernEl.style.display = "none";
         obxdEl.style.display = "none";
         drumEl.style.display = "none";
         mixerEl.style.display = "";
@@ -158,7 +146,6 @@ function switchPanel(view: "classic" | "modern" | "synth" | "drums" | "mixer") {
         window.scrollTo(0, 0);
     } else {
         classicEl.style.display = "none";
-        modernEl.style.display = "none";
         obxdEl.style.display = "none";
         drumEl.style.display = "";
         mixerEl.style.display = "none";
@@ -167,7 +154,7 @@ function switchPanel(view: "classic" | "modern" | "synth" | "drums" | "mixer") {
     }
 }
 
-const VIEW_ORDER = ["classic", "modern", "synth", "drums", "mixer"] as const;
+const VIEW_ORDER = ["classic", "synth", "drums", "mixer"] as const;
 let currentViewIdx = 0;
 
 function setupViewToggle() {

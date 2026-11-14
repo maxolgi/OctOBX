@@ -519,8 +519,8 @@ function resumeAudioContext(): void {
  * requires PLAY to make sound, so we ride on whichever gesture starts
  * the sequencer. The transport-bar PLAY (#oct-play) is hooked directly
  * for instant response; a run-bit poller catches every OTHER path
- * (Octopus panel's on-surface PLAY key #ck-229, modern-grid PLAY,
- * incoming MIDI START, keyboard shortcuts, etc.) — anything that flips
+ * (Octopus panel's on-surface PLAY key #ck-229, incoming MIDI START,
+ * keyboard shortcuts, etc.) — anything that flips
  * the controller's runBit() from 0 to 1.
  *
  * setupObxdAudio() is a fast no-op when the worklet node already exists
@@ -592,7 +592,7 @@ function wireLazyAudioInit(): void {
     document.addEventListener("pointerdown", () => startAudioInit(), { once: true });
 
     // Fallback — poll the sequencer run-bit for the 0->1 transition.
-    // Catches Octopus-panel PLAY (#ck-229), modern-grid PLAY, MIDI START,
+    // Catches Octopus-panel PLAY (#ck-229), MIDI START,
     // and any other path that doesn't go through #oct-play. Cheap: one
     // controller read every 200ms, stops itself once audio is up.
     const octopus = window.__octopus;
